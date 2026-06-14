@@ -53,6 +53,47 @@ def test_adopt_sha_guard_and_rollback(tmp_path):
     assert "external edit" in skill.read_text(encoding="utf-8")
 
 
+def test_absolute_run_id_rejected(tmp_path):
+    make_skill(tmp_path, "demo")
+    with pytest.raises(ValueError, match="Invalid run_id"):
+        core.resolve_run_dir(tmp_path, "/tmp/evil")
+
+
+def test_parent_traversal_run_id_rejected(tmp_path):
+    make_skill(tmp_path, "demo")
+    with pytest.raises(ValueError, match="Invalid run_id"):
+        core.resolve_run_dir(tmp_path, "../evil")
+
+
+def test_tampered_manifest_skill_path_outside_home_rejected(tmp_path):
+    make_skill(tmp_path, "demo")
+    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run_dir = Path(out["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    outside = tmp_path.parent / "outside_SKILL.md"
+    outside.write_text("outside unchanged", encoding="utf-8")
+    manifest["skill_path"] = str(outside)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="skill_path"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+    assert outside.read_text(encoding="utf-8") == "outside unchanged"
+
+
+def test_rollback_refuses_current_skill_changed_after_adopt_unless_force(tmp_path):
+    skill = make_skill(tmp_path, "demo")
+    original = skill.read_text(encoding="utf-8")
+    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run_id = out["run_id"]
+    core.adopt(run_id, hermes_home_path=str(tmp_path))
+    skill.write_text(skill.read_text(encoding="utf-8") + "\nuser edit after adopt\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="adopted state"):
+        core.rollback(run_id, hermes_home_path=str(tmp_path))
+    rb = core.rollback(run_id, hermes_home_path=str(tmp_path), force=True)
+    assert rb["status"] == "rolled_back"
+    assert skill.read_text(encoding="utf-8") == original
+
+
 def test_secret_redaction():
     text = "api_key=sk-abcdefghijklmnopqrstuvwxyz token: gho_abcdefghijklmnopqrstuvwxyz password=hunter2"
     red = core.redact_secrets(text)

@@ -25,7 +25,7 @@ SCHEMAS = {
     "hermes_skillopt_run": _schema("Alias of hermes_skillopt_dry_run; stages a proposal only, never auto-adopts.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with status, paths, and diff/report preview.", {**COMMON_HOME, "run_id": {"type": "string"}, "include_diff_chars": {"type": "integer", "default": 4000}}, ["run_id"]),
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md after sha guard and backup.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
-    "hermes_skillopt_rollback": _schema("Rollback an adopted run using its backup/original file.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
+    "hermes_skillopt_rollback": _schema("Rollback an adopted run using its backup/original file after current-sha guard unless force=true.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status.", {**COMMON_HOME, "repo_path": {"type": "string"}}),
     "hermes_skillopt_upstream_update": _schema("Fetch/update pinned Microsoft SkillOpt upstream clone and write lock; never merges into plugin code.", {**COMMON_HOME, "repo_path": {"type": "string"}, "fetch_only": {"type": "boolean", "default": False}}),
 }
@@ -56,7 +56,7 @@ def _handle_adopt(args: dict, **kw) -> str:
 
 
 def _handle_rollback(args: dict, **kw) -> str:
-    return _ok(core.rollback, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home")})
+    return _ok(core.rollback, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home"), "force": bool(args.get("force", False))})
 
 
 def _handle_upstream_status(args: dict, **kw) -> str:

@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_URL = "https://github.com/microsoft/SkillOpt.git"
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|bearer)\s*[:=]\s*([^\s,;]+)"),
     re.compile(r"\b(?:sk|ghp|gho|xox[baprs])-[-A-Za-z0-9_]{12,}\b"),
@@ -204,11 +205,54 @@ def save_manifest(run_dir: Path, data: dict[str, Any]) -> None:
     write_text(run_dir / "manifest.json", json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_run_id(run_id: str) -> None:
+    if not run_id or not RUN_ID_RE.fullmatch(run_id) or ".." in run_id:
+        raise ValueError("Invalid run_id")
+
+
 def resolve_run_dir(home: Path, run_id: str) -> Path:
-    p = ensure_dirs(home)["staging"] / run_id
+    validate_run_id(run_id)
+    staging = ensure_dirs(home)["staging"].resolve()
+    p = (staging / run_id).resolve()
+    if not _is_relative_to(p, staging):
+        raise ValueError("Invalid run_id path")
     if not p.exists():
         raise ValueError(f"run_id not found: {run_id}")
     return p
+
+
+def manifest_skill_path(home: Path, manifest: dict[str, Any]) -> Path:
+    manifest_home = manifest.get("hermes_home")
+    if manifest_home is not None and manifest_home != str(home):
+        raise ValueError("Manifest hermes_home does not match current home")
+    relpath = manifest.get("skill_relpath")
+    if not isinstance(relpath, str) or not relpath:
+        raise ValueError("Manifest missing skill_relpath")
+    target = (home / relpath).resolve()
+    skills_dir = (home / "skills").resolve()
+    if not _is_relative_to(target, skills_dir):
+        raise ValueError("Manifest skill_relpath escapes skills directory")
+    return target
+
+
+def guard_manifest_skill_path(home: Path, manifest: dict[str, Any], target: Path) -> None:
+    raw = manifest.get("skill_path")
+    if raw is None:
+        return
+    try:
+        recorded = Path(str(raw)).expanduser().resolve()
+    except Exception as exc:
+        raise ValueError("Invalid manifest skill_path") from exc
+    if recorded != target:
+        raise ValueError("Manifest skill_path does not match skill_relpath target")
 
 
 def dry_run(skill: str | None = None, goal: str | None = None, session_search: str | None = None, hermes_home_path: str | None = None, ctx: Any = None, use_llm: bool = False) -> dict[str, Any]:
@@ -272,7 +316,8 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False)
     dirs = ensure_dirs(home)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
-    target = Path(m["skill_path"])
+    target = manifest_skill_path(home, m)
+    guard_manifest_skill_path(home, m, target)
     if not target.exists():
         raise ValueError(f"target skill missing: {target}")
     current = read_text(target)
@@ -290,11 +335,21 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False)
     return {"success": True, "run_id": run_id, "status": "adopted", "skill_path": str(target), "backup_dir": str(backup_dir)}
 
 
-def rollback(run_id: str, hermes_home_path: str | None = None) -> dict[str, Any]:
+def rollback(run_id: str, hermes_home_path: str | None = None, force: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
-    target = Path(m["skill_path"])
+    target = manifest_skill_path(home, m)
+    guard_manifest_skill_path(home, m, target)
+    expected_sha = m.get("adopted_sha256") or m.get("proposed_sha256")
+    if not force:
+        if not expected_sha:
+            raise ValueError("No adopted sha available for rollback guard; pass force=true to override")
+        if not target.exists():
+            raise ValueError("Current skill missing; pass force=true to rollback")
+        current_sha = sha256_text(read_text(target))
+        if current_sha != expected_sha:
+            raise ValueError("Current skill sha does not match adopted state; pass force=true to rollback")
     backup_dir = Path(m.get("backup_dir") or "")
     if backup_dir and (backup_dir / "SKILL.md").exists():
         restored = read_text(backup_dir / "SKILL.md")
