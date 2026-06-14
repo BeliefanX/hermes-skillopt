@@ -14,6 +14,10 @@
 3. 将来如果要移植具体算法，可以按小 PR/小模块引入，并保留清晰来源。
 4. 如果后续确实需要 fork upstream，也可以再创建 fork，并在本仓库记录 fork URL/commit。
 
+## 当前 SkillOpt 对齐状态
+
+当前代码没有 vendor 整个 upstream package；实现的是 **Hermes-native SkillOpt-inspired full cycle**：Hermes session harvesting → evidence mining → deterministic train/val/test split → LLM reflect/edit → validation gate → staged best artifact/rejected buffer。Microsoft upstream 仍 pinned for tracking；未来如果 upstream `skillopt_sleep` 接口稳定，可增加 adapter 将 Hermes harvest/mine/gate 数据映射过去。
+
 ## 更新流程
 
 ```bash
