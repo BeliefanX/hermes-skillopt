@@ -1,0 +1,13 @@
+name: hermes-skillopt
+version: 0.1.0
+description: "Hermes SkillOpt plugin: safe staged skill optimization with pinned Microsoft SkillOpt upstream tracking"
+author: "BeliefanX / Hermes Agent"
+provides_tools:
+  - hermes_skillopt_status
+  - hermes_skillopt_dry_run
+  - hermes_skillopt_run
+  - hermes_skillopt_review
+  - hermes_skillopt_adopt
+  - hermes_skillopt_rollback
+  - hermes_skillopt_upstream_status
+  - hermes_skillopt_upstream_update

@@ -1,0 +1,7 @@
+{
+  "clone_path": "/Users/fanxuxin/.hermes/skillopt/upstream/SkillOpt",
+  "note": "Pinned external upstream only; no plugin code merged automatically.",
+  "pinned_commit": "86bad36ffe511b7022a6c735930056c14124b960",
+  "updated_at": "2026-06-14T17:04:18.324719+00:00",
+  "upstream_url": "https://github.com/microsoft/SkillOpt.git"
+}
