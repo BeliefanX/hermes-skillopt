@@ -7,10 +7,12 @@ from hermes_skillopt import multi_agent
 
 
 def add_full_args(p: argparse.ArgumentParser) -> None:
+    p.description = (p.description or "") + " Hermes SkillOpt core adapter: trainable skill state, frozen target executor, optimizer bounded edits, held-out validation gate; staged-only unless explicitly adopted."
     p.add_argument("--skill")
     p.add_argument("--query")
     p.add_argument("--lookback-days", type=int, default=14)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--eval-file", help="Curated replay/eval tasks JSONL/JSON under HERMES_HOME; defaults to skillopt/evals/<skill>.jsonl or skill-dir/evals/*.jsonl")
     p.add_argument("--iterations", type=int, default=1)
     p.add_argument("--edit-budget", type=int, default=3)
     p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto")
@@ -46,7 +48,7 @@ def main() -> int:
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
-        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, auto_adopt=args.auto_adopt, force=args.force, dry_run=args.dry_run, hermes_home_path=args.home)
+        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, auto_adopt=args.auto_adopt, force=args.force, dry_run=args.dry_run, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None))
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":

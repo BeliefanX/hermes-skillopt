@@ -188,6 +188,64 @@ def guard_manifest_skill_path(home: Path, manifest: dict[str, Any], target: Path
         raise ValueError("Manifest skill_path does not match skill_relpath target")
 
 
+def resolve_backup_skill_path(home: Path, manifest: dict[str, Any], run_id: str, target: Path) -> Path:
+    if manifest.get("run_id") != run_id:
+        raise ValueError("Staging manifest run_id does not match rollback run_id; refusing to rollback")
+    raw = manifest.get("backup_dir")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Manifest missing backup_dir; refusing to rollback")
+    backups_root = ensure_dirs(home)["backups"].resolve()
+    try:
+        backup_dir = Path(raw).expanduser().resolve()
+    except Exception as exc:
+        raise ValueError("Invalid backup_dir; refusing to rollback") from exc
+    if not _is_relative_to(backup_dir, backups_root):
+        raise ValueError("Manifest backup_dir escapes skillopt backups directory; refusing to rollback")
+    if not backup_dir.is_dir():
+        raise ValueError("Manifest backup_dir does not exist; refusing to rollback")
+
+    backup_skill = (backup_dir / "SKILL.md").resolve()
+    if not _is_relative_to(backup_skill, backup_dir):
+        raise ValueError("Backup SKILL.md escapes backup_dir; refusing to rollback")
+    if not backup_skill.is_file():
+        raise ValueError("Backup SKILL.md missing; refusing to rollback")
+
+    restored = read_text(backup_skill)
+    restored_sha = sha256_text(restored)
+
+    backup_manifest_path = (backup_dir / "manifest.json").resolve()
+    if not backup_manifest_path.exists():
+        raise ValueError("Backup manifest missing; refusing to rollback")
+    if not _is_relative_to(backup_manifest_path, backup_dir) or not backup_manifest_path.is_file():
+        raise ValueError("Backup manifest escapes backup_dir; refusing to rollback")
+    backup_manifest = json.loads(read_text(backup_manifest_path))
+    if backup_manifest.get("run_id") != run_id or backup_manifest.get("run_id") != manifest.get("run_id"):
+        raise ValueError("Backup manifest run_id does not match staging manifest; refusing to rollback")
+    backup_skill_path = backup_manifest.get("skill_path")
+    if backup_skill_path is None or Path(str(backup_skill_path)).expanduser().resolve() != target:
+        raise ValueError("Backup manifest skill_path does not match target; refusing to rollback")
+    backup_relpath = backup_manifest.get("skill_relpath")
+    if backup_relpath is not None and backup_relpath != manifest.get("skill_relpath"):
+        raise ValueError("Backup manifest skill_relpath does not match staging manifest; refusing to rollback")
+    backup_original_sha = backup_manifest.get("original_sha256")
+    if not backup_original_sha:
+        raise ValueError("Backup manifest missing original_sha256; refusing to rollback")
+    if backup_original_sha != restored_sha or backup_manifest.get("sha256") != restored_sha:
+        raise ValueError("Backup manifest sha does not match SKILL.md; refusing to rollback")
+    if backup_original_sha != manifest.get("original_sha256"):
+        raise ValueError("Backup manifest original_sha256 does not match staging manifest; refusing to rollback")
+    expected_adopted_sha = manifest.get("adopted_sha256") or manifest.get("proposed_sha256")
+    for sha_key in ("proposed_sha256", "adopted_sha256"):
+        backup_sha = backup_manifest.get(sha_key)
+        if backup_sha is None:
+            continue
+        if backup_sha != manifest.get(sha_key):
+            raise ValueError("Backup manifest adopted/proposed sha does not match staging manifest; refusing to rollback")
+        if expected_adopted_sha is not None and backup_sha != expected_adopted_sha:
+            raise ValueError("Backup manifest adopted/proposed sha does not match current rollback guard; refusing to rollback")
+    return backup_skill
+
+
 # ---------------- Hermes-native full SkillOpt cycle ----------------
 
 def _jsonl_write(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -436,48 +494,36 @@ def apply_bounded_edits(current: str, edits: list[dict[str, Any]]) -> str:
     return fm + new_body
 
 
-def _heuristic_score(skill_text: str, items: list[dict[str, Any]]) -> float:
-    low = skill_text.lower()
-    score = 0.2
-    for term, pts in [("verify", .14), ("test", .12), ("tool", .08), ("error", .08), ("safety", .08), ("guard", .08), ("rollback", .06), ("artifact", .06), ("secret", .05), ("redact", .05)]:
-        if term in low:
-            score += pts
-    if "skillopt learned rules" in low:
-        score += .12
-    if items and any(i.get("failure_hints") for i in items):
-        score += .05 if ("error" in low or "verify" in low) else 0
-    return round(min(score, 1.0), 3)
+def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, backend: str = "auto", allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None) -> dict[str, Any]:
+    """Run the Hermes adapter of the SkillOpt core abstraction.
 
+    Pipeline: load trainable SkillState -> build benchmark tasks -> evaluate
+    current with a frozen TargetExecutor -> optimizer reflects/proposes bounded
+    edits -> evaluate candidate on held-out validation -> ValidationGate accepts
+    only strict score improvements -> stage artifacts for user review/adopt.
+    """
+    from hermes_skillopt.env import HermesSkillEnv
+    from hermes_skillopt.gate import ValidationGate
+    from hermes_skillopt.optimizer import OptimizerBackend
+    from hermes_skillopt.state import SkillOptArtifacts, SkillState
+    from hermes_skillopt.target import TargetExecutor
 
-def gate_candidate(backend: LLMBackend, current: str, candidate: str, val: list[dict[str, Any]], run_dir: Path, iteration: int) -> dict[str, Any]:
-    hcur, hcand = _heuristic_score(current, val), _heuristic_score(candidate, val)
-    data: dict[str, Any] = {}
-    try:
-        data = backend.json("Judge current vs candidate on validation items. Return JSON scores.\nVAL=" + json.dumps(val, ensure_ascii=False)[:10000], {"kind": "gate"}, run_dir / f"llm_gate_repair_{iteration}.json")
-    except Exception as exc:
-        data = {"judge_error": str(exc)}
-    cur = float(data.get("current_score", hcur)) if isinstance(data, dict) else hcur
-    cand = float(data.get("candidate_score", hcand)) if isinstance(data, dict) else hcand
-    # blend with heuristic to prevent mock/LLM from accepting no-op regressions
-    cur = round((cur + hcur) / 2, 3)
-    cand = round((cand + hcand) / 2, 3)
-    accepted = bool(candidate != current and cand > cur)
-    return {"iteration": iteration, "current_score": cur, "candidate_score": cand, "accepted": accepted, "rationale": data.get("rationale", "heuristic+LLM validation gate"), "heuristic": {"current": hcur, "candidate": hcand}, "judge": data}
-
-
-def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, backend: str = "auto", allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
     dirs = ensure_dirs(home)
     target = find_skill(home, skill)
     original = read_text(target.path)
+    state = SkillState(name=target.name, path=target.path, relpath=target.relpath, text=original, sha256=sha256_text(original), hermes_home=home)
     rid = now_id() + "-" + target.name.replace("/", "-")
     run_dir = dirs["staging"] / rid
     run_dir.mkdir(parents=True, exist_ok=False)
+    artifacts = SkillOptArtifacts.for_run(rid, run_dir)
     llm = LLMBackend(backend=backend, allow_mock=allow_mock, ctx=ctx)
+    env = HermesSkillEnv(state, query=query, lookback_days=lookback_days, limit=limit, eval_file=eval_file)
+    tasks, evidence = env.build_tasks()
+    executor = TargetExecutor()
+    optimizer = OptimizerBackend(llm, edit_budget=edit_budget)
+    gatekeeper = ValidationGate()
 
-    snippets = harvest_sessions(home, target, query=query, lookback_days=lookback_days, limit=limit)
-    items = mine_items(snippets, target, query=query)
-    splits = split_items(items, test=True)
     current = original
     best = original
     best_gate: dict[str, Any] | None = None
@@ -486,49 +532,71 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     all_gates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
 
-    write_text(run_dir / "original_SKILL.md", original)
-    write_text(run_dir / "current_SKILL.md", current)
-    write_text(run_dir / "evidence.json", json.dumps({"snippets": snippets, "items": items}, ensure_ascii=False, indent=2) + "\n")
-    _jsonl_write(run_dir / "train_items.jsonl", splits["train"])
-    _jsonl_write(run_dir / "val_items.jsonl", splits["val"])
-    _jsonl_write(run_dir / "test_items.jsonl", splits["test"])
+    write_text(artifacts.original, original)
+    write_text(artifacts.current, current)
+    write_text(artifacts.evidence, json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+    _jsonl_write(artifacts.train, [t.__dict__ for t in tasks["train"]])
+    _jsonl_write(artifacts.val, [t.__dict__ for t in tasks["val"]])
+    _jsonl_write(artifacts.test, [t.__dict__ for t in tasks["test"]])
 
     for it in range(1, max(1, int(iterations)) + 1):
-        reflections = reflect_items(llm, splits["train"], current, run_dir, it)
-        reflections["iteration"] = it
-        edit_plan = bounded_edits(llm, reflections, current, edit_budget, run_dir, it)
-        edit_plan["iteration"] = it
-        candidate = apply_bounded_edits(current, edit_plan.get("edits", []))
-        write_text(run_dir / f"candidate_{it}_SKILL.md", candidate)
+        train_eval = executor.evaluate(current, tasks["train"], label=f"current_train_{it}")
+        reflection = optimizer.reflect(tasks["train"], current, train_eval, run_dir, it)
+        candidate = optimizer.propose(reflection, current, run_dir, it)
+        edit_plan = {"iteration": it, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True}
+        write_text(run_dir / f"candidate_{it}_SKILL.md", candidate.text)
         write_text(run_dir / f"candidate_{it}_edits.json", json.dumps(edit_plan, ensure_ascii=False, indent=2) + "\n")
-        gate = gate_candidate(llm, current, candidate, splits["val"], run_dir, it)
+
+        current_val = executor.evaluate(current, tasks["val"], label=f"current_val_{it}")
+        candidate_val = executor.evaluate(candidate.text, tasks["val"], label=f"candidate_val_{it}")
+        write_text(artifacts.current_validation_results if it == max(1, int(iterations)) else run_dir / f"current_validation_results_{it}.json", json.dumps(current_val, ensure_ascii=False, indent=2) + "\n")
+        write_text(artifacts.candidate_validation_results if it == max(1, int(iterations)) else run_dir / f"candidate_validation_results_{it}.json", json.dumps(candidate_val, ensure_ascii=False, indent=2) + "\n")
+        if it != max(1, int(iterations)):
+            write_text(artifacts.current_validation_results, json.dumps(current_val, ensure_ascii=False, indent=2) + "\n")
+            write_text(artifacts.candidate_validation_results, json.dumps(candidate_val, ensure_ascii=False, indent=2) + "\n")
+        judge: dict[str, Any] | None = None
+        try:
+            judge = llm.json(
+                "Explain current vs candidate on validation. Explanation only; cannot accept.\n"
+                + json.dumps({"current_eval": current_val, "candidate_eval": candidate_val}, ensure_ascii=False)[:10000],
+                {"kind": "gate"},
+                run_dir / f"llm_gate_repair_{it}.json",
+            )
+        except Exception as exc:
+            judge = {"judge_error": str(exc)}
+        gate = gatekeeper.decide(it, current_val, candidate_val, current, candidate.text, judge=judge).as_dict()
         if gate["accepted"]:
-            current = candidate
-            best = candidate
+            current = candidate.text
+            best = candidate.text
             best_gate = gate
             status_value = "accepted"
         else:
             status_value = "rejected"
-            rec = {"iteration": it, "gate": gate, "edits": edit_plan.get("edits", []), "reasoning": edit_plan.get("reasoning")}
-            rejected.append(rec)
-        all_reflections.append(reflections)
+            rejected.append({"iteration": it, "gate": gate, "edits": candidate.edits, "reasoning": candidate.reasoning})
+        all_reflections.append(reflection)
         all_edits.append(edit_plan)
         all_gates.append(gate | {"status": status_value})
-        write_text(run_dir / "current_SKILL.md", current)
+        write_text(artifacts.current, current)
 
     final_status = "staged_best" if best != original else "rejected"
-    proposed = best
+    proposed = best if final_status == "staged_best" else original
     diff = make_diff(original, proposed, target.relpath)
-    write_text(run_dir / "best_skill.md", best)
-    write_text(run_dir / "proposed_SKILL.md", proposed)
-    write_text(run_dir / "diff.patch", diff)
-    write_text(run_dir / "reflections.json", json.dumps(all_reflections, ensure_ascii=False, indent=2) + "\n")
-    write_text(run_dir / "candidate_edits.json", json.dumps(all_edits, ensure_ascii=False, indent=2) + "\n")
-    write_text(run_dir / "gate_results.json", json.dumps({"gates": all_gates, "best_gate": best_gate}, ensure_ascii=False, indent=2) + "\n")
-    _jsonl_write(run_dir / "rejected_edits.jsonl", rejected)
+    if final_status == "staged_best":
+        write_text(artifacts.best, best)
+    write_text(artifacts.proposed, proposed)
+    write_text(artifacts.diff, diff)
+    write_text(artifacts.reflections, json.dumps(all_reflections, ensure_ascii=False, indent=2) + "\n")
+    write_text(artifacts.candidate_edits, json.dumps(all_edits, ensure_ascii=False, indent=2) + "\n")
+    write_text(artifacts.gate_results, json.dumps({"gates": all_gates, "best_gate": best_gate}, ensure_ascii=False, indent=2) + "\n")
+    _jsonl_write(artifacts.rejected_edits, rejected)
 
-    report = f"# Hermes SkillOpt full run\n\n- run_id: {rid}\n- status: {final_status}\n- skill: {target.name}\n- backend: {llm.mode}\n- harvested_fragments: {len(snippets)}\n- train/val/test: {len(splits['train'])}/{len(splits['val'])}/{len(splits['test'])}\n- iterations: {max(1, int(iterations))}\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
-    write_text(run_dir / "report.md", report)
+    eval_file_used = evidence.get("eval_file")
+    validation_summary = best_gate or (all_gates[-1] if all_gates else None)
+    current_score = validation_summary.get("current_score") if validation_summary else None
+    candidate_score = validation_summary.get("candidate_score") if validation_summary else None
+    gate_reason = validation_summary.get("rationale") if validation_summary else "none"
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt core adapter (trainable skill state, frozen target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- skill: {target.name}\n- backend: {llm.mode}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
         "status": final_status,
@@ -539,13 +607,27 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "skill_relpath": target.relpath,
         "original_sha256": sha256_text(original),
         "proposed_sha256": sha256_text(proposed),
-        "engine": "hermes-native-full-skillopt",
+        "engine": "hermes-native-skillopt-core-adapter",
         "backend": llm.mode,
+        "eval_file": eval_file_used,
+        "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}),
+        "curated_task_count": evidence.get("curated_task_count", 0),
+        "validation_current_score": current_score,
+        "validation_candidate_score": candidate_score,
+        "gate_reason": gate_reason,
+        "core_abstraction": {
+            "skill_document": "trainable_state",
+            "target_agent_model": "frozen_executor",
+            "optimizer_model": "reflection_plus_bounded_edit",
+            "environment_benchmark": "hermes_curated_replay_session_synthetic_tasks",
+            "validation_gate": "sole_acceptance_gate_candidate_score_gt_current_score",
+            "hermes_outer_shell": "staged_safety_adopt_rollback_profile_isolation",
+        },
         "gate": best_gate,
-        "files": {"original": "original_SKILL.md", "current": "current_SKILL.md", "best": "best_skill.md", "proposed": "proposed_SKILL.md", "diff": "diff.patch", "report": "report.md", "evidence": "evidence.json", "train": "train_items.jsonl", "val": "val_items.jsonl", "test": "test_items.jsonl", "reflections": "reflections.json", "candidate_edits": "candidate_edits.json", "gate_results": "gate_results.json", "rejected_edits": "rejected_edits.jsonl"},
+        "files": artifacts.manifest_files(include_best=final_status == "staged_best"),
     }
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "gate": best_gate, "changed": bool(diff)}
+    result = {"success": True, "run_id": rid, "status": final_status, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "gate_reason": gate_reason}
     if auto_adopt and final_status == "staged_best" and not dry_run:
         result["adopt"] = adopt(rid, hermes_home_path=str(home), force=force)
     return result
@@ -624,12 +706,19 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False)
     if current_sha != m.get("original_sha256") and not force:
         raise ValueError("Current skill sha does not match staged original; pass force=true to override")
     proposed = read_text(run_dir / "proposed_SKILL.md")
+    expected_proposed_sha = m.get("proposed_sha256")
+    if not expected_proposed_sha:
+        raise ValueError("Manifest missing proposed_sha256; refusing to adopt")
+    actual_proposed_sha = sha256_text(proposed)
+    if actual_proposed_sha != expected_proposed_sha:
+        raise ValueError("Staged proposed_SKILL.md sha does not match manifest proposed_sha256; refusing to adopt")
     backup_dir = dirs["backups"] / f"{now_id()}-{run_id}"
     backup_dir.mkdir(parents=True, exist_ok=False)
+    proposed_sha = sha256_text(proposed)
     write_text(backup_dir / "SKILL.md", current)
-    write_text(backup_dir / "manifest.json", json.dumps({"run_id": run_id, "skill_path": str(target), "sha256": current_sha}, ensure_ascii=False, indent=2) + "\n")
+    write_text(backup_dir / "manifest.json", json.dumps({"run_id": run_id, "skill_path": str(target), "skill_relpath": m.get("skill_relpath"), "sha256": current_sha, "original_sha256": current_sha, "proposed_sha256": proposed_sha, "adopted_sha256": proposed_sha}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     write_text(target, proposed)
-    m.update({"status": "adopted", "adopted_at": datetime.now(timezone.utc).isoformat(), "backup_dir": str(backup_dir), "adopted_sha256": sha256_text(proposed)})
+    m.update({"status": "adopted", "adopted_at": datetime.now(timezone.utc).isoformat(), "backup_dir": str(backup_dir), "original_sha256": current_sha, "adopted_sha256": proposed_sha})
     save_manifest(run_dir, m)
     return {"success": True, "run_id": run_id, "status": "adopted", "skill_path": str(target), "backup_dir": str(backup_dir)}
 
@@ -649,13 +738,8 @@ def rollback(run_id: str, hermes_home_path: str | None = None, force: bool = Fal
         current_sha = sha256_text(read_text(target))
         if current_sha != expected_sha:
             raise ValueError("Current skill sha does not match adopted state; pass force=true to rollback")
-    backup_dir = Path(m.get("backup_dir") or "")
-    if backup_dir and (backup_dir / "SKILL.md").exists():
-        restored = read_text(backup_dir / "SKILL.md")
-    elif (run_dir / "original_SKILL.md").exists():
-        restored = read_text(run_dir / "original_SKILL.md")
-    else:
-        raise ValueError("No backup/original available for rollback")
+    backup_skill = resolve_backup_skill_path(home, m, run_id, target)
+    restored = read_text(backup_skill)
     write_text(target, restored)
     m.update({"status": "rolled_back", "rolled_back_at": datetime.now(timezone.utc).isoformat(), "rolled_back_sha256": sha256_text(restored)})
     save_manifest(run_dir, m)

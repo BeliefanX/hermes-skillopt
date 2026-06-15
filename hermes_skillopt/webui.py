@@ -136,6 +136,7 @@ def review_payload(run_id: str | None = None, home: str | None = None) -> tuple[
 def run_full_callback(
     skill: str | None,
     query: str | None,
+    eval_file: str | None,
     lookback_days: int,
     limit: int,
     iterations: int,
@@ -149,6 +150,7 @@ def run_full_callback(
         out = core.full_run(
             skill=skill or None,
             query=query or None,
+            eval_file=eval_file or None,
             lookback_days=int(lookback_days),
             limit=int(limit),
             iterations=int(iterations),
@@ -211,8 +213,9 @@ def build_app(home_default: str | None = None):
     with gr.Blocks(title="Hermes SkillOpt WebUI") as app:
         gr.Markdown("# 🧠 Hermes SkillOpt WebUI")
         gr.Markdown(
-            "Hermes-native, staged-first skill optimization. Full runs create reviewable artifacts; "
-            "adopt and rollback require explicit typed confirmations."
+            "Hermes-native adapter for the SkillOpt core pipeline: SKILL.md is trainable state, "
+            "the target executor is frozen, optimizer backends only propose bounded edits, and a "
+            "held-out validation gate is the sole acceptance gate. Hermes staged safety/adopt/rollback/profile isolation remains the outer shell."
         )
         home = gr.Textbox(label="HERMES_HOME override (optional)", placeholder="Defaults to ~/.hermes", value=home_default or "")
 
@@ -226,6 +229,7 @@ def build_app(home_default: str | None = None):
                 with gr.Row():
                     skill = gr.Textbox(label="Skill name/path", placeholder="Required if multiple skills exist")
                     query = gr.Textbox(label="Query/session search", placeholder="Optional")
+                eval_file = gr.Textbox(label="Curated eval file (optional, staged-only)", placeholder="JSONL/JSON under HERMES_HOME; use expected/forbidden keywords for deterministic scoring")
                 with gr.Row():
                     lookback = gr.Slider(0, 90, value=14, step=1, label="Lookback days")
                     limit = gr.Slider(1, 200, value=50, step=1, label="Harvest limit")
@@ -271,7 +275,7 @@ def build_app(home_default: str | None = None):
 
         run_btn.click(
             run_full_callback,
-            inputs=[skill, query, lookback, limit, iterations, edit_budget, backend, allow_mock, home],
+            inputs=[skill, query, eval_file, lookback, limit, iterations, edit_budget, backend, allow_mock, home],
             outputs=[run_status, review_summary, report, diff, gate, candidate, rejected],
         )
         review_btn.click(review_payload, inputs=[review_run_id, home], outputs=[review_summary, report, diff, gate, candidate, rejected])

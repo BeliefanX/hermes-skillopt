@@ -16,7 +16,11 @@
 
 ## 当前 SkillOpt 对齐状态
 
-当前代码没有 vendor 整个 upstream package；实现的是 **Hermes-native SkillOpt-inspired full cycle**：Hermes session harvesting → evidence mining → deterministic train/val/test split → LLM reflect/edit → validation gate → staged best artifact/rejected buffer。Microsoft upstream 仍 pinned for tracking；未来如果 upstream `skillopt_sleep` 接口稳定，可增加 adapter 将 Hermes harvest/mine/gate 数据映射过去。
+当前代码没有 vendor 整个 upstream package；实现的是 **Hermes-native SkillOpt core adapter**：Hermes 的 `SKILL.md` 是 trainable state，`TargetExecutor` 是 frozen executor，optimizer backend 只做 reflection + bounded skill edit，`HermesSkillEnv` 提供 curated replay/synthetic/session-mined benchmark，`ValidationGate` 以 held-out `candidate_score > current_score` 作为唯一接受门槛。LLM judge 只能辅助说明，不能替代 validation gate。
+
+Phase 2 已加入 curated replay/eval scorecards：`full-run --eval-file` / plugin-WebUI `eval_file` 可加载 JSONL/JSON tasks，默认查找 `$HERMES_HOME/skillopt/evals/<skill-name>.jsonl` 或 skill 目录 `evals/*.jsonl`。Task schema 包含 `id`, `prompt`, `success_criteria` 或 `expected_keywords`, `forbidden_keywords`, `split` (`train`/`validation`/`test`), optional `weight`；可靠确定性评分请优先写显式 `expected_keywords` / `forbidden_keywords`，`success_criteria` 主要保留作 metadata/evidence，当前不是完整语义 judge。显式 eval path 必须 resolve 到当前 `$HERMES_HOME` 内普通文件，防 path traversal/symlink escape。当前仍是 Hermes-native adapter，不是 Microsoft 官方完整 trainer port，但 benchmark/gate 结构更接近 SkillOpt-Sleep 的 replay/held-out eval。
+
+这不是 Microsoft 官方完整 trainer port。Microsoft upstream 仍 pinned for tracking；本仓库保持 standalone，不混改 upstream。Hermes safety（staged-only 默认、显式 adopt/rollback、path/sha guard、profile 隔离）作为外层 shell 保留。
 
 ## 更新流程
 

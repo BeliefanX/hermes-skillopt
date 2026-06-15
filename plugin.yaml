@@ -12,3 +12,4 @@ provides_tools:
   - hermes_skillopt_rollback
   - hermes_skillopt_upstream_status
   - hermes_skillopt_upstream_update
+  - hermes_skillopt_handoff_optimize
