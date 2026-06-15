@@ -39,18 +39,21 @@ def test_dry_run_stages_files_and_diff(tmp_path):
     proposed = (run_dir / "proposed_SKILL.md").read_text(encoding="utf-8")
     assert proposed.startswith("---\nname: demo")
     assert original != proposed
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["adoptable"] is False
 
 
 def test_adopt_sha_guard_and_rollback(tmp_path):
     skill = make_skill(tmp_path, "demo")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_id = out["run_id"]
     skill.write_text(skill.read_text(encoding="utf-8") + "\nexternal edit\n", encoding="utf-8")
     with pytest.raises(ValueError, match="sha"):
         core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopt = core.adopt(run_id, hermes_home_path=str(tmp_path), force=True)
     assert Path(adopt["backup_dir"]).exists()
-    assert "SkillOpt Candidate Improvements" in skill.read_text(encoding="utf-8")
+    assert "SkillOpt Learned Rules" in skill.read_text(encoding="utf-8")
     rb = core.rollback(run_id, hermes_home_path=str(tmp_path))
     assert rb["status"] == "rolled_back"
     assert "external edit" in skill.read_text(encoding="utf-8")
@@ -59,7 +62,8 @@ def test_adopt_sha_guard_and_rollback(tmp_path):
 def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_path):
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_dir = Path(out["run_dir"])
     (run_dir / "proposed_SKILL.md").write_text(original + "\ntampered staged artifact\n", encoding="utf-8")
 
@@ -84,7 +88,8 @@ def test_parent_traversal_run_id_rejected(tmp_path):
 
 def test_tampered_manifest_skill_path_outside_home_rejected(tmp_path):
     make_skill(tmp_path, "demo")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_dir = Path(out["run_dir"])
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -100,7 +105,8 @@ def test_tampered_manifest_skill_path_outside_home_rejected(tmp_path):
 def test_rollback_refuses_current_skill_changed_after_adopt_unless_force(tmp_path):
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     skill.write_text(skill.read_text(encoding="utf-8") + "\nuser edit after adopt\n", encoding="utf-8")
@@ -113,7 +119,8 @@ def test_rollback_refuses_current_skill_changed_after_adopt_unless_force(tmp_pat
 
 def test_rollback_refuses_tampered_backup_dir_outside_profile_without_writing_target(tmp_path):
     skill = make_skill(tmp_path, "demo")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopted_text = skill.read_text(encoding="utf-8")
@@ -135,7 +142,8 @@ def test_rollback_refuses_tampered_backup_dir_outside_profile_without_writing_ta
 
 def test_rollback_refuses_backup_without_manifest_even_if_staging_sha_matches(tmp_path):
     skill = make_skill(tmp_path, "demo")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopted_text = skill.read_text(encoding="utf-8")
@@ -171,6 +179,20 @@ def test_upstream_status_no_network(tmp_path):
     assert out["success"] is True
     assert out["clone_exists"] is False
     assert out["upstream_url"].endswith("microsoft/SkillOpt.git")
+    assert out["clone_path"] == str((tmp_path / "skillopt" / "upstream" / "SkillOpt").resolve())
+
+
+def test_upstream_status_rejects_noncanonical_repo_path_by_default(tmp_path):
+    with pytest.raises(ValueError, match="canonical clone"):
+        core.upstream_status(hermes_home_path=str(tmp_path), repo_path=str(tmp_path / "other"))
+
+
+def test_upstream_status_internal_allow_repo_path_escape_hatch(tmp_path):
+    other = tmp_path / "other"
+    out = core.upstream_status(hermes_home_path=str(tmp_path), repo_path=str(other), allow_repo_path=True)
+    assert out["success"] is True
+    assert out["clone_path"] == str(other.resolve())
+    assert out["clone_exists"] is False
 
 
 def make_state_db(home: Path, secret: str = "api_key=sk-abcdefghijklmnopqrstuvwxyz") -> None:
@@ -258,6 +280,40 @@ def test_plugin_registration_includes_full_tool_schema():
     assert "iterations" in run_schema["properties"]
     assert "backend" in run_schema["properties"]
     assert "eval_file" in run_schema["properties"]
+    assert "auto_adopt" not in run_schema["properties"]
+    update_schema = dict(names)["hermes_skillopt_upstream_update"]
+    assert "repo_path" not in update_schema["properties"]
+    status_schema = dict(names)["hermes_skillopt_upstream_status"]
+    assert "repo_path" not in status_schema["properties"]
+
+
+def test_plugin_yaml_provides_tools_matches_registered_tools():
+    import importlib.util
+
+    repo = Path(__file__).resolve().parents[1]
+    plugin_yaml = repo / "plugin.yaml"
+    provided = []
+    in_tools = False
+    for raw in plugin_yaml.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line == "provides_tools:":
+            in_tools = True
+            continue
+        if in_tools and line.startswith("- "):
+            provided.append(line[2:].strip())
+        elif in_tools and line:
+            break
+
+    spec = importlib.util.spec_from_file_location("skillopt_plugin_yaml_check", repo / "__init__.py")
+    plugin = importlib.util.module_from_spec(spec); assert spec and spec.loader; spec.loader.exec_module(plugin)
+    registered = []
+    class Ctx:
+        def register_tool(self, **kw): registered.append(kw["name"])
+    plugin.register(Ctx())
+
+    assert "hermes_skillopt_handoff_optimize" in provided
+    assert "hermes_skillopt_handoff_optimize" in registered
+    assert provided == registered
 
 
 def write_eval_file(home: Path, name: str = "demo", rows: list[dict] | None = None) -> Path:
@@ -353,14 +409,13 @@ def test_eval_file_path_guard_and_missing_errors(tmp_path):
         core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(outside), backend="mock", allow_mock=True)
 
 
-def test_full_run_auto_adopt_and_rollback_temp_home_only(tmp_path):
+def test_full_run_auto_adopt_disabled_even_for_temp_home(tmp_path):
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, auto_adopt=True)
-    assert out["adopt"]["status"] == "adopted"
-    assert "SkillOpt Learned Rules" in skill.read_text(encoding="utf-8")
-    rb = core.rollback(out["run_id"], hermes_home_path=str(tmp_path))
-    assert rb["status"] == "rolled_back"
+    with pytest.raises(ValueError, match="auto_adopt is disabled"):
+        core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, auto_adopt=True)
+    with pytest.raises(ValueError, match="auto_adopt cannot be combined with force"):
+        core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, auto_adopt=True, force=True)
     assert skill.read_text(encoding="utf-8") == original
 
 
@@ -388,7 +443,48 @@ def test_full_run_staged_best_manifest_records_core_abstractions(tmp_path):
     assert out["status"] == "staged_best"
     assert (run_dir / "best_skill.md").exists()
     assert manifest["core_abstraction"]["skill_document"] == "trainable_state"
+    assert manifest["core_abstraction"]["target_agent_model"] == "frozen_scorecard_replay_executor"
     assert manifest["core_abstraction"]["validation_gate"].startswith("sole_acceptance_gate")
+    assert manifest["adoptable"] is False
+    assert manifest["production_gate_eligible"] is False
+
+
+def test_legacy_dry_run_manifest_refuses_adopt_even_with_force(tmp_path):
+    skill = make_skill(tmp_path, "demo")
+    original = skill.read_text(encoding="utf-8")
+    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    with pytest.raises(ValueError, match="review-only"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert skill.read_text(encoding="utf-8") == original
+
+
+def test_full_run_with_explicit_curated_scorecard_is_adoptable(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    original = skill.read_text(encoding="utf-8")
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    assert out["adoptable"] is True
+    adopt = core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+    assert adopt["status"] == "adopted"
+    assert "SkillOpt Learned Rules" in skill.read_text(encoding="utf-8")
+    rb = core.rollback(out["run_id"], hermes_home_path=str(tmp_path))
+    assert rb["status"] == "rolled_back"
+    assert skill.read_text(encoding="utf-8") == original
+
+
+def test_discover_skills_rejects_symlink_escape_before_read(tmp_path):
+    outside = tmp_path.parent / f"outside-skill-{tmp_path.name}.md"
+    outside.write_text("---\nname: escaped\n---\nsecret outside profile\n", encoding="utf-8")
+    link_dir = tmp_path / "skills" / "escaped"
+    link_dir.mkdir(parents=True)
+    (link_dir / "SKILL.md").symlink_to(outside)
+    with pytest.raises(ValueError, match="escapes"):
+        core.discover_skills(tmp_path)
+
+
+def test_upstream_update_rejects_noncanonical_repo_path(tmp_path):
+    with pytest.raises(ValueError, match="canonical clone"):
+        core.upstream_update(hermes_home_path=str(tmp_path), repo_path=str(tmp_path / "other"), fetch_only=True)
 
 
 def test_cli_help_commands_smoke():

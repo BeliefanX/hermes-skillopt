@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from hermes_skillopt.bounded_edit import apply_bounded_edits, frontmatter_split
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_URL = "https://github.com/microsoft/SkillOpt.git"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -82,17 +84,21 @@ class Skill:
 
 
 def discover_skills(home: Path) -> list[Skill]:
-    skills_dir = home / "skills"
+    home = home.resolve()
+    skills_dir = (home / "skills").resolve()
     if not skills_dir.exists():
         return []
     found: list[Skill] = []
     for p in sorted(skills_dir.rglob("SKILL.md")):
+        resolved = p.resolve()
+        if p.is_symlink() or not _is_relative_to(resolved, skills_dir):
+            raise ValueError(f"Skill path escapes HERMES_HOME/skills: {p}")
         try:
-            text = read_text(p)
+            text = read_text(resolved)
         except UnicodeDecodeError:
             continue
         name = parse_frontmatter_name(text) or p.parent.name
-        found.append(Skill(name=name, path=p, relpath=str(p.relative_to(home)), sha256=sha256_text(text)))
+        found.append(Skill(name=name, path=resolved, relpath=str(resolved.relative_to(home)), sha256=sha256_text(text)))
     return found
 
 
@@ -116,14 +122,7 @@ def find_skill(home: Path, skill: str | None) -> Skill:
 
 
 def _frontmatter_split(text: str) -> tuple[str, str]:
-    if text.startswith("---\n"):
-        end = text.find("\n---", 4)
-        if end != -1:
-            after = end + len("\n---")
-            if after < len(text) and text[after] == "\n":
-                after += 1
-            return text[:after], text[after:]
-    return "", text
+    return frontmatter_split(text)
 
 
 def make_diff(original: str, proposed: str, relpath: str) -> str:
@@ -454,46 +453,6 @@ def bounded_edits(backend: LLMBackend, reflections: dict[str, Any], current_skil
     return data
 
 
-def _apply_one(body: str, edit: dict[str, Any]) -> str:
-    op = edit.get("op")
-    if op == "append":
-        text = str(edit.get("text", ""))
-        heading = None
-        m = re.search(r"^##\s+.+$", text.strip(), flags=re.M)
-        if m:
-            heading = re.escape(m.group(0).strip())
-        if heading and re.search(rf"^({heading})$", body, flags=re.M):
-            # Replace an existing generated section instead of duplicating it on later iterations.
-            return re.sub(rf"\n*{heading}\n.*?(?=\n##\s|\Z)", "\n\n" + text.strip() + "\n", body, count=1, flags=re.S | re.M)
-        return body.rstrip() + text + "\n"
-    if op == "replace":
-        old = str(edit.get("old", ""))
-        new = str(edit.get("new", ""))
-        if old and old in body:
-            return body.replace(old, new, 1)
-        return body
-    if op == "delete":
-        old = str(edit.get("text") or edit.get("old") or "")
-        if old and old in body:
-            return body.replace(old, "", 1)
-        return body
-    if op == "insert_after":
-        anchor = str(edit.get("anchor", ""))
-        text = str(edit.get("text", ""))
-        if anchor and anchor in body:
-            return body.replace(anchor, anchor + text, 1)
-        return body.rstrip() + text + "\n"
-    return body
-
-
-def apply_bounded_edits(current: str, edits: list[dict[str, Any]]) -> str:
-    fm, body = _frontmatter_split(current)
-    new_body = body
-    for edit in edits:
-        new_body = _apply_one(new_body, edit)
-    return fm + new_body
-
-
 def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, backend: str = "auto", allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None) -> dict[str, Any]:
     """Run the Hermes adapter of the SkillOpt core abstraction.
 
@@ -502,6 +461,10 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     edits -> evaluate candidate on held-out validation -> ValidationGate accepts
     only strict score improvements -> stage artifacts for user review/adopt.
     """
+    if force and auto_adopt:
+        raise ValueError("auto_adopt cannot be combined with force")
+    if auto_adopt:
+        raise ValueError("auto_adopt is disabled in production; run full-run, review artifacts, then call adopt explicitly")
     from hermes_skillopt.env import HermesSkillEnv
     from hermes_skillopt.gate import ValidationGate
     from hermes_skillopt.optimizer import OptimizerBackend
@@ -579,6 +542,12 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         write_text(artifacts.current, current)
 
     final_status = "staged_best" if best != original else "rejected"
+    eval_file_used = evidence.get("eval_file")
+    validation_summary = best_gate or (all_gates[-1] if all_gates else None)
+    production_gate_eligible = bool(evidence.get("production_gate_eligible")) and bool(
+        validation_summary.get("accepted") if validation_summary else False
+    )
+    adoptable = final_status == "staged_best" and production_gate_eligible
     proposed = best if final_status == "staged_best" else original
     diff = make_diff(original, proposed, target.relpath)
     if final_status == "staged_best":
@@ -590,16 +559,15 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     write_text(artifacts.gate_results, json.dumps({"gates": all_gates, "best_gate": best_gate}, ensure_ascii=False, indent=2) + "\n")
     _jsonl_write(artifacts.rejected_edits, rejected)
 
-    eval_file_used = evidence.get("eval_file")
-    validation_summary = best_gate or (all_gates[-1] if all_gates else None)
     current_score = validation_summary.get("current_score") if validation_summary else None
     candidate_score = validation_summary.get("candidate_score") if validation_summary else None
     gate_reason = validation_summary.get("rationale") if validation_summary else "none"
-    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt core adapter (trainable skill state, frozen target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- skill: {target.name}\n- backend: {llm.mode}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score; fallback/synthetic scorecards are review-only\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
     write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
         "status": final_status,
+        "adoptable": adoptable,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "hermes_home": str(home),
         "skill_name": target.name,
@@ -614,10 +582,11 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "curated_task_count": evidence.get("curated_task_count", 0),
         "validation_current_score": current_score,
         "validation_candidate_score": candidate_score,
+        "production_gate_eligible": production_gate_eligible,
         "gate_reason": gate_reason,
         "core_abstraction": {
             "skill_document": "trainable_state",
-            "target_agent_model": "frozen_executor",
+            "target_agent_model": "frozen_scorecard_replay_executor",
             "optimizer_model": "reflection_plus_bounded_edit",
             "environment_benchmark": "hermes_curated_replay_session_synthetic_tasks",
             "validation_gate": "sole_acceptance_gate_candidate_score_gt_current_score",
@@ -627,9 +596,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "files": artifacts.manifest_files(include_best=final_status == "staged_best"),
     }
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "gate_reason": gate_reason}
-    if auto_adopt and final_status == "staged_best" and not dry_run:
-        result["adopt"] = adopt(rid, hermes_home_path=str(home), force=force)
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "gate_reason": gate_reason}
     return result
 
 
@@ -659,14 +626,14 @@ def dry_run(skill: str | None = None, goal: str | None = None, session_search: s
     run_dir = dirs["staging"] / rid
     run_dir.mkdir(parents=True, exist_ok=False)
     diff = make_diff(original, proposed, target.relpath)
-    manifest = {"run_id": rid, "status": "staged", "created_at": datetime.now(timezone.utc).isoformat(), "hermes_home": str(home), "skill_name": target.name, "skill_path": str(target.path), "skill_relpath": target.relpath, "original_sha256": sha256_text(original), "proposed_sha256": sha256_text(proposed), "engine": engine, "files": {"original": "original_SKILL.md", "proposed": "proposed_SKILL.md", "diff": "diff.patch", "report": "report.md", "evidence": "evidence.json"}}
+    manifest = {"run_id": rid, "status": "staged", "adoptable": False, "review_only": True, "created_at": datetime.now(timezone.utc).isoformat(), "hermes_home": str(home), "skill_name": target.name, "skill_path": str(target.path), "skill_relpath": target.relpath, "original_sha256": sha256_text(original), "proposed_sha256": sha256_text(proposed), "engine": engine, "files": {"original": "original_SKILL.md", "proposed": "proposed_SKILL.md", "diff": "diff.patch", "report": "report.md", "evidence": "evidence.json"}}
     write_text(run_dir / "original_SKILL.md", original)
     write_text(run_dir / "proposed_SKILL.md", proposed)
     write_text(run_dir / "diff.patch", diff)
     write_text(run_dir / "evidence.json", json.dumps({"snippets": evidence}, ensure_ascii=False, indent=2) + "\n")
     write_text(run_dir / "report.md", f"# SkillOpt dry run\n\n- run_id: {rid}\n- skill: {target.name}\n- engine: {engine}\n- changed: {bool(diff)}\n\n```diff\n{diff[:4000]}\n```\n")
     save_manifest(run_dir, manifest)
-    return {"success": True, "run_id": rid, "status": "staged", "run_dir": str(run_dir), "skill": target.name, "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "changed": bool(diff)}
+    return {"success": True, "run_id": rid, "status": "staged", "adoptable": False, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "changed": bool(diff)}
 
 
 def status(hermes_home_path: str | None = None) -> dict[str, Any]:
@@ -689,7 +656,7 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
     diff = read_text(run_dir / "diff.patch") if (run_dir / "diff.patch").exists() else ""
     report = read_text(run_dir / "report.md") if (run_dir / "report.md").exists() else ""
     gate = m.get("gate") or (json.loads(read_text(run_dir / "gate_results.json")).get("best_gate") if (run_dir / "gate_results.json").exists() else None)
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "skill": m.get("skill_name"), "gate": gate, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "skill": m.get("skill_name"), "gate": gate, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
 
 
 def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False) -> dict[str, Any]:
@@ -697,6 +664,13 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False)
     dirs = ensure_dirs(home)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
+    gate = m.get("gate")
+    if m.get("status") != "staged_best" or m.get("adoptable") is not True:
+        raise ValueError("Only adoptable full-run staged_best manifests may be adopted; legacy/fallback/dry-run proposals are review-only")
+    if not isinstance(gate, dict) or gate.get("accepted") is not True:
+        raise ValueError("Manifest missing accepted validation gate; refusing to adopt")
+    if m.get("production_gate_eligible") is not True:
+        raise ValueError("Manifest validation gate is not production eligible; refusing to adopt")
     target = manifest_skill_path(home, m)
     guard_manifest_skill_path(home, m, target)
     if not target.exists():
@@ -751,9 +725,21 @@ def _git(args: list[str], cwd: Path | None = None, timeout: int = 120) -> tuple[
     return p.returncode, p.stdout.strip()
 
 
-def upstream_status(hermes_home_path: str | None = None, repo_path: str | None = None) -> dict[str, Any]:
+def upstream_status(
+    hermes_home_path: str | None = None,
+    repo_path: str | None = None,
+    *,
+    allow_repo_path: bool = False,
+) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
-    clone = Path(repo_path).expanduser().resolve() if repo_path else ensure_dirs(home)["upstream"] / "SkillOpt"
+    canonical = (ensure_dirs(home)["upstream"] / "SkillOpt").resolve()
+    if repo_path is not None:
+        requested = Path(repo_path).expanduser().resolve()
+        if requested != canonical and not allow_repo_path:
+            raise ValueError(f"upstream_status repo_path is restricted to canonical clone: {canonical}")
+        clone = requested
+    else:
+        clone = canonical
     lock = PLUGIN_ROOT / "skillopt_upstream.lock"
     lock_data = {}
     if lock.exists():
@@ -771,7 +757,12 @@ def upstream_status(hermes_home_path: str | None = None, repo_path: str | None =
 
 def upstream_update(hermes_home_path: str | None = None, repo_path: str | None = None, fetch_only: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
-    clone = Path(repo_path).expanduser().resolve() if repo_path else ensure_dirs(home)["upstream"] / "SkillOpt"
+    canonical = (ensure_dirs(home)["upstream"] / "SkillOpt").resolve()
+    if repo_path is not None:
+        requested = Path(repo_path).expanduser().resolve()
+        if requested != canonical:
+            raise ValueError(f"upstream_update repo_path is restricted to canonical clone: {canonical}")
+    clone = canonical
     if not (clone / ".git").exists():
         clone.parent.mkdir(parents=True, exist_ok=True)
         code, out = _git(["clone", "--depth", "1", UPSTREAM_URL, str(clone)], timeout=300)

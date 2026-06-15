@@ -126,6 +126,7 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         raise ValueError(f"eval task {task_id} has invalid split: {split_raw}")
     criteria = _string_tuple(record.get("success_criteria"))
     expected = _string_tuple(record.get("expected_keywords") or record.get("expected_terms"))
+    explicit_scorecard = bool(expected or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
     if not expected:
         expected = _criteria_to_terms(criteria)
     forbidden = _string_tuple(record.get("forbidden_keywords") or record.get("failure_terms"))
@@ -145,7 +146,11 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         split=split,
         weight=weight,
         success_criteria=criteria,
-        metadata={k: v for k, v in record.items() if k not in {"id", "prompt", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "success_criteria", "split", "weight"}},
+        metadata={
+            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "success_criteria", "split", "weight"}},
+            "scorecard_explicit": explicit_scorecard,
+            "production_gate_eligible": explicit_scorecard,
+        },
     )
 
 
@@ -205,6 +210,15 @@ class HermesSkillEnv:
         for name, rows in splits.items():
             tasks[name].extend(self._item_to_task(item, name) for item in rows)
         self._ensure_minimum_tasks(tasks)
+        curated_val_tasks = [
+            t for t in tasks["val"]
+            if t.source not in {"synthetic", "curated-fallback", "session-mined"} and str(t.source).endswith((".json", ".jsonl"))
+        ]
+        production_gate_eligible = bool(curated_val_tasks) and all(
+            bool(t.metadata.get("production_gate_eligible"))
+            and (bool(t.expected_terms) or bool(t.failure_terms) or t.metadata.get("ground_truth_score") is not None)
+            for t in curated_val_tasks
+        )
         evidence = {
             "snippets": snippets,
             "items": items,
@@ -212,6 +226,7 @@ class HermesSkillEnv:
             "eval_file": str(eval_path) if eval_path else None,
             "curated_task_count": len(curated_tasks),
             "task_counts": {k: len(v) for k, v in tasks.items()},
+            "production_gate_eligible": production_gate_eligible,
         }
         return tasks, evidence
 

@@ -194,16 +194,16 @@ def rollback_callback(run_id: str, confirmation: str, force: bool, home: str | N
         return f"Rollback failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
 
-def upstream_status_markdown(home: str | None = None, repo_path: str | None = None) -> str:
+def upstream_status_markdown(home: str | None = None) -> str:
     try:
-        return "```json\n" + _json(core.upstream_status(hermes_home_path=home or None, repo_path=repo_path or None)) + "\n```"
+        return "```json\n" + _json(core.upstream_status(hermes_home_path=home or None)) + "\n```"
     except Exception as exc:
         return f"Upstream status failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
 
-def upstream_update_markdown(home: str | None = None, repo_path: str | None = None, fetch_only: bool = False) -> str:
+def upstream_update_markdown(home: str | None = None, fetch_only: bool = False) -> str:
     try:
-        return "```json\n" + _json(core.upstream_update(hermes_home_path=home or None, repo_path=repo_path or None, fetch_only=bool(fetch_only))) + "\n```"
+        return "```json\n" + _json(core.upstream_update(hermes_home_path=home or None, repo_path=None, fetch_only=bool(fetch_only))) + "\n```"
     except Exception as exc:
         return f"Upstream update failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
@@ -266,7 +266,7 @@ def build_app(home_default: str | None = None):
                 rollback_out = gr.Markdown()
 
             with gr.Tab("Upstream"):
-                repo_path = gr.Textbox(label="Upstream clone path override (optional)")
+                gr.Markdown("Upstream status/update use the canonical clone under HERMES_HOME only.")
                 fetch_only = gr.Checkbox(value=True, label="Fetch only")
                 upstream_out = gr.Markdown()
                 with gr.Row():
@@ -281,8 +281,8 @@ def build_app(home_default: str | None = None):
         review_btn.click(review_payload, inputs=[review_run_id, home], outputs=[review_summary, report, diff, gate, candidate, rejected])
         adopt_btn.click(adopt_callback, inputs=[adopt_run_id, adopt_confirm, adopt_force, home], outputs=[adopt_out])
         rollback_btn.click(rollback_callback, inputs=[rollback_run_id, rollback_confirm, rollback_force, home], outputs=[rollback_out])
-        up_status_btn.click(upstream_status_markdown, inputs=[home, repo_path], outputs=[upstream_out])
-        up_update_btn.click(upstream_update_markdown, inputs=[home, repo_path, fetch_only], outputs=[upstream_out])
+        up_status_btn.click(upstream_status_markdown, inputs=[home], outputs=[upstream_out])
+        up_update_btn.click(upstream_update_markdown, inputs=[home, fetch_only], outputs=[upstream_out])
     return app
 
 

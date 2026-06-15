@@ -2,19 +2,19 @@
 
 `hermes-skillopt` 是一个 standalone Hermes 插件，用于在 **不修改 Hermes core** 的前提下，对当前 profile 的 `SKILL.md` 做安全、可审查、可回滚的优化。
 
-## 当前实现：Hermes-native SkillOpt core adapter
+## 当前实现：SkillOpt-inspired Hermes-native adapter
 
-默认 `run/full-run` 已重构为 Hermes-native adapter，遵循 Microsoft SkillOpt 的核心抽象，但不是 Microsoft 官方完整 trainer port：
+默认 `run/full-run` 是 SkillOpt-inspired Hermes-native adapter，借鉴 Microsoft SkillOpt 的核心抽象，但不是 Microsoft 官方完整 trainer port：
 
 - **skill document = trainable state**：当前 profile 下的 `SKILL.md` 是唯一可训练参数。
 - **target agent/model = frozen executor**：`TargetExecutor` 在同一冻结条件下分别评测 current/candidate skill。
 - **optimizer model = reflection + bounded skill edit**：optimizer 只基于 rollout evidence 反思并生成 `append`/`replace`/`delete`/`insert_after` 等 bounded edits，不能直接写 profile。
-- **environment/benchmark = real eval field**：`HermesSkillEnv` 从 curated/synthetic/session-mined tasks 构造 train/validation/test。
+- **environment/benchmark = scorecard/replay eval field**：`HermesSkillEnv` 从 curated/synthetic/session-mined tasks 构造 train/validation/test；只有显式 curated scorecard 可作为 adopt gate，fallback/synthetic 仅 review-only。
 - **validation gate = only acceptance gate**：`ValidationGate` 只在 held-out validation 上用 `candidate_score > current_score` 接受；LLM judge 只能作为辅助说明，不能单独接受。
 
 完整流程：load skill state → build train/validation/test tasks → evaluate current with frozen target → optimizer reflects/proposes bounded edits from rollout evidence → apply candidate → evaluate candidate on held-out validation → validation gate compares current vs candidate → if improved stage `best_skill.md` → user review/adopt/rollback。
 
-Hermes staged safety 是外壳：full-run 默认只写 `$HERMES_HOME/skillopt/staging/<run-id>/`；`adopt`/`rollback` 必须显式、可逆、带 path/sha guard，并限制在当前 `$HERMES_HOME/skills`。
+Hermes staged safety 是外壳：full-run 只写 `$HERMES_HOME/skillopt/staging/<run-id>/`；`adopt`/`rollback` 必须显式、可逆、带 path/sha/manifest gate guard，并限制在当前 `$HERMES_HOME/skills`。生产 tool/CLI 不提供 auto-adopt。
 
 Artifacts：每个 run 写入 `manifest.json`, `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, `diff.patch`, `report.md`, `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`, `current_validation_results.json`, `candidate_validation_results.json`, `reflections.json`, `candidate_edits.json`, `gate_results.json`, `rejected_edits.jsonl`；只有 validation gate 通过时才额外 stage `best_skill.md`。
 
@@ -41,7 +41,7 @@ Full-run 支持 curated replay scorecards，让 environment/benchmark 更接近 
 
 - 插件代码和 upstream 研究/实现解耦，减少未来冲突。
 - Microsoft SkillOpt 作为 pinned external upstream clone 跟踪；更新只写 lock，不自动合并/采用。
-- 当前实现是 **Hermes-native SkillOpt core adapter**：skill document 是 trainable state；target executor 冻结；optimizer 只反思并生成 bounded edits；Hermes curated/synthetic/session-mined tasks 作为 benchmark；validation gate 以 held-out `candidate_score > current_score` 作为唯一接受门槛。它不是 Microsoft 官方完整 trainer port；Hermes staged safety/adopt/rollback/profile isolation 是外层安全壳。
+- 当前实现是 **SkillOpt-inspired Hermes-native adapter**：skill document 是 trainable state；target evaluator 冻结为同一 scorecard/replay runner；optimizer 只反思并生成 bounded edits；Hermes curated/session-mined/fallback tasks 作为 benchmark；validation gate 以 held-out `candidate_score > current_score` 作为唯一接受门槛。它不是 Microsoft 官方完整 trainer port；Hermes staged safety/review/adopt/rollback/profile isolation 和 multi-agent handoff 是外层安全壳。
 - Hermes 集成面保持很小：`plugin.yaml` + `register(ctx)` + toolset。
 
 ## 安装到本机 default profile
@@ -70,8 +70,8 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_review`: 查看 run 状态、gate score、accepted/rejected、diff/report 路径和摘要。
 - `hermes_skillopt_adopt`: sha/path guard 通过后，只写目标 `SKILL.md`，并创建备份。
 - `hermes_skillopt_rollback`: 通过已校验的 backup manifest 和备份 `SKILL.md` 恢复（无 staged original fallback）。
-- `hermes_skillopt_upstream_status`: 查看 Microsoft SkillOpt clone/lock 状态。
-- `hermes_skillopt_upstream_update`: clone/fetch/pin upstream；不合并插件代码。
+- `hermes_skillopt_upstream_status`: 查看 canonical HERMES_HOME upstream clone/lock 状态；生产 tool/CLI/WebUI 不接受任意 `repo_path`。
+- `hermes_skillopt_upstream_update`: clone/fetch/pin canonical upstream；不合并插件代码。
 - `hermes_skillopt_handoff_optimize`: 生成/评分 Hermes `delegate_task` 的 multi-agent dispatcher→worker handoff 包；无 LLM/network 调用，不自动修改全局 prompt/skill。
 
 Full-run 参数：
@@ -79,8 +79,7 @@ Full-run 参数：
 - `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`
 - `backend`: `auto|hermes|mock`，默认 `auto`
 - `allow_mock`: `auto` 且 Hermes `ctx.llm` 不可用时，只有显式 true 才允许 mock（用于 CLI/tests/smoke）
-- `auto_adopt`: 默认 false；为 true 时仍必须通过 sha/path guard
-- `force`: 用于 adopt guard override
+- `force`: 仅用于显式 adopt/rollback guard override；不能与 auto-adopt 组合（生产 tool/CLI 已禁用 auto-adopt）
 
 ## 本地 CLI
 
@@ -131,7 +130,8 @@ WebUI 暴露的是 Hermes-specific workflow，而不是 upstream generic trainin
 ## 安全模型
 
 - 默认只在 `$HERMES_HOME/skillopt/staging/<run-id>/` 生成 staged artifacts。
-- Full run 不会默认 adopt；只有 `auto_adopt=true` 或显式 `adopt` 才写目标 skill。
+- Full run 不会 auto-adopt；只有显式 `adopt` 才可能写目标 skill。
+- Adopt 只接受 full-run 产物：`status == staged_best`、`adoptable == true`、`gate.accepted == true`，且 validation gate 来自显式 curated scorecard；legacy dry-run/fallback/synthetic runs 均为 review-only。
 - Adopt 前校验 current skill sha256 是否等于 staged original；除非显式 `force=true`。
 - Adopt 前备份到 `$HERMES_HOME/skillopt/backups/<timestamp-run-id>/`。
 - Rollback 只通过已校验的 backup manifest 和备份 `SKILL.md` 恢复，并带 current-sha guard。

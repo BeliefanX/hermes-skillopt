@@ -30,7 +30,6 @@ FULL_PROPS = {
     "edit_budget": {"type": "integer", "default": 3},
     "backend": {"type": "string", "enum": ["auto", "hermes", "mock"], "default": "auto"},
     "allow_mock": {"type": "boolean", "default": False},
-    "auto_adopt": {"type": "boolean", "default": False},
     "force": {"type": "boolean", "default": False},
     "dry_run": {"type": "boolean", "default": False},
 }
@@ -38,13 +37,13 @@ FULL_PROPS = {
 SCHEMAS = {
     "hermes_skillopt_status": _schema("Show SkillOpt plugin status, discovered skill count, and recent staged runs.", COMMON_HOME),
     "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
-    "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal and only adopts when auto_adopt=true.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_full_run": _schema("Run full core pipeline: load skill state, build benchmark tasks, frozen target eval, optimizer reflect/edit, validation gate (candidate_score > current_score only), staged artifacts.", FULL_PROPS),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, and diff/report preview.", {**COMMON_HOME, "run_id": {"type": "string"}, "include_diff_chars": {"type": "integer", "default": 4000}}, ["run_id"]),
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md after sha guard and backup.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
     "hermes_skillopt_rollback": _schema("Rollback an adopted run using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
-    "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status.", {**COMMON_HOME, "repo_path": {"type": "string"}}),
-    "hermes_skillopt_upstream_update": _schema("Fetch/update pinned Microsoft SkillOpt upstream clone and write lock; never merges into plugin code.", {**COMMON_HOME, "repo_path": {"type": "string"}, "fetch_only": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
+    "hermes_skillopt_upstream_update": _schema("Fetch/update the canonical pinned Microsoft SkillOpt upstream clone under HERMES_HOME and write lock; never merges into plugin code.", {**COMMON_HOME, "fetch_only": {"type": "boolean", "default": False}}),
     "hermes_skillopt_handoff_optimize": _schema("Build and score a staged multi-agent delegate_task handoff package. No LLM/network calls and no global prompt auto-adopt.", {"requirements": {"type": "string"}, "worker": {"type": "string"}, "context_budget_chars": {"type": "integer", "default": 6000}}, ["requirements"]),
 }
 
@@ -67,7 +66,6 @@ def _full_args(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
         "edit_budget": int(args.get("edit_budget") or 3),
         "backend": args.get("backend") or "auto",
         "allow_mock": bool(args.get("allow_mock", False)),
-        "auto_adopt": bool(args.get("auto_adopt", False)),
         "force": bool(args.get("force", False)),
         "dry_run": bool(args.get("dry_run", False)),
         "hermes_home_path": args.get("hermes_home"),
@@ -86,6 +84,10 @@ def _handle_dry_run(args: dict, **kw) -> str:
 
 def _handle_run(args: dict, **kw) -> str:
     ctx = kw.get("ctx") or kw.get("context")
+    if args.get("auto_adopt") and args.get("force"):
+        return tool_error("hermes-skillopt failed: auto_adopt cannot be combined with force")
+    if args.get("auto_adopt"):
+        return tool_error("hermes-skillopt failed: auto_adopt is disabled; run full-run, review, then adopt explicitly")
     if (args.get("mode") or "full") == "legacy":
         return _handle_dry_run(args, **kw)
     return _ok(core.full_run, _full_args(args, ctx))
@@ -104,11 +106,11 @@ def _handle_rollback(args: dict, **kw) -> str:
 
 
 def _handle_upstream_status(args: dict, **kw) -> str:
-    return _ok(core.upstream_status, {"hermes_home_path": args.get("hermes_home"), "repo_path": args.get("repo_path")})
+    return _ok(core.upstream_status, {"hermes_home_path": args.get("hermes_home")})
 
 
 def _handle_upstream_update(args: dict, **kw) -> str:
-    return _ok(core.upstream_update, {"hermes_home_path": args.get("hermes_home"), "repo_path": args.get("repo_path"), "fetch_only": bool(args.get("fetch_only", False))})
+    return _ok(core.upstream_update, {"hermes_home_path": args.get("hermes_home"), "repo_path": None, "fetch_only": bool(args.get("fetch_only", False))})
 
 
 def _handle_handoff_optimize(args: dict, **kw) -> str:

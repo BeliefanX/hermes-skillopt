@@ -17,7 +17,6 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--edit-budget", type=int, default=3)
     p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto")
     p.add_argument("--allow-mock", action="store_true")
-    p.add_argument("--auto-adopt", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
 
@@ -34,7 +33,7 @@ def main() -> int:
     a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true")
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true")
     sub.add_parser("upstream-status")
-    uu = sub.add_parser("upstream-update"); uu.add_argument("--repo-path"); uu.add_argument("--fetch-only", action="store_true")
+    uu = sub.add_parser("upstream-update"); uu.add_argument("--fetch-only", action="store_true")
     ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
     web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
     web.add_argument("--host", default="127.0.0.1")
@@ -48,7 +47,7 @@ def main() -> int:
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
-        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, auto_adopt=args.auto_adopt, force=args.force, dry_run=args.dry_run, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None))
+        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, force=args.force, dry_run=args.dry_run, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None))
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
@@ -60,7 +59,7 @@ def main() -> int:
     elif args.cmd == "upstream-status":
         out = core.upstream_status(args.home)
     elif args.cmd == "upstream-update":
-        out = core.upstream_update(args.home, args.repo_path, args.fetch_only)
+        out = core.upstream_update(args.home, None, args.fetch_only)
     elif args.cmd == "handoff-optimize":
         out = multi_agent.optimize_delegate_handoff(args.requirements, worker=args.worker, context_budget_chars=args.context_budget_chars)
     elif args.cmd == "webui":
