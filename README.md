@@ -68,6 +68,27 @@ python3 -m hermes_skillopt.cli --home /tmp/hermes-skillopt-smoke full-run --skil
 python3 -m hermes_skillopt.cli --home /tmp/hermes-skillopt-smoke review <run_id>
 ```
 
+## Hermes-native WebUI (optional Gradio)
+
+WebUI 是可选依赖，普通 plugin import / Hermes tool registration 不需要安装 Gradio。安装后可用 CLI 或 module 方式启动：
+
+```bash
+python3 -m pip install 'hermes-skillopt[webui]'
+python3 -m hermes_skillopt.webui --host 127.0.0.1 --port 7860
+# or
+python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
+```
+
+WebUI 暴露的是 Hermes-specific workflow，而不是 upstream generic training config：
+
+- **Status**：当前 `HERMES_HOME`、skills count、最近 staged runs。
+- **Full run**：`skill/query/lookback/limit/iterations/edit_budget/backend/allow_mock` 控件；始终 staged-only，`auto_adopt` 在 WebUI 中固定为 false。
+- **Review artifacts**：只读取 `$HERMES_HOME/skillopt/staging/<run_id>/` 内的 `report.md`、`diff.patch`、`gate_results.json`、`proposed_SKILL.md`、`rejected_edits.jsonl` 等固定 artifact，不提供任意文件浏览。
+- **Adopt / Rollback**：必须显式输入 `ADOPT <run_id>` 或 `ROLLBACK <run_id>` 才会执行；仍使用 core 的 path/sha guards 和 backup/rollback 机制。
+- **Upstream**：可查看/更新 pinned Microsoft SkillOpt upstream clone；只更新 lock/clone，不自动合并插件代码。
+
+若未安装 Gradio，启动会给出明确安装提示，不影响测试和 Hermes 插件加载。
+
 ## LLM backend
 
 - 插件 runtime 优先使用 Hermes `ctx.llm.complete_structured`，其次 `ctx.llm.complete`。

@@ -32,6 +32,12 @@ def main() -> int:
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true")
     sub.add_parser("upstream-status")
     uu = sub.add_parser("upstream-update"); uu.add_argument("--repo-path"); uu.add_argument("--fetch-only", action="store_true")
+    web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=7860)
+    web.add_argument("--share", action="store_true")
+    web.add_argument("--browser", action="store_true")
+    web.add_argument("--home", dest="web_home", help="HERMES_HOME override for WebUI defaults and callbacks")
     args = p.parse_args()
     if args.cmd == "status":
         out = core.status(args.home)
@@ -51,6 +57,17 @@ def main() -> int:
         out = core.upstream_status(args.home)
     elif args.cmd == "upstream-update":
         out = core.upstream_update(args.home, args.repo_path, args.fetch_only)
+    elif args.cmd == "webui":
+        from hermes_skillopt import webui
+        launch_args = ["--host", args.host, "--port", str(args.port)]
+        web_home = args.web_home or args.home
+        if web_home:
+            launch_args.extend(["--home", web_home])
+        if args.share:
+            launch_args.append("--share")
+        if args.browser:
+            launch_args.append("--browser")
+        return webui.main(launch_args)
     else:
         raise SystemExit(2)
     print(json.dumps(out, ensure_ascii=False, indent=2))

@@ -7,6 +7,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+webui = ["gradio>=4"]
 
 [project.scripts]
 hermes-skillopt = "hermes_skillopt.cli:main"
