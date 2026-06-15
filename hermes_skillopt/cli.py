@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from hermes_skillopt import core
+from hermes_skillopt import multi_agent
 
 
 def add_full_args(p: argparse.ArgumentParser) -> None:
@@ -32,6 +33,7 @@ def main() -> int:
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true")
     sub.add_parser("upstream-status")
     uu = sub.add_parser("upstream-update"); uu.add_argument("--repo-path"); uu.add_argument("--fetch-only", action="store_true")
+    ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
     web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=7860)
@@ -57,6 +59,8 @@ def main() -> int:
         out = core.upstream_status(args.home)
     elif args.cmd == "upstream-update":
         out = core.upstream_update(args.home, args.repo_path, args.fetch_only)
+    elif args.cmd == "handoff-optimize":
+        out = multi_agent.optimize_delegate_handoff(args.requirements, worker=args.worker, context_budget_chars=args.context_budget_chars)
     elif args.cmd == "webui":
         from hermes_skillopt import webui
         launch_args = ["--host", args.host, "--port", str(args.port)]

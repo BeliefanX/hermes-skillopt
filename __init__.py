@@ -4,6 +4,7 @@ import json
 from typing import Any, Callable
 
 from hermes_skillopt import core
+from hermes_skillopt import multi_agent
 
 try:
     from tools.registry import tool_error, tool_result
@@ -43,6 +44,7 @@ SCHEMAS = {
     "hermes_skillopt_rollback": _schema("Rollback an adopted run using its backup/original file after current-sha guard unless force=true.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status.", {**COMMON_HOME, "repo_path": {"type": "string"}}),
     "hermes_skillopt_upstream_update": _schema("Fetch/update pinned Microsoft SkillOpt upstream clone and write lock; never merges into plugin code.", {**COMMON_HOME, "repo_path": {"type": "string"}, "fetch_only": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_handoff_optimize": _schema("Build and score a staged multi-agent delegate_task handoff package. No LLM/network calls and no global prompt auto-adopt.", {"requirements": {"type": "string"}, "worker": {"type": "string"}, "context_budget_chars": {"type": "integer", "default": 6000}}, ["requirements"]),
 }
 
 
@@ -106,6 +108,10 @@ def _handle_upstream_status(args: dict, **kw) -> str:
 def _handle_upstream_update(args: dict, **kw) -> str:
     return _ok(core.upstream_update, {"hermes_home_path": args.get("hermes_home"), "repo_path": args.get("repo_path"), "fetch_only": bool(args.get("fetch_only", False))})
 
+
+def _handle_handoff_optimize(args: dict, **kw) -> str:
+    return _ok(multi_agent.optimize_delegate_handoff, {"requirements": args.get("requirements") or "", "worker": args.get("worker"), "context_budget_chars": int(args.get("context_budget_chars") or 6000)})
+
 _TOOLS = (
     ("hermes_skillopt_status", SCHEMAS["hermes_skillopt_status"], _handle_status, "🧰"),
     ("hermes_skillopt_dry_run", SCHEMAS["hermes_skillopt_dry_run"], _handle_dry_run, "🧪"),
@@ -116,6 +122,7 @@ _TOOLS = (
     ("hermes_skillopt_rollback", SCHEMAS["hermes_skillopt_rollback"], _handle_rollback, "↩️"),
     ("hermes_skillopt_upstream_status", SCHEMAS["hermes_skillopt_upstream_status"], _handle_upstream_status, "🌊"),
     ("hermes_skillopt_upstream_update", SCHEMAS["hermes_skillopt_upstream_update"], _handle_upstream_update, "⬆️"),
+    ("hermes_skillopt_handoff_optimize", SCHEMAS["hermes_skillopt_handoff_optimize"], _handle_handoff_optimize, "🤝"),
 )
 
 

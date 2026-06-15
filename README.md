@@ -51,6 +51,7 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_rollback`: 从备份或 staged original 恢复。
 - `hermes_skillopt_upstream_status`: 查看 Microsoft SkillOpt clone/lock 状态。
 - `hermes_skillopt_upstream_update`: clone/fetch/pin upstream；不合并插件代码。
+- `hermes_skillopt_handoff_optimize`: 生成/评分 Hermes `delegate_task` 的 multi-agent dispatcher→worker handoff 包；无 LLM/network 调用，不自动修改全局 prompt/skill。
 
 Full-run 参数：
 
@@ -66,7 +67,17 @@ Full-run 参数：
 python3 -m hermes_skillopt.cli --home /tmp/hermes-skillopt-smoke status
 python3 -m hermes_skillopt.cli --home /tmp/hermes-skillopt-smoke full-run --skill demo --query demo --backend mock --allow-mock --iterations 2
 python3 -m hermes_skillopt.cli --home /tmp/hermes-skillopt-smoke review <run_id>
+python3 -m hermes_skillopt.cli handoff-optimize "Goal: reduce delegate_task rework; Acceptance: concise evidence and tests"
 ```
+
+## Multi-agent delegate_task handoff optimization
+
+First-version multi-agent support is deliberately scoped to dispatcher/worker handoff packaging, not global single-agent prompt rewriting. It can deterministically build and score a staged handoff template with:
+
+- dispatcher policy and bounded context package (`goal`, `scope`, `acceptance`, `verification`)
+- slim worker output contract (`status`, `changed_files`, `key_evidence`, risks, next step)
+- reviewer acceptance rubric, retry/escalation rules, and metrics (`context_size`, `rework_risk`, `acceptance_omissions`)
+- `staged_only=true` and `no_global_auto_adopt=true`
 
 ## Hermes-native WebUI (optional Gradio)
 
