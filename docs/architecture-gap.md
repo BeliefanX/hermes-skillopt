@@ -1,52 +1,94 @@
-# Hermes SkillOpt architecture gap
+# Hermes SkillOpt architecture
 
-This repository is a Hermes-safe adapter inspired by Microsoft SkillOpt, not a fork of upstream. Upstream remains pinned as metadata/clone under `$HERMES_HOME/skillopt/upstream/SkillOpt`; production code should not merge or shadow upstream wholesale.
+This document describes the current main-branch architecture. It intentionally omits obsolete historical gap lists.
 
-## Current positioning
+## Boundaries
 
-- Trainable state: one Hermes `SKILL.md` document.
-- Frozen target: the same replay/scorecard task set and target config is used for current and candidate.
-- Optimizer: reflection plus bounded edits; it never accepts its own edits.
-- Gate: validation score must strictly improve; adopt/rollback are explicit and guarded.
-- Shell: staged-only artifacts, path/sha guards, active-profile isolation, no auto-adopt.
+`hermes-skillopt` is a Hermes-safe adapter inspired by Microsoft SkillOpt. It does not modify Hermes core, does not vendor upstream SkillOpt code, and does not auto-adopt generated skill changes.
 
-## Upstream pin / no-fork strategy
+The only trainable object is a target `SKILL.md` under the active Hermes profile. All optimization output is staged under `$HERMES_HOME/skillopt/staging/<run-id>/` until an explicit guarded `adopt` call.
 
-- Keep upstream as canonical reference at `https://github.com/microsoft/SkillOpt.git`.
-- Current lock pin: `skillopt_upstream.lock` = `86bad36ffe511b7022a6c735930056c14124b960`.
-- Local upstream clone (when present): `/Users/fanxuxin/.hermes/skillopt/upstream/SkillOpt`.
-- Record pin/clone status via existing upstream commands.
-- Port only small, reviewed ideas that fit Hermes safety boundaries.
-- Do not replace Hermes profile safety with upstream training code paths.
+## Main modules
 
-## Validation commands
+- `core.py`: orchestration, status/review/adopt/rollback, artifact hashing, upstream status/update wrappers, profile/path guards.
+- `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
+- `trainer.py`: six-stage rollout/reflect/aggregate/select/update/evaluate loop and final held-out test evaluation.
+- `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
+- `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application.
+- `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, and frozen `TargetExecutor` wrapper.
+- `gate.py`: strict validation gate (`candidate_score > current_score`).
+- `webui.py`: optional Gradio UI for Hermes-specific status/full-run/review/adopt/rollback/upstream workflows.
+- `multi_agent.py`: deterministic multi-agent handoff optimizer for `delegate_task` dispatcher→worker packages.
 
-- `python3 -m pytest -q`
-- `python3 -m compileall hermes_skillopt __init__.py`
-- Optional status check: `python3 -m hermes_skillopt.cli upstream-status`
+## Full-run flow
 
-## Gaps
+`core.full_run()` coordinates the safety shell around `SixStageSkillOptTrainer`:
 
-P0:
-- Real replay runner was missing; keyword scorecard alone could not exercise Hermes-like tasks.
-- Eval schema was too narrow for replay prompts, expected behavior, assertions, fixtures, allowed tools, judges, timeouts, and success criteria.
-- Rejected edits were written but not fed back into later optimizer context.
-- The trainer loop was implicit instead of six explicit artifacted stages.
+1. Resolve active `HERMES_HOME`, discover target skill, read original `SKILL.md`.
+2. Build train/validation/test tasks from curated evals, session-mined evidence, or fallback tasks.
+3. Select target executor: `auto|replay|sandbox|scorecard`.
+4. Write initial staged artifacts.
+5. Run the six trainer stages:
+   - rollout current skill
+   - reflect on evidence and rejected edit history
+   - aggregate bounded edit proposals
+   - select valid edits / record rejections
+   - update a candidate copy
+   - evaluate and gate on held-out validation
+6. Evaluate the final best candidate on held-out test.
+7. Write report, diff, stage JSON artifacts, rejected edits, gate results, manifest, and artifact SHA-256 map.
+8. Mark the run adoptable only if production validation and held-out test gates are eligible and passing.
 
-P1:
-- Replay MVP is declarative and sandboxed; it is not yet a full Hermes gateway/session executor.
-- Curated replay set is small; needs 10-30 stable tasks per important skill family.
-- Semantic judging remains limited; production eligibility should require explicit scorecards or reviewed replay assertions.
+`full_run(dry_run=True)` is rejected by code; CLI has no `full-run --dry-run` option. Legacy `dry-run`/`run --mode legacy` remains review-only.
 
-P2:
-- Richer failure clustering across runs.
-- Better visualization of stage artifacts in WebUI.
-- Optional upstream diff reports when new SkillOpt releases land.
+## Artifact model
 
-## Roadmap
+Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, rejected edits, gate results, report, diff, manifest, and per-stage JSON under `stages/`.
 
-1. Keep staged-only write semantics and active-profile isolation unchanged.
-2. Expand curated replay tasks in `$HERMES_HOME/skillopt/evals/*.jsonl` using the extended schema.
-3. Replace the MVP replay assertion runner with a real Hermes sandbox executor only when it can prove no profile writeback.
-4. Promote rejected edit history into first-class optimizer memory and WebUI review.
-5. Grow six-stage artifacts into stable interfaces for diagnostics and future orchestration.
+The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best.
+
+## Eval and adoption gates
+
+Task schema supports `prompt`, split, expected/forbidden keywords, assertions, markers, success criteria, expected behavior, allowed tools, fixtures, timeout, judge, weight, and metadata.
+
+Production adoption is intentionally stricter than generic validation:
+
+- The production validation gate can only use explicit curated eval-file validation tasks.
+- Eligible tasks must carry explicit scoring/assertion signal such as keywords, markers, assertions, expected behavior, failure terms, or ground truth metadata.
+- The final candidate must strictly improve production validation score over current.
+- Held-out curated test tasks must pass threshold.
+- Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
+- LLM judge text is explanatory evidence only and cannot bypass gates.
+
+## Sandbox executor safety
+
+`HermesSandboxRunner` is a production-safe MVP executor, not an arbitrary command executor. It creates a temporary isolated HOME/HERMES_HOME/workspace, writes the candidate `SKILL.md` only into that sandbox, invokes a fixed internal runner, and records transcript/exit/timeout metadata.
+
+Task-provided commands in `fixtures.command` or `metadata.command` are deliberately blocked with exit code 126 and `SANDBOX_COMMAND_BLOCKED`. Blocked command tasks are not production-gate eligible. The sandbox never writes the live profile.
+
+## Adopt and rollback guards
+
+Adopt requires:
+
+- `status == "staged_best"`
+- `adoptable == true`
+- accepted validation gate
+- `production_gate_eligible == true`
+- `test_gate_eligible == true`
+- verified artifact hashes
+- target path under active profile `skills/`
+- current live skill SHA matching staged original unless forced
+- proposed skill SHA matching manifest
+
+Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
+
+## Upstream strategy
+
+Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical clone under `$HERMES_HOME/skillopt/upstream/SkillOpt`. Upstream status/update commands refresh metadata and pinning only; they do not merge code or alter live skills.
+
+## Current limitations
+
+- Replay/sandbox scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
+- Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
+- Semantic LLM judging is not an acceptance authority.
+- WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts.
