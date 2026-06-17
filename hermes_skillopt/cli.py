@@ -20,8 +20,8 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto", help="Back-compat alias for --optimizer-backend")
     p.add_argument("--optimizer-backend", choices=["auto", "hermes", "mock"], help="Explicit optimizer backend for reflection/bounded edits")
     p.add_argument("--allow-mock", action="store_true")
-    p.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto", help="Frozen evaluator mode; sandbox uses isolated temp HOME/HERMES_HOME/workspace")
-    p.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"], help="Explicit target backend alias for --target-executor")
+    p.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"], default="auto", help="Frozen evaluator mode; sandbox uses isolated temp HOME/HERMES_HOME/workspace")
+    p.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"], help="Explicit target backend alias for --target-executor")
     p.add_argument("--gate-mode", choices=["soft", "hard", "mixed", "strict"], default="soft", help="Deterministic metric gate; strict also requires hard pass-rate and per-task non-regression")
     p.add_argument("--force", action="store_true")
     p.add_argument("--resume-run-id", help="Opt-in resume/reuse of a prior checkpointed full-run when input/config/provenance fingerprints match")
@@ -35,15 +35,17 @@ def main() -> int:
     d = sub.add_parser("dry-run"); d.add_argument("--skill"); d.add_argument("--goal"); d.add_argument("--session-search"); d.add_argument("--use-llm", action="store_true")
     fr = sub.add_parser("full-run"); add_full_args(fr)
     eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
-    eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"])
+    eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"])
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
-    bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"])
+    bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard", "live-readonly"])
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
     r = sub.add_parser("review"); r.add_argument("run_id")
     ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
     a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true"); a.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true"); rb.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     sub.add_parser("upstream-status")
+    sub.add_parser("compare-upstream-pin", help="Read-only report comparing local clone to pinned upstream lock; no fetch/merge/write")
+    sub.add_parser("benchmark-parity-status", help="Read-only label/status for Hermes benchmark mode versus upstream parity; no rollout/adopt")
     uu = sub.add_parser("upstream-update"); uu.add_argument("--fetch-only", action="store_true")
     ubi = sub.add_parser("import-upstream-benchmark", help="Safely convert an upstream-style JSON benchmark manifest into a Hermes eval pack")
     ubi.add_argument("manifest"); ubi.add_argument("--output"); ubi.add_argument("--pack-id"); ubi.add_argument("--version"); ubi.add_argument("--curated", action="store_true", help="Mark imported pack as curated instead of sample/review-only")
@@ -85,6 +87,10 @@ def main() -> int:
         out = core.rollback(args.run_id, args.home, args.force, unsafe_cross_profile=args.unsafe_cross_profile_writeback)
     elif args.cmd == "upstream-status":
         out = core.upstream_status(args.home)
+    elif args.cmd == "compare-upstream-pin":
+        out = core.compare_upstream_pin(args.home)
+    elif args.cmd == "benchmark-parity-status":
+        out = core.benchmark_parity_status(args.home)
     elif args.cmd == "upstream-update":
         out = core.upstream_update(args.home, None, args.fetch_only)
     elif args.cmd == "import-upstream-benchmark":

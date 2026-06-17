@@ -120,6 +120,26 @@ def test_adopt_rejects_cross_profile_home_without_unsafe_confirmation(tmp_path):
     assert skill.read_text(encoding="utf-8") == original
 
 
+def test_cross_profile_adopt_refusal_creates_no_target_files_or_audit(tmp_path):
+    other_home = tmp_path / "fresh-inactive-profile"
+    assert not other_home.exists()
+
+    with pytest.raises(ValueError, match="outside the active Hermes profile home"):
+        core.adopt("missing-run", hermes_home_path=str(other_home))
+
+    assert not other_home.exists()
+
+
+def test_cross_profile_rollback_refusal_creates_no_target_files_or_audit(tmp_path):
+    other_home = tmp_path / "fresh-inactive-profile"
+    assert not other_home.exists()
+
+    with pytest.raises(ValueError, match="outside the active Hermes profile home"):
+        core.rollback("missing-run", hermes_home_path=str(other_home))
+
+    assert not other_home.exists()
+
+
 def test_cross_profile_writeback_requires_explicit_unsafe_confirmation(tmp_path):
     other_home = tmp_path.parent / f"offline-profile-{tmp_path.name}"
     skill = make_skill(other_home, "demo")
@@ -233,12 +253,21 @@ def test_secret_redaction():
     assert "<REDACTED>" in red
 
 
+def test_status_is_strictly_read_only_for_fresh_home(tmp_path):
+    out = core.status(hermes_home_path=str(tmp_path))
+    assert out["success"] is True
+    assert out["skills_count"] == 0
+    assert out["recent_runs"] == []
+    assert not (tmp_path / "skillopt").exists()
+
+
 def test_upstream_status_no_network(tmp_path):
     out = core.upstream_status(hermes_home_path=str(tmp_path))
     assert out["success"] is True
     assert out["clone_exists"] is False
     assert out["upstream_url"].endswith("microsoft/SkillOpt.git")
     assert out["clone_path"] == str((tmp_path / "skillopt" / "upstream" / "SkillOpt").resolve())
+    assert not (tmp_path / "skillopt").exists()
     lock_data = json.loads((core.PLUGIN_ROOT / "skillopt_upstream.lock").read_text(encoding="utf-8"))
     assert out["current_lock_pin"] == lock_data["pinned_commit"]
     assert out["last_reviewed_upstream_commit"] == lock_data["last_reviewed_upstream_commit"]
@@ -285,6 +314,21 @@ def test_upstream_status_internal_allow_repo_path_escape_hatch(tmp_path):
     assert out["success"] is True
     assert out["clone_path"] == str(other.resolve())
     assert out["clone_exists"] is False
+
+
+def test_compare_upstream_pin_is_strictly_read_only_for_fresh_home(tmp_path):
+    out = core.compare_upstream_pin(hermes_home_path=str(tmp_path))
+    assert out["success"] is True
+    assert out["clone_exists"] is False
+    assert out["clone_path"] == str((tmp_path / "skillopt" / "upstream" / "SkillOpt").resolve())
+    assert not (tmp_path / "skillopt").exists()
+
+
+def test_benchmark_parity_status_is_strictly_read_only_for_fresh_home(tmp_path):
+    out = core.benchmark_parity_status(hermes_home_path=str(tmp_path))
+    assert out["success"] is True
+    assert out["upstream_pin"]["clone_exists"] is False
+    assert not (tmp_path / "skillopt").exists()
 
 
 def make_state_db(home: Path, secret: str = "api_key=sk-abcdefghijklmnopqrstuvwxyz") -> None:

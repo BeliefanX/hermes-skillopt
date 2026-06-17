@@ -108,3 +108,8 @@ python3 -m compileall -q hermes_skillopt tests
 ```
 
 Do not replace the Hermes safety shell with upstream training paths, and do not let upstream update commands mutate plugin code or live skills.
+
+
+## Track B upstream pin/parity policy
+
+`compare-upstream-pin` compares the local canonical clone with `skillopt_upstream.lock` and locally fetched `origin/main` only. It does not fetch. `upstream-update --fetch-only` is the explicit refresh path. No upstream Microsoft SkillOpt code is vendored or blindly merged into this Hermes-native adapter. `benchmark-parity-status` deliberately reports **no full upstream parity claim**; it describes Hermes benchmark coverage and the pinned upstream state separately.

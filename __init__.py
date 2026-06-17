@@ -33,8 +33,8 @@ FULL_PROPS = {
     "backend": {"type": "string", "enum": ["auto", "hermes", "mock"], "default": "auto", "description": "Back-compat alias for optimizer_backend."},
     "optimizer_backend": {"type": "string", "enum": ["auto", "hermes", "mock"], "default": "auto"},
     "allow_mock": {"type": "boolean", "default": False},
-    "target_executor": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard"], "default": "auto"},
-    "target_backend": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard"], "default": "auto"},
+    "target_executor": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard", "live-readonly"], "default": "auto"},
+    "target_backend": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard", "live-readonly"], "default": "auto"},
     "gate_mode": {"type": "string", "enum": ["soft", "hard", "mixed", "strict"], "default": "soft"},
     "resume_run_id": {"type": "string", "description": "Opt-in reuse of a completed checkpointed full-run when input/config/provenance fingerprints match."},
     "force": {"type": "boolean", "default": False},
@@ -50,6 +50,8 @@ SCHEMAS = {
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
+    "hermes_skillopt_compare_upstream_pin": _schema("Read-only pinned-upstream comparison; reports local clone/lock divergence and never fetches, merges, or writes plugin code.", COMMON_HOME),
+    "hermes_skillopt_benchmark_parity_status": _schema("Read-only status surface labeling Hermes-native benchmark mode versus upstream parity; no rollout, adopt, or writeback.", COMMON_HOME),
     "hermes_skillopt_upstream_update": _schema("Fetch/update the canonical pinned Microsoft SkillOpt upstream clone for the active profile and write lock; ignores arbitrary HERMES_HOME overrides and never merges into plugin code.", {"fetch_only": {"type": "boolean", "default": False}}),
     "hermes_skillopt_import_upstream_benchmark": _schema("Safely convert an upstream-style embedded JSON benchmark manifest into a Hermes eval pack; rejects executable/remote/network fields and never imports upstream code.", {"manifest": {"type": "string"}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string"}, "curated": {"type": "boolean", "default": False}}, ["manifest"]),
     "hermes_skillopt_transfer_eval": _schema("Read-only/report-only staged skill transfer evaluation across target/profile configs; never writes live skills.", {**COMMON_HOME, "run_id": {"type": "string"}, "skill_file": {"type": "string"}, "eval_file": {"type": "string"}, "targets": {"type": "array", "items": {"type": "string", "enum": ["scorecard", "replay", "sandbox"]}}, "profile_homes": {"type": "array", "items": {"type": "string"}}, "output": {"type": "string"}, "allow_live_skill_file": {"type": "boolean", "default": False}}),
@@ -128,6 +130,14 @@ def _handle_upstream_status(args: dict, **kw) -> str:
     return _ok(core.upstream_status, {"hermes_home_path": args.get("hermes_home")})
 
 
+def _handle_compare_upstream_pin(args: dict, **kw) -> str:
+    return _ok(core.compare_upstream_pin, {"hermes_home_path": args.get("hermes_home")})
+
+
+def _handle_benchmark_parity_status(args: dict, **kw) -> str:
+    return _ok(core.benchmark_parity_status, {"hermes_home_path": args.get("hermes_home")})
+
+
 def _handle_upstream_update(args: dict, **kw) -> str:
     return _ok(core.upstream_update, {"hermes_home_path": None, "repo_path": None, "fetch_only": bool(args.get("fetch_only", False))})
 
@@ -160,6 +170,8 @@ _TOOLS = (
     ("hermes_skillopt_adopt", SCHEMAS["hermes_skillopt_adopt"], _handle_adopt, "✅"),
     ("hermes_skillopt_rollback", SCHEMAS["hermes_skillopt_rollback"], _handle_rollback, "↩️"),
     ("hermes_skillopt_upstream_status", SCHEMAS["hermes_skillopt_upstream_status"], _handle_upstream_status, "🌊"),
+    ("hermes_skillopt_compare_upstream_pin", SCHEMAS["hermes_skillopt_compare_upstream_pin"], _handle_compare_upstream_pin, "📌"),
+    ("hermes_skillopt_benchmark_parity_status", SCHEMAS["hermes_skillopt_benchmark_parity_status"], _handle_benchmark_parity_status, "📊"),
     ("hermes_skillopt_upstream_update", SCHEMAS["hermes_skillopt_upstream_update"], _handle_upstream_update, "⬆️"),
     ("hermes_skillopt_import_upstream_benchmark", SCHEMAS["hermes_skillopt_import_upstream_benchmark"], _handle_import_upstream_benchmark, "🌉"),
     ("hermes_skillopt_transfer_eval", SCHEMAS["hermes_skillopt_transfer_eval"], _handle_transfer_eval, "🔁"),

@@ -12,6 +12,8 @@ provides_tools:
   - hermes_skillopt_adopt
   - hermes_skillopt_rollback
   - hermes_skillopt_upstream_status
+  - hermes_skillopt_compare_upstream_pin
+  - hermes_skillopt_benchmark_parity_status
   - hermes_skillopt_upstream_update
   - hermes_skillopt_import_upstream_benchmark
   - hermes_skillopt_transfer_eval

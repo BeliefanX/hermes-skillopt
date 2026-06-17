@@ -261,3 +261,12 @@ python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```
+
+
+## Track B P0-P2 parity/status additions
+
+- `hermes-skillopt compare-upstream-pin` is a read-only status surface for the pinned Microsoft SkillOpt clone/lock. It never fetches, vendors, merges, or rewrites plugin code.
+- `hermes-skillopt benchmark-parity-status` labels the current mode as **Hermes-native benchmark mode**, not an upstream SkillOpt benchmark result. It is report-only and performs no rollout, adopt, or writeback.
+- `eval-only`/`benchmark` use the benchmark adapter v1 (`JsonEvalPackBenchmarkAdapter`) with schema/version/fingerprint/split/leakage governance fields.
+- `target_executor=live-readonly` is a disabled-by-default Hermes live target adapter interface that records provider/model/profile/toolset/session fingerprints and returns report-only evidence; it cannot production-adopt.
+- Adopt/rollback are serialized by a profile-local writeback lock and append `skillopt/writeback_audit.jsonl` attempt/result events.

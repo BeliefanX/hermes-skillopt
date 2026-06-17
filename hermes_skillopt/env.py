@@ -123,6 +123,40 @@ class EnvAdapter(Protocol):
     def production_eligibility(self, task: EvalTask) -> ProductionEligibility: ...
 
 
+class BenchmarkAdapter(Protocol):
+    """Benchmark adapter v1: loader/rollout/scorer abstraction, report-only by default."""
+
+    adapter_id: str
+
+    def load(self) -> tuple[dict[str, list[EvalTask]], EvalPackMetadata, dict[str, Any]]: ...
+
+    def rollout_metadata(self) -> dict[str, Any]: ...
+
+    def scorer_metadata(self) -> dict[str, Any]: ...
+
+
+@dataclass
+class JsonEvalPackBenchmarkAdapter:
+    """Safe JSON eval-pack adapter; never imports code or executes benchmark commands."""
+
+    path: Path
+    adapter_id: str = "json-eval-pack-benchmark-adapter-v1"
+
+    def load(self) -> tuple[dict[str, list[EvalTask]], EvalPackMetadata, dict[str, Any]]:
+        tasks_all, metadata = load_eval_pack(self.path)
+        tasks: dict[str, list[EvalTask]] = {"train": [], "val": [], "test": []}
+        for task in tasks_all:
+            tasks[_SPLIT_ALIASES.get(task.split, task.split)].append(task)
+        governance = eval_pack_governance_report(tasks_all, metadata)
+        return tasks, metadata, governance
+
+    def rollout_metadata(self) -> dict[str, Any]:
+        return {"adapter_id": self.adapter_id, "loader": "load_eval_pack", "rollout_mode": "fixed_skill_read_only", "writes_live_skills": False}
+
+    def scorer_metadata(self) -> dict[str, Any]:
+        return {"adapter_id": self.adapter_id, "default_scorer": "TargetExecutor deterministic replay/scorecard", "benchmark_commands_executed": False}
+
+
 @dataclass(frozen=True)
 class SessionPipelineRecord:
     """Foundation record for harvest -> mine -> replay -> consolidate -> stage."""
@@ -517,6 +551,42 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
     return tasks, metadata
 
 
+def eval_pack_governance_report(tasks: list[EvalTask], metadata: EvalPackMetadata) -> dict[str, Any]:
+    """Return schema/version/fingerprint/leakage/split diagnostics for eval governance."""
+
+    prompt_by_split: dict[str, set[str]] = {"train": set(), "val": set(), "test": set()}
+    id_by_split: dict[str, set[str]] = {"train": set(), "val": set(), "test": set()}
+    for task in tasks:
+        split = _SPLIT_ALIASES.get(task.split, task.split)
+        id_by_split.setdefault(split, set()).add(task.id)
+        prompt_by_split.setdefault(split, set()).add(hashlib.sha256(task.prompt.strip().lower().encode("utf-8")).hexdigest())
+    split_names = sorted(id_by_split)
+    leaked_ids: list[str] = []
+    leaked_prompts: list[str] = []
+    for i, left in enumerate(split_names):
+        for right in split_names[i + 1:]:
+            leaked_ids.extend(f"{left}/{right}:{value}" for value in sorted(id_by_split.get(left, set()) & id_by_split.get(right, set())))
+            leaked_prompts.extend(f"{left}/{right}:{value}" for value in sorted(prompt_by_split.get(left, set()) & prompt_by_split.get(right, set())))
+    return {
+        "schema_version": "hermes-eval-pack-governance-report-v1",
+        "pack_id": metadata.pack_id,
+        "version": metadata.version,
+        "eval_pack_schema_version": metadata.schema_version,
+        "fingerprint_sha256": metadata.fingerprint_sha256,
+        "eval_file_sha256": metadata.eval_file_sha256,
+        "task_count": metadata.task_count,
+        "split_counts": metadata.split_counts,
+        "production_eligible_task_count": metadata.production_eligible_task_count,
+        "production_policy_fingerprint_sha256": metadata.production_policy_fingerprint_sha256,
+        "heldout_policy": metadata.heldout_policy,
+        "leakage_diagnostics": {
+            "duplicate_ids_across_splits": leaked_ids,
+            "duplicate_prompts_across_splits": leaked_prompts,
+            "passed": not leaked_ids and not leaked_prompts,
+        },
+    }
+
+
 def load_eval_tasks(path: Path) -> list[EvalTask]:
     return load_eval_pack(path)[0]
 
@@ -641,8 +711,10 @@ class HermesSkillEnv:
         eval_path = resolve_eval_file(self.state.hermes_home, self.state, self.eval_file)
         curated_tasks: list[EvalTask] = []
         eval_pack_metadata: dict[str, Any] | None = None
+        eval_pack_obj: EvalPackMetadata | None = None
         if eval_path:
             curated_tasks, eval_pack = load_eval_pack(eval_path)
+            eval_pack_obj = eval_pack
             eval_pack_metadata = eval_pack.as_dict()
         tasks: dict[str, list[EvalTask]] = {"train": [], "val": [], "test": []}
         for task in curated_tasks:
@@ -687,6 +759,7 @@ class HermesSkillEnv:
             "scorer_judge_metadata": {"default_judge": "keyword_scorecard", "llm_judge_can_accept": False},
             "eval_file": str(eval_path) if eval_path else None,
             "eval_pack": eval_pack_metadata,
+            "eval_pack_governance": eval_pack_governance_report(curated_tasks, eval_pack_obj) if eval_pack_obj else None,
             "eval_pack_id": eval_pack_metadata.get("pack_id") if eval_pack_metadata else None,
             "eval_pack_version": eval_pack_metadata.get("version") if eval_pack_metadata else None,
             "eval_pack_fingerprint_sha256": eval_pack_metadata.get("fingerprint_sha256") if eval_pack_metadata else None,

@@ -138,6 +138,8 @@ def report_summary_data(manifest: dict[str, Any], run_dir: Path | None = None) -
         "optimizer_backend": manifest.get("optimizer_backend") or manifest.get("backend"),
         "target_executor": manifest.get("target_executor"),
         "gate_policy": gate_policy.get("mode") if isinstance(gate_policy, dict) else gate_policy,
+        "parity_status": manifest.get("benchmark_parity_status") or {"label": "Hermes-native benchmark mode; no upstream parity claim"},
+        "lineage": {"eval_pack": manifest.get("eval_pack"), "eval_pack_governance": manifest.get("eval_pack_governance")},
     }
     return {
         "run_id": manifest.get("run_id"),
@@ -178,6 +180,7 @@ def report_summary_markdown(data: dict[str, Any]) -> str:
         f"- production_eval_policy: {security.get('production_eval_policy') or 'missing'}",
         f"- artifact_integrity: {security.get('artifact_integrity')} ({security.get('artifact_count')} files)",
         f"- optimizer/target/gate: {security.get('optimizer_backend')} / {security.get('target_executor')} / {security.get('gate_policy')}",
+        f"- benchmark_parity: {json.dumps(security.get('parity_status') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- rejected_edit_preview_count: {(data.get('rejected_edits') or {}).get('count_previewed', 0)}",
     ]
     return "\n".join(lines)
@@ -374,6 +377,13 @@ def upstream_update_markdown(home: str | None = None, fetch_only: bool = False) 
         return f"Upstream update failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
 
+def parity_status_markdown(home: str | None = None) -> str:
+    try:
+        return "```json\n" + _json(core.benchmark_parity_status(hermes_home_path=home or None)) + "\n```"
+    except Exception as exc:
+        return f"Benchmark/parity status failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
+
+
 def build_app(home_default: str | None = None):
     gr = require_gradio()
     with gr.Blocks(title="Hermes SkillOpt WebUI") as app:
@@ -405,7 +415,7 @@ def build_app(home_default: str | None = None):
                 with gr.Row():
                     backend = gr.Dropdown(["auto", "hermes", "mock"], value="auto", label="Backend")
                     optimizer_backend = gr.Dropdown(["", "auto", "hermes", "mock"], value="", label="Optimizer backend")
-                    target_backend = gr.Dropdown(["", "auto", "replay", "sandbox", "scorecard"], value="", label="Target backend")
+                    target_backend = gr.Dropdown(["", "auto", "replay", "sandbox", "scorecard", "live-readonly"], value="", label="Target backend")
                     gate_mode = gr.Dropdown(["soft", "hard", "mixed", "strict"], value="soft", label="Gate mode")
                     allow_mock = gr.Checkbox(value=False, label="Allow mock fallback (smoke/tests only)")
                 resume_run_id = gr.Textbox(label="Resume run ID (optional)", placeholder="Reuse completed checkpoint if inputs match")
@@ -444,6 +454,7 @@ def build_app(home_default: str | None = None):
                 upstream_out = gr.Markdown()
                 with gr.Row():
                     up_status_btn = gr.Button("Upstream status")
+                    parity_btn = gr.Button("Benchmark/parity status (read-only)")
                     up_update_btn = gr.Button("Update/fetch pinned upstream")
 
         run_btn.click(
@@ -455,6 +466,7 @@ def build_app(home_default: str | None = None):
         adopt_btn.click(adopt_callback, inputs=[adopt_run_id, adopt_confirm, adopt_force, home], outputs=[adopt_out])
         rollback_btn.click(rollback_callback, inputs=[rollback_run_id, rollback_confirm, rollback_force, home], outputs=[rollback_out])
         up_status_btn.click(upstream_status_markdown, inputs=[home], outputs=[upstream_out])
+        parity_btn.click(parity_status_markdown, inputs=[home], outputs=[upstream_out])
         up_update_btn.click(upstream_update_markdown, inputs=[home, fetch_only], outputs=[upstream_out])
     return app
 

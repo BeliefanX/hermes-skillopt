@@ -83,3 +83,12 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 ## Deterministic trainer metadata
 
 Each six-stage trainer artifact under `stages/` records `schema_version: skillopt-stage-v1` plus `deterministic_batch` metadata using `batch_schema: skillopt-deterministic-batch-v1`. The metadata includes a stable `batch_id` (`iter-NNN-stage`), iteration, stage, seed `0`, a stable input-order/deterministic-rank note, and input SHA-256. This documents replayability of stage inputs/ordering; it does not imply stochastic upstream trainer parity or external model determinism.
+
+
+## Track B conformance points
+
+- P0 status surfaces: `compare-upstream-pin` and `benchmark-parity-status` are read-only/report-only.
+- P1 target adapter: `LiveHermesReadOnlyRunner` is disabled by default, fingerprints provider/model/profile/toolset/session, writes no live profile state, and cannot adopt.
+- P1 benchmark adapter: `JsonEvalPackBenchmarkAdapter` owns safe JSON eval-pack loading plus governance diagnostics.
+- P1 writeback safety: adopt/rollback use `skillopt/writeback.lock` and audit JSONL events.
+- P2 governance/UX: manifests/reports/WebUI expose eval pack governance, parity labels, gate/provenance/lineage, and remain staged/read-only by default.

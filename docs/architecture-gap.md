@@ -119,3 +119,8 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
 - WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts.
+
+
+## Track B P0-P2 closure notes
+
+The remaining upstream gap is now explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented by a safe disabled-by-default read-only adapter interface until credentials/service hooks and sandbox policy are available. Benchmark execution is factored behind a loader/rollout/scorer adapter (`JsonEvalPackBenchmarkAdapter`) so future upstream adapters can remain report-only/staged unless separately hardened. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.

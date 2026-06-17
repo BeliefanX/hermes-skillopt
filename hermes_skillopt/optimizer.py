@@ -46,7 +46,11 @@ class OptimizerBackendConfig:
             "candidate_count": max(1, int(self.candidate_count)),
             "iterations": max(1, int(self.iterations)),
             "role": self.role,
-            "parameters": self.parameters,
+            "parameters": {
+                "textual_lr_scheduler": "conservative constant-by-default; caller may lower edit_budget per iteration; validation gate remains sole acceptance",
+                "iteration_batching": "mini-batch per iteration with candidate_count accumulation and rejected-edit continuity",
+                **self.parameters,
+            },
         }
 
 

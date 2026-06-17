@@ -343,6 +343,78 @@ def _score_checks(checks: list[tuple[str, bool, float]], penalties: list[str]) -
 
 
 @dataclass(frozen=True)
+class LiveHermesReadOnlyRunner:
+    """Disabled-by-default read-only live Hermes target adapter interface.
+
+    This v1 adapter records the requested model/provider/profile/toolset/session
+    fingerprint but does not invoke external services unless a future controlled
+    integration explicitly enables it.  Even when configured, it is report-only
+    and cannot adopt/writeback.
+    """
+
+    provider: str = "disabled"
+    model: str = "disabled"
+    profile_home: str | None = None
+    toolset: tuple[str, ...] = ()
+    session_id: str | None = None
+    mode: str = "hermes_live_readonly_adapter_v1_disabled"
+
+    def config_parameters(self) -> dict[str, object]:
+        payload = {
+            "trace_schema": TRACE_SCHEMA_VERSION,
+            "backend_kind": "live_hermes_readonly_adapter_interface",
+            "enabled": False,
+            "report_only": True,
+            "production_adopt_allowed": False,
+            "provider": self.provider,
+            "model": self.model,
+            "profile_home": self.profile_home,
+            "toolset": list(self.toolset),
+            "session_id": self.session_id,
+            "live_profile_writes": False,
+            "task_command_policy": "never_execute_task_commands",
+        }
+        return {**payload, "adapter_fingerprint_sha256": _stable_json_sha(payload)}
+
+    def score(self, skill_text: str, task: EvalTask) -> EvalResult:
+        cfg = self.config_parameters()
+        transcript = "LIVE_HERMES_READONLY_DISABLED: adapter interface recorded fingerprints only; no live invocation performed"
+        trajectory = {
+            "schema_version": TRACE_SCHEMA_VERSION,
+            "task_id": task.id,
+            "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}],
+            "tool_calls": [],
+            "observations": [{"id": "live-readonly-disabled", "content_preview": transcript}],
+            "scores": {"score": 0.0, "passed_checks": [], "failed_checks": ["live_adapter_disabled"], "penalties": []},
+            "task_commands_executed": False,
+        }
+        return EvalResult(
+            task.id,
+            0.0,
+            False,
+            f"runner={self.mode}; disabled=true; report_only=true",
+            {
+                **_result_metadata(task),
+                "runner_label": "live_hermes_readonly_disabled_report_only",
+                "target_adapter_config": cfg,
+                "model_fingerprint": {"provider": self.provider, "model": self.model},
+                "profile_fingerprint": {"profile_home": self.profile_home, "fingerprint_sha256": _stable_json_sha({"profile_home": self.profile_home})},
+                "toolset_fingerprint": {"toolset": list(self.toolset), "fingerprint_sha256": _stable_json_sha(list(self.toolset))},
+                "session_fingerprint": {"session_id": self.session_id, "fingerprint_sha256": _stable_json_sha({"session_id": self.session_id})},
+                "live_profile_writes": False,
+                "production_gate_eligible": False,
+                "production_adopt_allowed": False,
+                "task_commands_executed": False,
+                "hard_pass": False,
+                "soft_score": 0.0,
+                "trace_schema": TRACE_SCHEMA_VERSION,
+                "trajectory": trajectory,
+                "trace_fingerprint_sha256": _stable_json_sha(trajectory),
+            },
+        )
+
+
+@dataclass(frozen=True)
 class TargetBackendConfig:
     """Explicit frozen target backend identity for provenance/artifacts."""
 
