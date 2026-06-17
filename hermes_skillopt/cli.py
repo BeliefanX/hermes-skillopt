@@ -18,8 +18,8 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--edit-budget", type=int, default=3)
     p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto")
     p.add_argument("--allow-mock", action="store_true")
+    p.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto", help="Frozen evaluator mode; sandbox uses isolated temp HOME/HERMES_HOME/workspace")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
 
 
 def main() -> int:
@@ -48,7 +48,7 @@ def main() -> int:
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
-        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, force=args.force, dry_run=args.dry_run, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None))
+        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, backend=args.backend, allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"))
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":

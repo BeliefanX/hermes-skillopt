@@ -7,16 +7,16 @@
 默认 `run/full-run` 是 SkillOpt-inspired Hermes-native adapter，借鉴 Microsoft SkillOpt 的核心抽象，但不是 Microsoft 官方完整 trainer port：
 
 - **skill document = trainable state**：当前 profile 下的 `SKILL.md` 是唯一可训练参数。
-- **target agent/model = frozen executor**：`TargetExecutor` 在同一冻结条件下分别评测 current/candidate skill。
+- **target agent/model = frozen executor**：`TargetExecutor` 在同一冻结条件下分别评测 current/candidate skill；支持 deterministic replay/scorecard，以及 production-safe `hermes_sandbox_executor_mvp`（隔离 temp HOME/HERMES_HOME/workspace、受控 command runner、captured transcript/exit/timeout、无 live profile writes）。
 - **optimizer model = reflection + bounded skill edit**：optimizer 只基于 rollout evidence 反思并生成 `append`/`replace`/`delete`/`insert_after` 等 bounded edits，不能直接写 profile。
 - **environment/benchmark = scorecard/replay eval field**：`HermesSkillEnv` 从 curated/synthetic/session-mined tasks 构造 train/validation/test；只有显式 curated scorecard 可作为 adopt gate，fallback/synthetic 仅 review-only。
-- **validation gate = only acceptance gate**：`ValidationGate` 只在 held-out validation 上用 `candidate_score > current_score` 接受；LLM judge 只能作为辅助说明，不能单独接受。
+- **validation gate + held-out test = acceptance evidence**：train 只驱动 reflection；held-out validation gate 用 `candidate_score > current_score` 选择 best；final best 会再跑 held-out test 并写 `test_results.json`。生产 adopt 还要求显式 curated validation gate 与 curated/no-regression test eligibility；fallback/synthetic/session-mined/mock-only run 只能 review-only。
 
 完整流程：load skill state → build train/validation/test tasks → evaluate current with frozen target → optimizer reflects/proposes bounded edits from rollout evidence → apply candidate → evaluate candidate on held-out validation → validation gate compares current vs candidate → if improved stage `best_skill.md` → user review/adopt/rollback。
 
 Hermes staged safety 是外壳：full-run 只写 `$HERMES_HOME/skillopt/staging/<run-id>/`；`adopt`/`rollback` 必须显式、可逆、带 path/sha/manifest gate guard，并限制在当前 active `$HERMES_HOME/skills`。生产 tool/WebUI 的 live writeback 不接受任意 `hermes_home` override；CLI 只有带 `--unsafe-cross-profile-writeback --home ...` 的显式离线维护确认才允许跨 active profile 写回。生产 tool/CLI 不提供 auto-adopt。
 
-Artifacts：每个 run 写入 `manifest.json`, `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, `diff.patch`, `report.md`, `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`, `current_validation_results.json`, `candidate_validation_results.json`, `reflections.json`, `candidate_edits.json`, `gate_results.json`, `rejected_edits.jsonl`；只有 validation gate 通过时才额外 stage `best_skill.md`。
+Artifacts：每个 run 写入 `manifest.json`, `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, `diff.patch`, `report.md`, `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`, `current_validation_results.json`, `candidate_validation_results.json`, `test_results.json`, `reflections.json`, `candidate_edits.json`, `gate_results.json`, `rejected_edits.jsonl`；只有 validation gate 通过时才额外 stage `best_skill.md`。Manifest 记录重要 artifact 的 sha256；`review`/`adopt`/`rollback` 会重新校验 artifact integrity。
 
 ## Curated replay/eval benchmark
 
@@ -33,15 +33,21 @@ Full-run 支持 curated replay scorecards，让 environment/benchmark 更接近 
 {"id":"v1","prompt":"held-out validation replay","expected_keywords":["verify","blocker"],"forbidden_keywords":["fabricate"],"split":"validation","weight":2}
 ```
 
-字段：`id`, `prompt`, `success_criteria` 或 `expected_keywords`, `forbidden_keywords`, `split` (`train`/`validation`/`test`), optional `weight`。`validation` split 在 artifacts 中写为 `val_items.jsonl`。
+字段：`id`, `prompt`, `success_criteria` 或 `expected_keywords`, `forbidden_keywords`, `required_markers`/`forbidden_markers`（工具/action/transcript marker）, `split` (`train`/`validation`/`test`), optional `weight`, `timeout`, `fixtures`, `executor` (`sandbox` opt-in)。`validation` split 在 artifacts 中写为 `val_items.jsonl`。
 
-评分语义：当前确定性 scorer 主要按 `expected_keywords` 命中加分、按 `forbidden_keywords` 命中扣分；这是可靠 curated eval 的推荐写法。`success_criteria` 会保留到 metadata/evidence，便于人工审查和后续 judge 说明；只有在未提供 `expected_keywords` 时，系统才会从很短的 criteria 中抽取简单词项作为弱 fallback。长自然语言 `success_criteria` **不会** 被当作完整语义 judge，也不能替代显式 `expected_keywords` / `forbidden_keywords`。
+评分语义：当前确定性 scorer 主要按 `expected_keywords`/`required_markers` 命中加分、按 `forbidden_keywords`/`forbidden_markers` 命中扣分；这是可靠 curated eval 的推荐写法。`success_criteria` 会保留到 metadata/evidence，便于人工审查和后续 judge 说明；只有在未提供 `expected_keywords` 时，系统才会从很短的 criteria 中抽取简单词项作为弱 fallback。长自然语言 `success_criteria` **不会** 被当作完整语义 judge，也不能替代显式断言。
+
+Sandbox executor 示例：
+
+```json
+{"id":"v-sandbox","prompt":"sandbox replay","expected_keywords":["verify"],"required_markers":["SANDBOX_OK"],"executor":"sandbox","split":"validation","timeout":10}
+```
 
 ## 为什么不是 fork microsoft/SkillOpt 整仓？
 
 - 插件代码和 upstream 研究/实现解耦，减少未来冲突。
 - Microsoft SkillOpt 作为 pinned external upstream clone 跟踪；更新只写 lock，不自动合并/采用。
-- 当前实现是 **SkillOpt-inspired Hermes-native adapter**：skill document 是 trainable state；target evaluator 冻结为同一 scorecard/replay runner；optimizer 只反思并生成 bounded edits；Hermes curated/session-mined/fallback tasks 作为 benchmark；validation gate 以 held-out `candidate_score > current_score` 作为唯一接受门槛。它不是 Microsoft 官方完整 trainer port；Hermes staged safety/review/adopt/rollback/profile isolation 和 multi-agent handoff 是外层安全壳。
+- 当前实现是 **SkillOpt-inspired Hermes-native adapter with six-stage trainer path**：`SixStageSkillOptTrainer` 负责 rollout→reflect→aggregate→select→update→evaluate/gate 与 final test evidence；`core.full_run()` 是 safety shell/artifact/adoptability coordinator。它不是 Microsoft 官方完整 trainer port；Hermes staged safety/review/adopt/rollback/profile isolation 和 multi-agent handoff 是外层安全壳。
 - Hermes 集成面保持很小：`plugin.yaml` + `register(ctx)` + toolset。
 
 ## 安装到本机 default profile
@@ -79,7 +85,8 @@ Full-run 参数：
 - `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`
 - `backend`: `auto|hermes|mock`，默认 `auto`
 - `allow_mock`: `auto` 且 Hermes `ctx.llm` 不可用时，只有显式 true 才允许 mock（用于 CLI/tests/smoke）
-- `force`: 仅用于显式 adopt/rollback guard override；不能与 auto-adopt 组合（生产 tool/CLI 已禁用 auto-adopt）
+- `target_executor`: `auto|replay|sandbox|scorecard`；`sandbox` 使用隔离 temp profile/home/workspace 并捕获 transcript/exit/evidence
+- `force`: 仅用于显式 adopt/rollback current-sha guard override；不能绕过 validation/production/test/profile/artifact gates，也不能与 auto-adopt 组合（生产 tool/CLI 已禁用 auto-adopt）
 
 ## 本地 CLI
 
@@ -131,7 +138,7 @@ WebUI 暴露的是 Hermes-specific workflow，而不是 upstream generic trainin
 
 - 默认只在 `$HERMES_HOME/skillopt/staging/<run-id>/` 生成 staged artifacts。
 - Full run 不会 auto-adopt；只有显式 `adopt` 才可能写目标 skill。
-- Adopt 只接受 full-run 产物：`status == staged_best`、`adoptable == true`、`gate.accepted == true`，且 validation gate 来自显式 curated scorecard；legacy dry-run/fallback/synthetic runs 均为 review-only。
+- Adopt 只接受 full-run 产物：`status == staged_best`、`adoptable == true`、`gate.accepted == true`、`production_gate_eligible == true`、`test_gate_eligible == true`，且 manifest artifact hashes 重新校验通过；legacy dry-run/fallback/synthetic/session-mined/mock-only runs 均为 review-only。
 - Adopt 前校验 current skill sha256 是否等于 staged original；除非显式 `force=true`。
 - Adopt 前备份到 `$HERMES_HOME/skillopt/backups/<timestamp-run-id>/`。
 - Rollback 只通过已校验的 backup manifest 和备份 `SKILL.md` 恢复，并带 current-sha guard。

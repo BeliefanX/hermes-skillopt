@@ -713,3 +713,93 @@ def test_cli_help_commands_smoke():
         assert "usage:" in proc.stdout.lower()
         if "full-run" in cmd:
             assert "--eval-file" in proc.stdout
+            assert "--dry-run" not in proc.stdout
+            assert "--target-executor" in proc.stdout
+
+
+def test_heldout_test_results_and_artifact_hashes_are_recorded_and_verified(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert (run_dir / "test_results.json").exists()
+    assert manifest["test_gate_eligible"] is True
+    assert manifest["artifact_sha256"]["test_results"] == core.sha256_file(run_dir / "test_results.json")
+    assert core.review(out["run_id"], hermes_home_path=str(tmp_path))["artifact_integrity"] == "verified"
+    (run_dir / "test_results.json").write_text('{"tampered": true}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="Artifact hash mismatch for test_results"):
+        core.review(out["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_sandbox_target_executor_is_isolated_and_records_transcript(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "train", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "val", "prompt": "validation", "expected_keywords": ["verify", "blocker"], "split": "validation", "executor": "sandbox", "required_markers": ["SANDBOX_OK"]},
+        {"id": "test", "prompt": "test", "expected_keywords": ["rollback"], "split": "test", "executor": "sandbox", "required_markers": ["SANDBOX_OK"]},
+    ])
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, target_executor="sandbox")
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    test_results = json.loads((run_dir / "test_results.json").read_text(encoding="utf-8"))
+    assert manifest["target_executor"] == "hermes_sandbox_executor_mvp"
+    meta = test_results["results"][0]["metadata"]
+    assert meta["sandbox_isolated"] is True
+    assert meta["live_profile_writes"] is False
+    assert meta["sandbox_command_blocked"] is False
+    assert "SANDBOX_OK" in meta["transcript_preview"]
+
+
+def test_sandbox_executor_blocks_task_command_live_profile_write(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    live_write = tmp_path / "skills" / "demo" / "PWNED_BY_SANDBOX_COMMAND.txt"
+    malicious = [
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(live_write)!r}).write_text('pwned', encoding='utf-8'); print('SANDBOX_OK')",
+    ]
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "train", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "malicious-val", "prompt": "validation", "expected_keywords": ["verify"], "split": "validation", "executor": "sandbox", "fixtures": {"command": malicious}, "required_markers": ["SANDBOX_OK"]},
+        {"id": "test", "prompt": "test", "expected_keywords": ["rollback"], "split": "test", "executor": "sandbox", "required_markers": ["SANDBOX_OK"]},
+    ])
+
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, target_executor="sandbox")
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    candidate_eval = json.loads((run_dir / "candidate_validation_results.json").read_text(encoding="utf-8"))
+    meta = candidate_eval["results"][0]["metadata"]
+
+    assert not live_write.exists()
+    assert manifest["adoptable"] is False
+    assert manifest["production_gate_eligible"] is False
+    assert candidate_eval["production_gate_eligible"] is False
+    assert candidate_eval["results"][0]["passed"] is False
+    assert meta["exit_code"] == 126
+    assert meta["sandbox_command_blocked"] is True
+    assert meta["live_profile_writes"] is False
+    assert meta["production_gate_eligible"] is False
+    assert "SANDBOX_COMMAND_BLOCKED" in meta["transcript_preview"]
+
+
+def test_invalid_optimizer_edit_is_rejected_and_review_only(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+
+    class InvalidBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        def json(self, prompt, schema_hint, repair_path=None):
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": []}
+            if schema_hint["kind"] == "edit":
+                return {"edits": [{"op": "replace", "old": "---\nname: demo", "new": "---\nname: pwn"}], "reasoning": "bad"}
+            return {"accepted": True}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: InvalidBackend())
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    assert out["status"] == "rejected"
+    rejected = (run_dir / "rejected_edits.jsonl").read_text(encoding="utf-8")
+    assert "protected_frontmatter" in rejected
+    assert (run_dir / "candidate_1_edit_validation_rejected.json").exists()

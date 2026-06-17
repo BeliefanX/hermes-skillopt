@@ -31,8 +31,8 @@ FULL_PROPS = {
     "edit_budget": {"type": "integer", "default": 3},
     "backend": {"type": "string", "enum": ["auto", "hermes", "mock"], "default": "auto"},
     "allow_mock": {"type": "boolean", "default": False},
+    "target_executor": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard"], "default": "auto"},
     "force": {"type": "boolean", "default": False},
-    "dry_run": {"type": "boolean", "default": False},
 }
 
 SCHEMAS = {
@@ -67,8 +67,8 @@ def _full_args(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
         "edit_budget": int(args.get("edit_budget") or 3),
         "backend": args.get("backend") or "auto",
         "allow_mock": bool(args.get("allow_mock", False)),
+        "target_executor": args.get("target_executor") or "auto",
         "force": bool(args.get("force", False)),
-        "dry_run": bool(args.get("dry_run", False)),
         "hermes_home_path": args.get("hermes_home"),
         "ctx": ctx,
     }

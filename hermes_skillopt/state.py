@@ -33,6 +33,7 @@ class CandidateSkill:
     edits: list[dict[str, Any]] = field(default_factory=list)
     reflection: dict[str, Any] = field(default_factory=dict)
     reasoning: str | None = None
+    validation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class SkillOptArtifacts:
     rejected_edits: Path
     current_validation_results: Path
     candidate_validation_results: Path
+    test_results: Path
     best: Path
 
     @classmethod
@@ -80,6 +82,7 @@ class SkillOptArtifacts:
             rejected_edits=run_dir / "rejected_edits.jsonl",
             current_validation_results=run_dir / "current_validation_results.json",
             candidate_validation_results=run_dir / "candidate_validation_results.json",
+            test_results=run_dir / "test_results.json",
             best=run_dir / "best_skill.md",
         )
 
@@ -100,6 +103,7 @@ class SkillOptArtifacts:
             "rejected_edits": self.rejected_edits.name,
             "current_validation_results": self.current_validation_results.name,
             "candidate_validation_results": self.candidate_validation_results.name,
+            "test_results": self.test_results.name,
         }
         if include_best:
             files["best"] = self.best.name

@@ -85,9 +85,12 @@ def status_markdown(home: str | None = None) -> str:
         lines.append("- none")
     for r in runs[:10]:
         lines.append(
-            "- `{run_id}` — {status} — {skill} — {engine}{backend} — {created}".format(
+            "- `{run_id}` — {status} — adoptable={adoptable} prod_gate={prod} test_gate={test} — {skill} — {engine}{backend} — {created}".format(
                 run_id=r.get("run_id") or "",
                 status=r.get("status") or "unknown",
+                adoptable=r.get("adoptable"),
+                prod=r.get("production_gate_eligible"),
+                test=r.get("test_gate_eligible"),
                 skill=r.get("skill_name") or "unknown-skill",
                 engine=r.get("engine") or "unknown-engine",
                 backend=("/" + str(r.get("backend"))) if r.get("backend") else "",
@@ -123,7 +126,15 @@ def review_payload(run_id: str | None = None, home: str | None = None) -> tuple[
             f"## Review `{rid}`",
             f"- status: {manifest.get('status')}",
             f"- skill: {manifest.get('skill_name')}",
-            f"- accepted_for_adopt: {manifest.get('status') in ('staged_best', 'accepted', 'adopted')}",
+            f"- adoptable: {manifest.get('adoptable')}",
+            f"- production_gate_eligible: {manifest.get('production_gate_eligible')}",
+            f"- test_gate_eligible: {manifest.get('test_gate_eligible')}",
+            f"- not_adoptable_reasons: {manifest.get('production_eligibility_reasons') or []}",
+            f"- validation_scores: current={manifest.get('validation_current_score')} candidate={manifest.get('validation_candidate_score')}",
+            f"- production_scores: current={manifest.get('production_validation_current_score')} candidate={manifest.get('production_validation_candidate_score')}",
+            f"- test_score: {manifest.get('test_score')}",
+            f"- evaluator: {manifest.get('target_executor')} / {manifest.get('target_config_id')}",
+            f"- accepted_for_adopt: {manifest.get('status') in ('staged_best', 'accepted', 'adopted') and manifest.get('adoptable') is True}",
             f"- run_dir: `{rd}`",
             f"- diff_path: `{rd / 'diff.patch'}`",
             f"- report_path: `{rd / 'report.md'}`",

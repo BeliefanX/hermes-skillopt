@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
-from hermes_skillopt.bounded_edit import apply_bounded_edits
+from hermes_skillopt.bounded_edit import apply_bounded_edits, validate_bounded_edits
 from hermes_skillopt.env import EvalTask
 from hermes_skillopt.state import CandidateSkill
 
@@ -26,10 +26,11 @@ def summarize_rejected_edits(rejected: list[dict[str, Any]], limit: int = 5) -> 
         edits = row.get("edits", []) if isinstance(row, dict) else []
         out.append({
             "iteration": row.get("iteration") if isinstance(row, dict) else None,
-            "rationale": gate.get("rationale") if isinstance(gate, dict) else None,
+            "rationale": gate.get("rationale") if isinstance(gate, dict) else row.get("reason") if isinstance(row, dict) else None,
             "current_score": gate.get("current_score") if isinstance(gate, dict) else None,
             "candidate_score": gate.get("candidate_score") if isinstance(gate, dict) else None,
             "edit_ops": [e.get("op") for e in edits if isinstance(e, dict)],
+            "validation_errors": row.get("validation_errors", []) if isinstance(row, dict) else [],
             "reasoning": str(row.get("reasoning") or "")[:500] if isinstance(row, dict) else "",
         })
     return out
@@ -51,7 +52,7 @@ class OptimizerBackend:
             rejected_context = summarize_rejected_edits(rejected_history)
         prompt = (
             "Reflect on Hermes SkillOpt train rollouts. "
-            "Skill document is trainable state; target executor is frozen. Avoid repeating previously rejected edits.\n"
+            "Skill document is trainable state; target executor is frozen. Avoid repeating previously rejected or invalid edits.\n"
             "TRAIN_TASKS=" + json.dumps([t.__dict__ for t in train_tasks], ensure_ascii=False)[:10000] + "\n"
             "CURRENT_EVAL=" + json.dumps(current_eval, ensure_ascii=False)[:10000] + "\n"
             "REJECTED_EDIT_HISTORY=" + json.dumps(rejected_context or [], ensure_ascii=False)[:6000] + "\n"
@@ -67,7 +68,7 @@ class OptimizerBackend:
         prompt = (
             "Generate bounded edits for Hermes SKILL.md trainable state. "
             f"Allowed ops: append, replace, delete, insert_after. Max edits: {self.edit_budget}. "
-            "Do not edit YAML frontmatter, do not repeat rejected edits, and do not write files directly.\n"
+            "Do not edit YAML frontmatter, use unique anchors, do not repeat rejected edits, and do not write files directly.\n"
             "REFLECTION=" + json.dumps(reflection, ensure_ascii=False)[:10000] + "\n"
             "REJECTED_EDIT_HISTORY=" + json.dumps(rejected_context or [], ensure_ascii=False)[:6000] + "\n"
             "SKILL=" + current_skill[:12000]
@@ -77,11 +78,18 @@ class OptimizerBackend:
         if not isinstance(edits, list):
             edits = []
         edits = edits[: self.edit_budget]
-        candidate_text = apply_bounded_edits(current_skill, edits)
+        validation = validate_bounded_edits(current_skill, edits)
+        if not validation.ok:
+            reject_path = run_dir / f"candidate_{iteration}_edit_validation_rejected.json"
+            reject_path.write_text(json.dumps({"iteration": iteration, "errors": validation.errors, "rejected_edits": validation.rejected_edits, "edits": edits}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            candidate_text = current_skill
+        else:
+            candidate_text = apply_bounded_edits(current_skill, edits, strict=True)
         return CandidateSkill(
             iteration=iteration,
             text=candidate_text,
             edits=edits,
             reflection=reflection,
             reasoning=str(data.get("reasoning", "")) if isinstance(data, dict) else None,
+            validation={"ok": validation.ok, "errors": validation.errors, "rejected_edits": validation.rejected_edits, "diff_chars": validation.diff_chars},
         )

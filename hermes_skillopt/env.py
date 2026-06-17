@@ -30,6 +30,8 @@ class EvalTask:
     fixtures: dict[str, Any] = field(default_factory=dict)
     expected_terms: tuple[str, ...] = ()
     failure_terms: tuple[str, ...] = ()
+    required_markers: tuple[str, ...] = ()
+    forbidden_markers: tuple[str, ...] = ()
     split: str = "validation"
     weight: float = 1.0
     success_criteria: tuple[str, ...] = ()
@@ -183,7 +185,9 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
     if timeout <= 0:
         raise ValueError(f"eval task {task_id} timeout must be > 0")
     expected = _string_tuple(record.get("expected_keywords") or record.get("expected_terms"))
-    explicit_scorecard = bool(expected or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
+    required_markers = _string_tuple(record.get("required_markers") or record.get("required_tool_markers") or record.get("required_actions"))
+    forbidden_markers = _string_tuple(record.get("forbidden_markers") or record.get("forbidden_tool_markers") or record.get("forbidden_actions"))
+    explicit_scorecard = bool(expected or required_markers or forbidden_markers or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
     if not expected:
         expected = _criteria_to_terms(criteria)
     forbidden = _string_tuple(record.get("forbidden_keywords") or record.get("failure_terms"))
@@ -206,11 +210,13 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         fixtures=fixtures,
         expected_terms=expected,
         failure_terms=forbidden,
+        required_markers=required_markers,
+        forbidden_markers=forbidden_markers,
         split=split,
         weight=weight,
         success_criteria=criteria,
         metadata={
-            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "success_criteria", "split", "weight"}},
+            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
             "production_gate_eligible": explicit_scorecard,
         },

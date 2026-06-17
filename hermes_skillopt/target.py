@@ -3,14 +3,19 @@ from __future__ import annotations
 """Frozen target evaluator abstractions for current/candidate comparisons.
 
 Default tests and smoke runs use deterministic local scorecard/replay runners.
-They are frozen (same config + same tasks for current and candidate), fast, and
-safe, but are explicitly reported as local replay/scorecard rather than a live
-Hermes rollout. Production adoption is gated separately by manifest fields that
-require explicit curated scorecards.
+Curated tasks can opt into a production-safe Hermes sandbox runner that creates
+isolated temp HOME/HERMES_HOME/workspace directories, writes a staged skill copy,
+runs only the fixed internal sandbox runner, and captures transcript/exit/evidence
+with timeouts.  Task-provided commands are blocked by default.
 """
 
+import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Protocol
+from pathlib import Path
+from typing import Callable, Protocol
 
 from hermes_skillopt.env import EvalResult, EvalTask
 
@@ -38,12 +43,7 @@ def _variants(term: str) -> set[str]:
 
 @dataclass(frozen=True)
 class DeterministicKeywordScorecard:
-    """Deterministic/mock fallback scorecard for smoke tasks.
-
-    This is intentionally not presented as a real Hermes executor. It scores a
-    frozen skill document against explicit task keywords/forbidden terms and is
-    suitable for tests, smoke runs, and review-only fallback runs.
-    """
+    """Deterministic/mock fallback scorecard for smoke tasks."""
 
     mode: str = "deterministic_mock_scorecard"
 
@@ -66,26 +66,13 @@ class DeterministicKeywordScorecard:
             score += 0.08
             matched.append("bounded_edit")
         penalties = [term for term in task.failure_terms if term.lower() in low]
-        score -= 0.15 * len(penalties)
-        score = round(max(0.0, min(1.0, score)), 3)
-        return EvalResult(
-            task_id=task.id,
-            score=score,
-            passed=score >= 0.55,
-            evidence=f"runner={self.mode}; matched={matched}; penalties={penalties}",
-            metadata=_result_metadata(task),
-        )
+        score = round(max(0.0, min(1.0, score - 0.15 * len(penalties))), 3)
+        return EvalResult(task.id, score, score >= 0.55, f"runner={self.mode}; matched={matched}; penalties={penalties}", _result_metadata(task))
 
 
 @dataclass(frozen=True)
 class HermesRolloutRunner:
-    """Safe offline/local replay runner for curated Hermes eval tasks.
-
-    MVP semantics: no live profile writes, no tool execution, no LLM judge. It
-    evaluates skill text against frozen task assertions, expected behavior,
-    expected/forbidden keywords, and success criteria. The same runner instance
-    and same task set are used for current and candidate by TargetExecutor.
-    """
+    """Safe offline/local replay runner for curated Hermes eval tasks."""
 
     mode: str = "hermes_replay_runner_mvp"
 
@@ -97,8 +84,9 @@ class HermesRolloutRunner:
         for assertion in task.assertions:
             name, passed = self._assertion_passed(low, assertion)
             checks.append((name, passed, float(assertion.get("weight", 1.0) or 1.0)))
+        for marker in task.required_markers:
+            checks.append((f"required_marker:{marker}", marker.lower() in low, 1.0))
         for criterion in task.success_criteria:
-            # Only short criteria become local replay checks; long criteria are evidence.
             words = criterion.lower().split()
             if 0 < len(words) <= 3:
                 checks.append((f"success_criteria:{criterion}", criterion.lower() in low, 0.75))
@@ -107,18 +95,14 @@ class HermesRolloutRunner:
                 if len(word) >= 4:
                     checks.append((f"expected_behavior:{word}", word in low, 0.25))
         penalties = [term for term in task.failure_terms if term.lower() in low]
-        total = sum(max(0.0, weight) for _, _, weight in checks)
-        passed_weight = sum(max(0.0, weight) for _, ok, weight in checks if ok)
-        base = passed_weight / total if total > 0 else DeterministicKeywordScorecard().score(skill_text, task).score
-        score = round(max(0.0, min(1.0, base - 0.20 * len(penalties))), 3)
-        passed_names = [name for name, ok, _ in checks if ok]
-        failed_names = [name for name, ok, _ in checks if not ok]
+        penalties.extend([m for m in task.forbidden_markers if m.lower() in low])
+        score, passed_names, failed_names = _score_checks(checks, penalties)
         return EvalResult(
-            task_id=task.id,
-            score=score,
-            passed=score >= 0.55 and not penalties,
-            evidence=f"runner={self.mode}; passed={passed_names}; failed={failed_names}; penalties={penalties}; judge=not_used_for_acceptance",
-            metadata={**_result_metadata(task), "assertion_count": len(task.assertions), "assertion_results": {name: ok for name, ok, _ in checks if name.startswith("assertion:")}, "judge_present": bool(task.judge)},
+            task.id,
+            score,
+            score >= 0.55 and not penalties,
+            f"runner={self.mode}; passed={passed_names}; failed={failed_names}; penalties={penalties}; judge=not_used_for_acceptance",
+            {**_result_metadata(task), "assertion_count": len(task.assertions), "assertion_results": {name: ok for name, ok, _ in checks if name.startswith("assertion:")}, "judge_present": bool(task.judge)},
         )
 
     def _assertion_passed(self, low_skill: str, assertion: dict[str, object]) -> tuple[str, bool]:
@@ -130,26 +114,101 @@ class HermesRolloutRunner:
             return f"assertion:{typ}:{value}", bool(value and value not in low_skill)
         if typ == "all_keywords":
             raw_values = assertion.get("values") or assertion.get("keywords") or []
-            if isinstance(raw_values, str):
-                values = [raw_values]
-            elif isinstance(raw_values, (list, tuple, set)):
-                values = list(raw_values)
-            else:
-                values = []
+            values = [raw_values] if isinstance(raw_values, str) else list(raw_values) if isinstance(raw_values, (list, tuple, set)) else []
             vals = [str(v).lower() for v in values]
             return f"assertion:all_keywords:{','.join(vals)}", bool(vals and all(v in low_skill for v in vals))
         return f"assertion:unsupported:{typ}", False
 
 
-@dataclass(frozen=True)
-class TargetExecutor:
-    """Frozen evaluator used for both current and candidate skill.
+CommandRunner = Callable[[list[str], Path, dict[str, str], float], tuple[int, str]]
 
-    The executor never trains or edits. It applies the same frozen runner/config
-    to the same task set for both labels. A future live Hermes rollout runner can
-    implement ScorecardRunner and be injected without changing ValidationGate.
+
+def subprocess_command_runner(argv: list[str], cwd: Path, env: dict[str, str], timeout: float) -> tuple[int, str]:
+    proc = subprocess.run(argv, cwd=str(cwd), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+    return proc.returncode, proc.stdout
+
+
+@dataclass(frozen=True)
+class HermesSandboxRunner:
+    """Production-safe sandbox executor MVP.
+
+    The runner creates an isolated temp profile/home/workspace, writes SKILL.md
+    into the sandbox only, and executes a fixed internal runner.  Task-provided
+    fixture/metadata commands are deliberately rejected: without an OS-level
+    sandbox, arbitrary shell commands could still access the live filesystem.
     """
 
+    command_runner: CommandRunner | None = None
+    mode: str = "hermes_sandbox_executor_mvp"
+
+    def score(self, skill_text: str, task: EvalTask) -> EvalResult:
+        if task.fixtures.get("command") is not None or task.metadata.get("command") is not None:
+            transcript = "SANDBOX_COMMAND_BLOCKED: task-provided commands are not allowed by the sandbox executor MVP"
+            metadata = {
+                **_result_metadata(task),
+                "exit_code": 126,
+                "transcript_preview": transcript,
+                "sandbox_isolated": True,
+                "sandbox_command_blocked": True,
+                "live_profile_writes": False,
+                "production_gate_eligible": False,
+            }
+            return EvalResult(task.id, 0.0, False, f"runner={self.mode}; exit=126; blocked=task_provided_command", metadata)
+
+        runner = self.command_runner or subprocess_command_runner
+        with tempfile.TemporaryDirectory(prefix="hermes-skillopt-sandbox-") as td:
+            root = Path(td)
+            sandbox_home = root / "home"
+            workspace = root / "workspace"
+            profile = sandbox_home / ".hermes"
+            skill_dir = profile / "skills" / "sandbox"
+            workspace.mkdir(parents=True)
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(skill_text, encoding="utf-8")
+            argv = [sys.executable, "-m", "hermes_skillopt.sandbox_runner", str(skill_dir / "SKILL.md")]
+            repo_root = str(Path(__file__).resolve().parents[1])
+            env = {
+                "HOME": str(sandbox_home),
+                "HERMES_HOME": str(profile),
+                "HERMES_SKILLOPT_SANDBOX": "1",
+                "PYTHONPATH": repo_root,
+                "PATH": os.defpath,
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+            }
+            try:
+                code, transcript = runner(argv, workspace, env, float(task.timeout))
+            except subprocess.TimeoutExpired as exc:
+                code, transcript = 124, f"TIMEOUT after {task.timeout}s\n{exc.stdout or ''}"
+            except Exception as exc:  # pragma: no cover - defensive executor path
+                code, transcript = 125, f"SANDBOX_RUNNER_ERROR {type(exc).__name__}: {exc}"
+        low_skill = skill_text.lower()
+        low_transcript = transcript.lower()
+        checks: list[tuple[str, bool, float]] = [("exit_zero", code == 0, 1.0)]
+        for term in task.expected_terms:
+            checks.append((f"expected_keyword:{term}", any(v in low_skill for v in _variants(term)), 0.75))
+        for marker in task.required_markers:
+            checks.append((f"required_marker:{marker}", marker.lower() in low_transcript or marker.lower() in low_skill, 1.0))
+        for assertion in task.assertions:
+            name, ok = HermesRolloutRunner()._assertion_passed(low_skill + "\n" + low_transcript, assertion)
+            checks.append((name, ok, float(assertion.get("weight", 1.0) or 1.0)))
+        penalties = [term for term in task.failure_terms if term.lower() in low_skill or term.lower() in low_transcript]
+        penalties.extend([m for m in task.forbidden_markers if m.lower() in low_transcript or m.lower() in low_skill])
+        score, passed_names, failed_names = _score_checks(checks, penalties)
+        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False}
+        return EvalResult(task.id, score, code == 0 and score >= 0.55 and not penalties, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}", metadata)
+
+
+def _score_checks(checks: list[tuple[str, bool, float]], penalties: list[str]) -> tuple[float, list[str], list[str]]:
+    total = sum(max(0.0, weight) for _, _, weight in checks)
+    passed_weight = sum(max(0.0, weight) for _, ok, weight in checks if ok)
+    base = passed_weight / total if total > 0 else 0.0
+    score = round(max(0.0, min(1.0, base - 0.20 * len(penalties))), 3)
+    return score, [name for name, ok, _ in checks if ok], [name for name, ok, _ in checks if not ok]
+
+
+@dataclass(frozen=True)
+class TargetExecutor:
     runner: ScorecardRunner | None = None
     target_config_id: str = "frozen-hermes-replay-mvp-v1"
 
@@ -169,16 +228,7 @@ class TargetExecutor:
         weighted = sum(r.score * max(0.0, float(task.weight)) for r, task in zip(results, tasks))
         mean = round(weighted / total_weight, 3) if results and total_weight > 0 else 0.0
         production_gate_eligible = bool(results) and all(bool(r.metadata.get("production_gate_eligible")) for r in results)
-        return {
-            "label": label,
-            "executor": self.mode,
-            "target_config_id": self.target_config_id,
-            "score": mean,
-            "num_tasks": len(results),
-            "total_weight": round(total_weight, 3),
-            "production_gate_eligible": production_gate_eligible,
-            "results": [r.__dict__ for r in results],
-        }
+        return {"label": label, "executor": self.mode, "target_config_id": self.target_config_id, "score": mean, "num_tasks": len(results), "total_weight": round(total_weight, 3), "production_gate_eligible": production_gate_eligible, "results": [r.__dict__ for r in results]}
 
 
 def _result_metadata(task: EvalTask) -> dict[str, object]:
@@ -190,6 +240,8 @@ def _result_metadata(task: EvalTask) -> dict[str, object]:
         "success_criteria": task.success_criteria,
         "expected_behavior": task.expected_behavior,
         "allowed_tools": task.allowed_tools,
+        "required_markers": task.required_markers,
+        "forbidden_markers": task.forbidden_markers,
         "timeout": task.timeout,
         "fixtures": task.fixtures,
         "scorecard_explicit": bool(task.metadata.get("scorecard_explicit")),
