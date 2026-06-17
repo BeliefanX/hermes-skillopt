@@ -16,7 +16,7 @@ The adapter implements SkillOpt-inspired concepts in Hermes terms:
 - `SixStageSkillOptTrainer` performs rollout → reflect → aggregate → select → update → evaluate/gate.
 - `TargetExecutor` runs frozen replay/sandbox/scorecard evaluation.
 - `OptimizerBackend` emits bounded edits only.
-- `HermesSkillEnv` builds curated/session/fallback train/validation/test tasks.
+- `HermesSkillEnv` builds curated/session/fallback train/validation/test tasks, including reviewed seed packs under `examples/evals/` when copied into an active profile eval location.
 - Hermes safety remains outside the trainer: staged-only artifacts, explicit review/adopt/rollback, artifact hashes, path/SHA guards, active-profile isolation.
 
 This is still not Microsoft’s official trainer package. Upstream changes must be reviewed and ported deliberately in small Hermes-safe changes.
@@ -47,7 +47,8 @@ Semantics:
 - `aggregate_clip`: upstream edit aggregation is adapted as `aggregate_edit_proposals` merge/dedupe/rejected-filter/edit-budget clipping.
 - `gate`: upstream candidate validation is adapted as deterministic `soft|hard|mixed|strict` metric gates; LLM judge text is explanation-only and hard/mixed gates include per-task regression metadata.
 - `artifact_resume`: upstream artifacts/checkpoints are adapted as manifest/checkpoint/artifact hashes with completed-run-only resume and profile/path/SHA guards.
-- `benchmarks_tests`: upstream benchmark ideas are adapted as Hermes eval packs plus explicit curated production validation/test eligibility.
+- `benchmarks_tests`: upstream benchmark ideas are adapted as Hermes eval packs plus explicit curated production validation/test eligibility; current repo includes two reviewed Hermes production seed packs in `examples/evals/`.
+- `benchmark_report`: CLI `benchmark` aliases eval-only and writes a reproducible local `hermes-native-benchmark-report-v1` with skill/eval/target fingerprints and read-only safety flags.
 - `benchmark_bridge`: upstream-style benchmark manifests are accepted only as inert JSON data and converted to Hermes eval packs; executable/remote benchmark fields are rejected.
 - `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text, not live cross-model training or writeback.
 - `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
@@ -56,11 +57,12 @@ Semantics:
 
 The current adapter’s production adoption gates depend on local curated eval files, not on upstream code:
 
-- Explicit JSON/JSONL eval files under `$HERMES_HOME` can provide production validation and test tasks.
+- Explicit JSON/JSONL eval files under `$HERMES_HOME` can provide production validation and test tasks. Versioned curated packs (`hermes-curated-eval-pack-v1`) require complete train/validation/test splits and valid declared fingerprints when present.
 - Validation adoption evidence requires eligible curated validation tasks and strict candidate improvement.
 - Held-out test eligibility requires eligible curated test tasks passing threshold.
 - Fallback, synthetic, session-mined, and legacy dry-run evidence remains review-only.
 - Sandbox eval is isolated and blocks task-provided commands by default.
+- Bundled seed packs `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` opt in to production eligibility for Hermes safety/tool-use domains, with stable IDs, provenance, deterministic scorecards, and validation/test production-gate tasks.
 
 ## Conformance semantics
 
@@ -71,7 +73,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - **Train/val/test isolation:** train evidence informs reflection, validation selects candidates, and held-out test evidence is evaluated after selection. Only explicit curated validation/test tasks can make production adoption eligible.
 - **Rejected buffer:** invalid, non-improving, or non-selected candidates remain staged in summaries/rejected buffers for audit and later reflection; they cannot become live writes without a new passing run.
 - **Resume semantics:** `checkpoint.json` records a `skillopt-checkpoint-v1` input hash over profile, skill SHA, eval SHA, backend, gate, and budget settings. `resume_run_id` reuses only completed runs after artifact verification and fingerprint match; safe partial-stage replay is intentionally unavailable.
-- **Provenance v2:** manifests record `skillopt-provenance-v2` with plugin repo/commit, upstream lock, eval/task SHA, optimizer_backend config, target_backend config, gate policy, profile, skill, and production eval policy fingerprints.
+- **Provenance v2:** manifests record `skillopt-provenance-v2` with plugin repo/commit, upstream lock, eval/task SHA, optimizer_backend config, target_backend config, gate policy, profile, skill, and production eval policy fingerprints. Stage artifacts also record deterministic batch metadata (`skillopt-deterministic-batch-v1`) with stable batch IDs, seed `0`, stable-order note, and input fingerprints.
 
 ## Intentional divergence from upstream
 
@@ -81,7 +83,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - Production adoption is narrower than generic optimization: explicit curated validation plus held-out curated test gates are required.
 - Sandbox support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
-- Benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; transfer eval does not create real cross-model claims.
+- `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; transfer eval does not create real cross-model claims.
 
 ## Upstream diff/status workflow
 

@@ -37,7 +37,7 @@ class GateMetricPolicy:
     def _semantics(self) -> str:
         mode = self.normalized_mode()
         if mode == "soft":
-            return "non-no-op candidate and soft weighted score strictly improves by min_delta"
+            return "non-no-op candidate and soft weighted score strictly improves by min_delta; production-eligible evals also require every candidate task to hard-pass"
         if mode == "hard":
             return "non-no-op candidate and hard weighted pass-rate strictly improves; per-task pass regressions fail unless hard_regression_allowed"
         if mode == "mixed":
@@ -114,14 +114,18 @@ class ValidationGate:
 
         soft_ok = metrics["soft_delta"] > min_delta
         task_regressions = metrics.get("per_task_regressions") or []
+        production_candidate_failures = metrics.get("production_candidate_hard_failures") or []
+        production_candidate_hard_ok = not production_candidate_failures
         per_task_nonregress = not task_regressions or bool(self.policy.hard_regression_allowed)
         hard_improved = metrics["hard_delta"] > 0.0 and per_task_nonregress
         hard_nonregress = (metrics["hard_delta"] >= 0.0 and per_task_nonregress) or bool(self.policy.hard_regression_allowed)
 
         if mode == "soft":
-            metric_ok = soft_ok
+            metric_ok = soft_ok and production_candidate_hard_ok
             if not soft_ok:
                 rejection_reasons.append("soft weighted score did not strictly improve")
+            if not production_candidate_hard_ok:
+                rejection_reasons.append("production-eligible validation task hard-failed")
         elif mode == "hard":
             metric_ok = hard_improved
             if not hard_improved:
@@ -144,6 +148,11 @@ class ValidationGate:
                 rejection_reasons.append("strict gate previously passing task regressed")
         else:
             raise ValueError(f"unsupported gate mode: {self.policy.mode}")
+
+        if not production_candidate_hard_ok:
+            metric_ok = False
+            if "production-eligible validation task hard-failed" not in rejection_reasons:
+                rejection_reasons.append("production-eligible validation task hard-failed")
 
         accepted = bool(not no_op and metric_ok)
         rationale = (
@@ -178,6 +187,7 @@ class ValidationGate:
             "soft_delta": round(candidate_soft - current_soft, 6),
             "hard_delta": round(candidate_hard - current_hard, 6),
             "per_task_regressions": self._per_task_regressions(current_eval, candidate_eval),
+            "production_candidate_hard_failures": self._production_candidate_hard_failures(candidate_eval),
             "mixed": {
                 "soft_improved": candidate_soft > current_soft + float(self.policy.min_delta),
                 "hard_nonregression": candidate_hard >= current_hard and not self._per_task_regressions(current_eval, candidate_eval) or bool(self.policy.hard_regression_allowed),
@@ -210,6 +220,30 @@ class ValidationGate:
                     "candidate_score": cand.get("score"),
                 })
         return regressions
+
+    def _production_candidate_hard_failures(self, candidate_eval: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return hard-failed rows when the eval is eligible to gate production.
+
+        Production/adoption gates must not be decided by soft aggregate score
+        alone: any hard failure in an explicitly production-eligible validation
+        scorecard blocks acceptance, even when the candidate improves the soft
+        weighted score.
+        """
+        if candidate_eval.get("production_gate_eligible") is not True:
+            return []
+        failures: list[dict[str, Any]] = []
+        for i, row in enumerate(candidate_eval.get("results") or []):
+            if not isinstance(row, dict) or bool(row.get("passed")):
+                continue
+            raw_metadata = row.get("metadata")
+            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+            failures.append({
+                "task_id": str(row.get("task_id") or row.get("id") or i),
+                "candidate_passed": False,
+                "candidate_score": row.get("score"),
+                "failure_tags": list(metadata.get("failure_tags") or []),
+            })
+        return failures
 
     def _weighted_pass_rate(self, eval_result: dict[str, Any]) -> float:
         rows = [r for r in (eval_result.get("results") or []) if isinstance(r, dict)]

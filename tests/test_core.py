@@ -1532,6 +1532,65 @@ def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch
     assert "Production candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
 
 
+def test_production_validation_hard_failure_blocks_adoptability(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "train", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "prod-val-pass", "prompt": "production validation pass", "expected_keywords": ["alpha"], "split": "validation", "production_gate_eligible": True},
+        {"id": "prod-val-command-hard-fail", "prompt": "production validation command must be blocked", "expected_keywords": ["beta"], "fixtures": {"command": "echo should-not-run"}, "split": "validation", "production_gate_eligible": True},
+        {"id": "prod-test", "prompt": "production heldout test", "expected_keywords": ["rollback"], "split": "test", "production_gate_eligible": True},
+    ])
+
+    class HardFailingProductionBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "hermes"
+        def json(self, prompt, schema_hint, repair_path=None):
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": ["add production terms"]}
+            if schema_hint["kind"] == "edit":
+                return {"edits": [{"op": "append", "text": "\n\n## SkillOpt Learned Rules\n\n- alpha beta rollback validation gate.\n"}], "reasoning": "soft score improves but command task remains a hard failure"}
+            return {"rationale": "auxiliary only"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: HardFailingProductionBackend())
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="hermes", allow_mock=False)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    gate_results = json.loads((run_dir / "gate_results.json").read_text(encoding="utf-8"))
+    production_gate = gate_results["production_gates"][0]
+
+    assert out["status"] == "rejected"
+    assert out["adoptable"] is False
+    assert out["production_gate_eligible"] is False
+    assert production_gate["candidate_score"] > production_gate["current_score"]
+    assert production_gate["metric_summary"]["candidate"]["hard_pass_rate"] == 0.5
+    assert production_gate["accepted"] is False
+    assert "production-eligible validation task hard-failed" in production_gate["rejection_reasons"]
+    assert production_gate["metric_summary"]["production_candidate_hard_failures"][0]["task_id"] == "prod-val-command-hard-fail"
+    assert manifest["adoptable"] is False
+    assert "missing accepted explicit curated production validation gate" in manifest["production_eligibility_reasons"]
+
+
+def test_validation_gate_rejects_production_soft_gain_with_candidate_hard_failure():
+    from hermes_skillopt.gate import ValidationGate
+
+    current_eval = {"score": 0.2, "production_gate_eligible": True, "results": [
+        {"task_id": "safe", "score": 0.2, "passed": False, "metadata": {"production_gate_eligible": True, "weight": 1}},
+        {"task_id": "command", "score": 0.2, "passed": False, "metadata": {"production_gate_eligible": True, "weight": 1}},
+    ]}
+    candidate_eval = {"score": 0.9, "production_gate_eligible": True, "results": [
+        {"task_id": "safe", "score": 1.0, "passed": True, "metadata": {"production_gate_eligible": True, "weight": 1}},
+        {"task_id": "command", "score": 0.8, "passed": False, "metadata": {"production_gate_eligible": True, "weight": 1, "failure_tags": ["task_provided_command_blocked"]}},
+    ]}
+
+    decision = ValidationGate().decide(1, current_eval, candidate_eval, "old", "new")
+
+    assert decision.accepted is False
+    assert "production-eligible validation task hard-failed" in (decision.rejection_reasons or [])
+    assert decision.metric_summary is not None
+    assert decision.metric_summary["candidate"]["hard_pass_rate"] == 0.5
+    assert decision.metric_summary["production_candidate_hard_failures"][0]["task_id"] == "command"
+
+
 def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):
     skill = make_skill(tmp_path, "demo", body="Use tools safely.")
     original = skill.read_text(encoding="utf-8")

@@ -57,7 +57,16 @@ class StageRecorder:
         self.stage_dir.mkdir(parents=True, exist_ok=True)
         input_payload = evidence if input_payload is None else input_payload
         output_payload = evidence if output_payload is None else output_payload
-        row = {"schema_version": "skillopt-stage-v1", "iteration": iteration, "stage": stage, "input_sha256": self._fingerprint(input_payload), "output_sha256": self._fingerprint(output_payload), "evidence": evidence}
+        deterministic_batch = {
+            "batch_schema": "skillopt-deterministic-batch-v1",
+            "batch_id": f"iter-{iteration:03d}-{stage}",
+            "iteration": iteration,
+            "stage": stage,
+            "seed": 0,
+            "selection_order": "stable-input-order-then-deterministic-rank",
+            "input_sha256": self._fingerprint(input_payload),
+        }
+        row = {"schema_version": "skillopt-stage-v1", "iteration": iteration, "stage": stage, "input_sha256": deterministic_batch["input_sha256"], "output_sha256": self._fingerprint(output_payload), "deterministic_batch": deterministic_batch, "evidence": evidence}
         self.records.append(row)
         (self.stage_dir / f"{iteration:03d}_{stage}.json").write_text(json.dumps(row, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -225,14 +234,15 @@ class SixStageSkillOptTrainer:
             self.stage_records.append(StageRecord("evaluate", it, {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted"), "candidate_id": candidate.candidate_id}))
 
             invalid_edit = not bool(candidate.validation.get("ok", True))
-            if gate["accepted"] and not invalid_edit:
+            production_blocked = production_gate is not None and not bool(production_gate.get("accepted"))
+            if gate["accepted"] and not invalid_edit and not production_blocked:
                 current = candidate.text
                 best = candidate.text
                 best_gate = gate
                 status_value = "accepted"
             else:
                 status_value = "rejected"
-                rejected.append({"iteration": it, "candidate_id": candidate.candidate_id, "gate": gate, "edits": candidate.edits, "reasoning": candidate.reasoning, "validation_errors": candidate.validation.get("errors", []), "rejected_edits": candidate.validation.get("rejected_edits", [])})
+                rejected.append({"iteration": it, "candidate_id": candidate.candidate_id, "gate": gate, "production_gate": production_gate, "edits": candidate.edits, "reasoning": candidate.reasoning, "validation_errors": candidate.validation.get("errors", []), "rejected_edits": candidate.validation.get("rejected_edits", [])})
             for cand, _cval, cgate, _pcval, pgate in candidate_evals:
                 if cand.candidate_id != candidate.candidate_id:
                     rejected.append({"iteration": it, "candidate_id": cand.candidate_id, "gate": cgate, "production_gate": pgate, "edits": cand.edits, "reasoning": cand.reasoning, "validation_errors": cand.validation.get("errors", []), "rejected_edits": cand.validation.get("rejected_edits", []), "selection_rejection": True})

@@ -127,10 +127,23 @@ def test_v1_pack_requires_complete_splits_and_rejects_split_leakage(tmp_path: Pa
     with pytest.raises(ValueError, match="must include train/val/test"):
         load_eval_pack(_write_pack(tmp_path, missing_test, name="missing-test.json"))
 
+    missing_val = _pack()
+    missing_val["tasks"] = [task for task in missing_val["tasks"] if task["split"] != "validation"]
+    with pytest.raises(ValueError, match="must include train/val/test"):
+        load_eval_pack(_write_pack(tmp_path, missing_val, name="missing-val.json"))
+
     leaked = _pack()
     leaked["tasks"][2]["prompt"] = leaked["tasks"][1]["prompt"]
     with pytest.raises(ValueError, match="reuses an identical prompt"):
         load_eval_pack(_write_pack(tmp_path, leaked, name="leaked.json"))
+
+
+def test_v1_pack_rejects_declared_fingerprint_tampering(tmp_path: Path):
+    payload = _pack()
+    payload["fingerprint_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        load_eval_pack(_write_pack(tmp_path, payload, name="tampered.json"))
 
 
 def test_fallback_synthetic_and_session_mined_tasks_remain_non_production_even_with_flags():
@@ -145,3 +158,22 @@ def test_fallback_synthetic_and_session_mined_tasks_remain_non_production_even_w
         assert decision.eligible is False
         assert not is_production_gate_task(task)
         assert any("review-only" in reason or "non-production" in reason for reason in decision.reasons)
+
+
+def test_bundled_production_eval_packs_are_loadable_and_gate_eligible():
+    examples_dir = Path(__file__).resolve().parents[1] / "examples" / "evals"
+    pack_paths = sorted(examples_dir.glob("hermes_*_production_v1.json"))
+
+    assert len(pack_paths) >= 2
+    for path in pack_paths:
+        tasks, metadata = load_eval_pack(path)
+        assert metadata.schema_version == EVAL_PACK_SCHEMA_VERSION
+        assert metadata.split_counts["train"] >= 1
+        assert metadata.split_counts["val"] >= 1
+        assert metadata.split_counts["test"] >= 1
+        assert metadata.production_policy["allow_production_adoption"] is True
+        assert metadata.production_eligible_task_count >= 2
+        assert metadata.fingerprint_sha256
+        assert metadata.production_policy_fingerprint_sha256
+        assert any(is_production_gate_task(task) for task in tasks if task.split == "val")
+        assert all(not is_production_gate_task(task) for task in tasks if task.split == "train")

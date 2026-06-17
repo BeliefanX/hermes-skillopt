@@ -1187,10 +1187,38 @@ def eval_only(skill: str | None = None, *, skill_file: str | None = None, eval_f
         "all_results": all_result,
         "side_effect_policy": "read-only evaluation; no optimizer/training/adoption artifacts are produced",
     }
+    benchmark_report = {
+        "schema_version": "hermes-native-benchmark-report-v1",
+        "run_id": rid,
+        "mode": "read_only_benchmark",
+        "reproducibility": {
+            "skill_sha256": report_payload["skill_sha256"],
+            "eval_file_sha256": report_payload["eval_file_sha256"],
+            "eval_pack_fingerprint_sha256": eval_pack.fingerprint_sha256,
+            "target_fingerprint_sha256": report_payload["target_backend_config"]["fingerprint_sha256"],
+            "task_counts": report_payload["task_counts"],
+        },
+        "safety": {
+            "read_only": True,
+            "optimizer_training": False,
+            "adoption_side_effects": False,
+            "task_provided_commands_allowed": False,
+            "target_executor": executor.mode,
+        },
+        "scorecard": {
+            "overall_score": all_result.get("score"),
+            "overall_hard_pass_rate": all_result.get("hard_pass_rate"),
+            "split_scores": {name: {"score": result.get("score"), "hard_pass_rate": result.get("hard_pass_rate"), "production_gate_eligible": result.get("production_gate_eligible")} for name, result in split_results.items()},
+            "regression_cases": all_result.get("regression_cases") or [],
+        },
+        "eval_pack": eval_pack.as_dict(),
+        "target_backend_config": report_payload["target_backend_config"],
+    }
     write_text(run_dir / "evaluated_SKILL.md", skill_text)
     write_text(run_dir / "eval_report.json", json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    write_text(run_dir / "report.md", f"# Hermes SkillOpt eval-only\n\n- run_id: {rid}\n- mode: eval_only_no_training_no_adoption\n- skill: {skill_name}\n- eval_file: {eval_path}\n- eval_pack_id: {eval_pack.pack_id}\n- target_executor: {executor.mode}\n- score: {all_result.get('score')}\n- task_counts: {json.dumps(report_payload['task_counts'], ensure_ascii=False)}\n- no_training_or_adoption_side_effects: true\n")
-    files = {"evaluated_skill": "evaluated_SKILL.md", "eval_report": "eval_report.json", "report": "report.md"}
+    write_text(run_dir / "benchmark_report.json", json.dumps(benchmark_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    write_text(run_dir / "report.md", f"# Hermes SkillOpt eval-only\n\n- run_id: {rid}\n- mode: eval_only_no_training_no_adoption\n- skill: {skill_name}\n- eval_file: {eval_path}\n- eval_pack_id: {eval_pack.pack_id}\n- benchmark_report: benchmark_report.json\n- target_executor: {executor.mode}\n- score: {all_result.get('score')}\n- task_counts: {json.dumps(report_payload['task_counts'], ensure_ascii=False)}\n- no_training_or_adoption_side_effects: true\n")
+    files = {"evaluated_skill": "evaluated_SKILL.md", "eval_report": "eval_report.json", "benchmark_report": "benchmark_report.json", "report": "report.md"}
     manifest = {
         "run_id": rid,
         "status": "eval_only_complete",
@@ -1213,7 +1241,7 @@ def eval_only(skill: str | None = None, *, skill_file: str | None = None, eval_f
     }
     manifest["artifact_sha256"] = artifact_hashes(run_dir, files)
     save_manifest(run_dir, manifest)
-    return {"success": True, "run_id": rid, "status": "eval_only_complete", "adoptable": False, "run_dir": str(run_dir), "report_path": str(run_dir / "report.md"), "eval_report_path": str(run_dir / "eval_report.json"), "score": all_result.get("score"), "task_counts": report_payload["task_counts"], "eval_file": str(eval_path), "target_executor": executor.mode}
+    return {"success": True, "run_id": rid, "status": "eval_only_complete", "adoptable": False, "run_dir": str(run_dir), "report_path": str(run_dir / "report.md"), "eval_report_path": str(run_dir / "eval_report.json"), "benchmark_report_path": str(run_dir / "benchmark_report.json"), "score": all_result.get("score"), "task_counts": report_payload["task_counts"], "eval_file": str(eval_path), "target_executor": executor.mode}
 
 
 def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, candidate_count: int = 1, backend: str = "auto", optimizer_backend: str | None = None, allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto", target_backend: str | None = None, gate_mode: str = "soft", resume_run_id: str | None = None) -> dict[str, Any]:

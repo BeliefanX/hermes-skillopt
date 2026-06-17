@@ -7,7 +7,7 @@
 - **Trainable state:** one Hermes skill document (`$HERMES_HOME/skills/.../SKILL.md`).
 - **Frozen target executor:** evaluates the current skill and each candidate under the same replay/scorecard/sandbox target config.
 - **Optimizer:** reflects on rollout evidence and proposes bounded skill edits only. It does not write the live profile.
-- **Environment/benchmark:** builds train/validation/test tasks from curated eval files, session-mined snippets, and fallback synthetic tasks.
+- **Environment/benchmark:** builds train/validation/test tasks from curated eval files, bundled Hermes production eval packs, session-mined snippets, and fallback synthetic tasks.
 - **Gate:** validation must strictly improve, and production adoption additionally requires explicit curated validation and held-out test eligibility.
 - **Safety shell:** full runs write only staged artifacts; live writes require explicit `adopt`; `rollback` restores from guarded backups.
 
@@ -17,7 +17,7 @@
 - Not an arbitrary command runner. Sandbox eval blocks task-provided commands by default.
 - Not an auto-adopter. Production tool/CLI/WebUI flows do not auto-adopt.
 - Not a way to production-adopt fallback, synthetic, session-mined, or legacy dry-run proposals.
-- Not a benchmark-results claim. Benchmark bridge and transfer eval produce local deterministic artifacts/reports; they do not prove parity with Microsoft SkillOpt benchmarks or external model performance.
+- Not a benchmark-results claim. `benchmark`/`eval-only`, benchmark bridge, and transfer eval produce local deterministic artifacts/reports; they do not prove parity with Microsoft SkillOpt benchmarks or external model performance.
 - `full-run --dry-run` does not exist; use `dry-run`/`run --mode legacy` only for review-only legacy proposals.
 
 ## Install
@@ -57,7 +57,7 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services.
 - `hermes_skillopt_handoff_optimize`: deterministic multi-agent `delegate_task` dispatcher→worker handoff package optimizer; staged output only.
 
-P3 import/transfer/conformance surfaces are available both as Hermes plugin tools (`hermes_skillopt_import_upstream_benchmark`, `hermes_skillopt_transfer_eval`, `hermes_skillopt_conformance`) and as CLI/module commands (`import-upstream-benchmark`, `transfer-eval`, and `conformance`). `eval-only` is currently CLI/core-only.
+P3 import/transfer/conformance surfaces are available both as Hermes plugin tools (`hermes_skillopt_import_upstream_benchmark`, `hermes_skillopt_transfer_eval`, `hermes_skillopt_conformance`) and as CLI/module commands (`import-upstream-benchmark`, `transfer-eval`, and `conformance`). `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
 
 Important full-run parameters:
 
@@ -76,6 +76,7 @@ CLI help confirms the supported surface:
 python3 -m hermes_skillopt.cli --help
 python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli eval-only --help
+python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli resume-inspect --help
 ```
 
@@ -99,7 +100,7 @@ Core artifacts include:
 - `reflections.json`, `candidate_edits.json`, `candidate_summary.json`, `rejected_edits.jsonl`, `gate_results.json`, `slow_meta.json`
 - `target_binding.json`, `provenance_binding.json`, `history.json` for target/profile binding, optimizer/target/gate provenance, and candidate lineage/explainability
 - `checkpoint.json` with `skillopt-checkpoint-v1` input fingerprint; resume currently reuses only completed runs and refuses partial-stage replay
-- `stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json`
+- `stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json`, each with `schema_version: skillopt-stage-v1` and deterministic batch metadata (`skillopt-deterministic-batch-v1`, stable `batch_id`, seed `0`, stable-order note, input/output fingerprints)
 
 `manifest.json` records SHA-256 hashes for staged artifacts plus `skillopt-provenance-v2`: plugin repo/commit, upstream lock, eval/task fingerprint, optimizer_backend/target_backend configs, gate policy, profile/skill fingerprints, and production eval policy fingerprint. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
 
@@ -113,21 +114,31 @@ python3 -m hermes_skillopt.cli resume-inspect RUN_ID
 
 It verifies checkpoint/stage fingerprints and manifest hashes. It reports whether a completed run is safe to reuse; incomplete checkpoints are refused rather than replayed from the middle of the six-stage lifecycle.
 
-## Eval-only
+## Eval-only and benchmark
 
-`eval-only` evaluates a fixed skill against an explicit curated eval pack without optimizer reflection, training, candidate selection, adoption eligibility, or live writeback:
+`eval-only` evaluates a fixed skill against an explicit curated eval pack without optimizer reflection, training, candidate selection, adoption eligibility, or live writeback. `benchmark` is an alias for the same read-only path and exists to make reproducible fixed-skill report generation explicit:
 
 ```bash
 python3 -m hermes_skillopt.cli eval-only --skill my-skill --eval-file skillopt/evals/my-skill.jsonl --target-executor replay
+python3 -m hermes_skillopt.cli benchmark --skill my-skill --eval-file skillopt/evals/my-skill.jsonl --target-executor replay
 ```
 
-It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval_report.json`, `report.md`, and `manifest.json`. The manifest is always `adoptable: false`; this command is for fixed-skill scoring/reporting only, not production adoption.
+It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval_report.json`, `benchmark_report.json`, `report.md`, and `manifest.json`. The manifest is always `adoptable: false`; these commands are for fixed-skill scoring/reporting only, not production adoption.
+
+`benchmark_report.json` uses `schema_version: hermes-native-benchmark-report-v1`. It records reproducibility fingerprints for the skill, eval file, eval pack, target backend config, and task counts; read-only safety flags (`optimizer_training: false`, `adoption_side_effects: false`, `task_provided_commands_allowed: false`); and a split scorecard summary with overall score, hard-pass rate, split scores, production-gate eligibility flags, and regression cases. It is a local Hermes-native benchmark report MVP, not an upstream benchmark parity report.
 
 ## Eval schema and production eligibility
 
 Curated evals may be JSONL, JSON (`[...]` or `{ "tasks": [...] }`), or a versioned eval pack (`{ "schema_version": "hermes-curated-eval-pack-v1", "pack_id": "...", "version": "...", "tasks": [...] }`). An explicit `eval_file` must resolve to a regular file inside the active `$HERMES_HOME`; default discovery checks `$HERMES_HOME/skillopt/evals/<skill-name>.jsonl` and then `evals/*.jsonl` under the skill directory.
 
-A sample Hermes-native pack template is bundled at `hermes_skillopt/eval_packs/hermes_native_core_v1.json` and covers tool-use correctness, delegation/handoff, file editing safety, research grounding/no fabrication, profile isolation, and adopt/rollback safety. Bundled/sample packs are review-only; copy a reviewed pack under `$HERMES_HOME/skillopt/evals/` and remove `sample_pack`/set curated task metadata intentionally before using it as production-gate input.
+A sample Hermes-native pack template is bundled at `hermes_skillopt/eval_packs/hermes_native_core_v1.json` and covers tool-use correctness, delegation/handoff, file editing safety, research grounding/no fabrication, profile isolation, and adopt/rollback safety. That package-level sample pack is review-only.
+
+Two reviewed production-eligible seed packs are bundled under `examples/evals/`:
+
+- `examples/evals/hermes_tool_use_production_v1.json`: grounded tool use, command boundary safety, and verification discipline.
+- `examples/evals/hermes_skill_safety_production_v1.json`: staged skill editing, active-profile isolation, adoption gates, provenance, and rollback safety.
+
+These example packs use `schema_version: hermes-curated-eval-pack-v1`, complete train/validation/test splits, stable task IDs/prompts, deterministic scorecard fields, `task_origin: curated`, explicit `production_policy.allow_production_adoption: true`, provenance metadata, and validation/test tasks marked `production_gate_eligible: true`. They are seed evals for Hermes safety/tool-use skills; they do not by themselves certify arbitrary skills or upstream benchmark parity.
 
 Minimal task:
 
@@ -142,12 +153,13 @@ Supported fields include:
 - Scoring/assertion fields: `expected_keywords`/`expected_terms`, `forbidden_keywords`/`failure_terms`, `assertions`, `required_markers`, `forbidden_markers`, `success_criteria`, `expected_behavior`, optional `ground_truth_score` metadata.
 - Metadata/execution fields: `judge`, `allowed_tools`, `timeout`, `fixtures`, `weight`, `executor`, `production_gate_eligible`/`production_gate` (set false to opt out of production adopt even when the scorecard is explicit).
 
-Production eval schema policy (`production-eval-schema-v1`) is recorded into `manifest.json` and `report.md` with eval pack id/version/fingerprint, split governance, and a provenance fingerprint over eval file SHA, eval pack identity, task fingerprint, backend, target executor, and target config. `checkpoint.json` also records eval pack identity for completed-run resume matching. `review` returns that fingerprint plus per-task validation deltas.
+Production eval schema policy (`production-eval-schema-v1`) is recorded into `manifest.json` and `report.md` with eval pack id/version/fingerprint, split governance, and a provenance fingerprint over eval file SHA, eval pack identity, task fingerprint, backend, target executor, and target config. Versioned curated packs require complete train/validation/test coverage, reject split leakage, and reject tampered declared eval fingerprints. `checkpoint.json` also records eval pack identity for completed-run resume matching. `review` returns that fingerprint plus per-task validation deltas.
 
 Production adoption gates are intentionally narrow:
 
 - Only explicit curated eval-file tasks can satisfy production gates.
 - Production validation requires eligible curated validation tasks and strict candidate improvement.
+- Any hard-failed row in a production-eligible validation scorecard blocks the production gate/adoptability, even if the weighted score improves and regardless of `gate_mode`.
 - Production test eligibility requires held-out curated test results passing threshold.
 - When multiple candidates are evaluated and production gate tasks exist, selection prefers a candidate with both generic validation strict improvement and production validation strict improvement; generic-only improvements remain staged/reviewable but are not allowed to crowd out an adoptable production candidate.
 - Fallback, synthetic, session-mined, and legacy dry-run evidence is review-only and cannot be production-adopted.
@@ -246,5 +258,6 @@ It is staged-only and does not rewrite global prompts or skills.
 python3 -m pytest -q
 python3 -m compileall -q hermes_skillopt tests
 python3 -m hermes_skillopt.cli full-run --help
+python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```

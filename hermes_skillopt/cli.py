@@ -36,6 +36,8 @@ def main() -> int:
     fr = sub.add_parser("full-run"); add_full_args(fr)
     eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
     eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"])
+    bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
+    bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"])
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
     r = sub.add_parser("review"); r.add_argument("run_id")
     ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
@@ -63,7 +65,7 @@ def main() -> int:
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
         out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, candidate_count=getattr(args, "candidate_count", 1), backend=args.backend, optimizer_backend=getattr(args, "optimizer_backend", None), allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"), target_backend=getattr(args, "target_backend", None), gate_mode=getattr(args, "gate_mode", "soft"), resume_run_id=getattr(args, "resume_run_id", None))
-    elif args.cmd == "eval-only":
+    elif args.cmd in {"eval-only", "benchmark"}:
         out = core.eval_only(skill=args.skill, skill_file=args.skill_file, eval_file=args.eval_file, hermes_home_path=args.home, target_executor=args.target_executor, target_backend=args.target_backend)
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)

@@ -147,6 +147,29 @@ def test_sandbox_rejects_task_command_before_command_runner_is_called():
     assert result["metadata"]["trajectory"]["tool_calls"][0]["blocked_reason"] == "arbitrary_command_execution_disabled"
 
 
+def test_sandbox_executor_runs_fixed_internal_runner_without_task_shell(tmp_path):
+    marker = tmp_path / "should_not_exist"
+    task = EvalTask(
+        "sandbox-real",
+        "Run fixed sandbox runner only.",
+        split="test",
+        expected_terms=("verify", "tool"),
+        required_markers=("SANDBOX_OK", "MARKER:verify"),
+        metadata={"task_origin": "synthetic", "scorecard_explicit": True, "command": None},
+    )
+
+    out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="sandbox").evaluate(f"verify tool; never touch {marker}", [task])
+    result = out["results"][0]
+
+    assert marker.exists() is False
+    assert result["metadata"]["exit_code"] == 0
+    assert result["metadata"]["sandbox_isolated"] is True
+    assert result["metadata"]["task_commands_executed"] is False
+    tool_calls = result["metadata"]["trajectory"]["tool_calls"]
+    assert any(isinstance(call, dict) and call["name"] == "hermes_skillopt.sandbox_runner" and call["executed"] is True for call in tool_calls)
+    assert "SANDBOX_OK" in result["metadata"]["transcript_preview"]
+
+
 def test_frozen_target_config_provenance_freezes_model_profile_and_tool_policy():
     task = EvalTask("freeze", "verify", split="val", expected_terms=("verify",), metadata={"task_origin": "synthetic", "scorecard_explicit": True})
 
@@ -275,3 +298,27 @@ def test_eval_pack_metadata_flows_to_evidence_report_manifest_and_checkpoint(tmp
     assert "eval_pack_id: demo-hermes-pack" in report
     assert "validation_selects_candidates_test_is_heldout" in report
     assert evidence["split_governance"]["test"].startswith("held-out final gate")
+
+    stage_record = json.loads((run_dir / "stages" / "001_rollout.json").read_text(encoding="utf-8"))
+    assert stage_record["deterministic_batch"]["seed"] == 0
+    assert stage_record["deterministic_batch"]["batch_schema"] == "skillopt-deterministic-batch-v1"
+
+
+def test_eval_only_benchmark_report_is_reproducible_and_read_only(tmp_path):
+    make_skill(tmp_path, body="Use tools safely. verify tool bounded guard profile rollback blocker")
+    pack_path = _write_pack(tmp_path / "skillopt" / "evals" / "demo.json")
+
+    out = core.eval_only(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(pack_path), target_executor="replay")
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "benchmark_report.json").read_text(encoding="utf-8"))
+
+    assert out["adoptable"] is False
+    assert out["benchmark_report_path"].endswith("benchmark_report.json")
+    assert manifest["files"]["benchmark_report"] == "benchmark_report.json"
+    assert report["schema_version"] == "hermes-native-benchmark-report-v1"
+    assert report["safety"]["read_only"] is True
+    assert report["safety"]["optimizer_training"] is False
+    assert report["safety"]["task_provided_commands_allowed"] is False
+    assert report["reproducibility"]["eval_pack_fingerprint_sha256"] == manifest["eval_pack"]["fingerprint_sha256"]
+    assert report["reproducibility"]["target_fingerprint_sha256"] == report["target_backend_config"]["fingerprint_sha256"]
