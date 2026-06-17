@@ -6,7 +6,7 @@ This document is the P3 conformance contract for the standalone Hermes SkillOpt 
 
 P3 adds deterministic, local, no-credential tooling for:
 
-- Reviewed Hermes production seed eval packs plus safe upstream-style benchmark manifest import into Hermes curated eval pack format.
+- Reviewed Hermes static review seed eval packs plus safe upstream-style benchmark manifest import into Hermes curated eval pack format.
 - Read-only staged transfer evaluation across target/profile/backend configs.
 - Continuous local conformance/regression execution and machine-readable reports.
 
@@ -17,7 +17,7 @@ No command in this adapter vendors Microsoft SkillOpt, imports upstream Python m
 Hermes maps the core SkillOpt abstraction as follows:
 
 - Trainable state: a Hermes `SKILL.md` document.
-- Environment/benchmark: Hermes eval packs with explicit train/val/test split governance, including production-eligible seed packs under `examples/evals/`.
+- Environment/benchmark: Hermes eval packs with explicit train/val/test split governance; bundled examples under `examples/evals/` are static review fixtures and cannot production-adopt.
 - Rollout/target model: frozen target executor (`scorecard`, `replay`, or `sandbox`) with backend config fingerprints.
 - Reflection/update: optimizer proposes bounded edits; candidate text is staged.
 - Evaluation gate: validation/test scorecards decide whether a candidate is review-worthy or adoptable; any hard-failed production-eligible validation row blocks production gate acceptance/adoptability regardless of soft weighted-score improvement or gate mode.
@@ -28,7 +28,8 @@ Hermes maps the core SkillOpt abstraction as follows:
 Hermes preserves the outer safety shell even when adapting upstream benchmark concepts:
 
 - Upstream benchmark bridge is JSON-data-only. It rejects executable or remote fields such as `code`, `script`, `command`, `module`, `entrypoint`, `url`, and container/image fields.
-- Imported sample packs are review-only by default. Production gate eligibility is disabled unless a caller explicitly imports as curated and tasks also satisfy Hermes production eval policy.
+- Imported sample packs are review-only by default. Production gate eligibility is disabled unless a caller explicitly imports as curated, the pack is not static/keyword/sample/report-only, an adoption-eligible eval execution contract is declared, and tasks also satisfy Hermes production eval policy.
+- Static keyword/text scorecard packs (`static_keyword_scorecard`, `static_review_only`, `static-review-eval-pack`, `keyword-scorecard`) are always review-only/non-adoption evidence, including the bundled example packs whose filenames still contain `production_v1`.
 - Eval pack validation rejects invalid splits, missing required splits for versioned curated packs, declared fingerprint tampering, and leakage by duplicate ids/prompts across train/val/test splits.
 - Transfer evaluation is report-only/read-only: it evaluates staged/proposed skill text or an explicit file and never writes live skills.
 - Cross-profile evaluation records profile fingerprints but does not mutate target profiles.
@@ -45,7 +46,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - `hermes_skillopt.benchmark_bridge.import_upstream_manifest(...)`
   - Inputs: upstream-style JSON manifest with embedded `tasks` or `splits`.
   - Output: Hermes `hermes-curated-eval-pack-v1` payload and optional output file.
-  - Validates: schema, no executable/remote fields, deterministic scorecard fields, split completeness, leakage, sample/prod eligibility, fingerprint.
+  - Validates: schema, no executable/remote fields, safe `.json` output path, validate-before-replace write flow, deterministic scorecard fields, split completeness, leakage, sample/prod eligibility, fingerprint.
 
 - `hermes_skillopt.transfer.transfer_eval(...)`
   - Inputs: staged `run_id` or explicit staged `skill_file`, eval pack/staged task artifacts, target list, profile list.
@@ -73,9 +74,9 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 
 ## Known limitations
 
-- The bundled production packs are curated Hermes safety/tool-use seed packs, not universal certification suites for every skill.
+- The bundled `examples/evals/*production_v1.json` files are static review fixtures, not production certification suites for any skill.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.
-- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders.
+- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current parity support is import-only; true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist.
 - Split manifest support is embedded JSON only; file references are intentionally not followed in P3.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model results.
 - Conformance reports local adapter health only; they do not certify Microsoft SkillOpt parity or external benchmark performance.
@@ -88,7 +89,7 @@ Each six-stage trainer artifact under `stages/` records `schema_version: skillop
 ## Track B conformance points
 
 - P0 status surfaces: `compare-upstream-pin` and `benchmark-parity-status` are read-only/report-only.
-- P1 target adapter: `LiveHermesReadOnlyRunner` is disabled by default, fingerprints provider/model/profile/toolset/session, writes no live profile state, and cannot adopt.
+- P1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. Future `frozen_hermes_target_execution_v1` adoption evidence must include frozen target config, provider/model/toolset/session fingerprints, isolated runtime, permissions, transcript/trajectory artifact, and execution-based scoring.
 - P1 benchmark adapter: `JsonEvalPackBenchmarkAdapter` owns safe JSON eval-pack loading plus governance diagnostics.
 - P1 writeback safety: adopt/rollback use `skillopt/writeback.lock` and audit JSONL events.
 - P2 governance/UX: manifests/reports/WebUI expose eval pack governance, parity labels, gate/provenance/lineage, and remain staged/read-only by default.

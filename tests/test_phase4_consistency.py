@@ -61,10 +61,12 @@ def test_cli_help_and_plugin_schema_expose_phase4_surface():
     assert proc.returncode == 0
     for option in ("--optimizer-backend", "--target-backend", "--gate-mode", "--candidate-count", "--resume-run-id"):
         assert option in proc.stdout
+    assert "default strict" in proc.stdout
 
     full_props = plugin.SCHEMAS["hermes_skillopt_full_run"]["properties"]
     for prop in ("optimizer_backend", "target_backend", "gate_mode", "candidate_count", "resume_run_id"):
         assert prop in full_props
+    assert full_props["gate_mode"]["default"] == "strict"
 
 
 def test_docs_reference_current_phase4_invariants():

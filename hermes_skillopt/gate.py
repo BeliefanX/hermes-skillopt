@@ -10,18 +10,19 @@ from typing import Any
 class GateMetricPolicy:
     """Deterministic hard/soft/mixed/strict metric gate policy.
 
-    default ``soft`` preserves Phase0 behavior: candidate weighted validation
-    score must strictly improve and the edit must not be a no-op. ``strict`` is
-    a stronger policy: it also requires hard weighted pass-rate non-regression
-    and no previously-passing task failures unless explicitly allowed.
+    default ``strict`` is conservative for adoption-capable full runs: candidate
+    weighted validation score must strictly improve, hard pass-rate must not
+    regress, and previously-passing tasks must remain passing unless explicitly
+    allowed. ``soft``/``mixed`` remain available only by explicit request for
+    review/non-production runs; production hard-fail rows always block acceptance.
     """
 
-    mode: str = "soft"  # soft|hard|mixed|strict
+    mode: str = "strict"  # soft|hard|mixed|strict
     min_delta: float = 0.0
     hard_regression_allowed: bool = False
 
     def normalized_mode(self) -> str:
-        return (self.mode or "soft").lower()
+        return (self.mode or "strict").lower()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -90,7 +91,7 @@ class ValidationGate:
 
     def __init__(self, policy: GateMetricPolicy | None = None, *, gate_mode: str | None = None, min_delta: float = 0.0, hard_regression_allowed: bool = False):
         if policy is None:
-            policy = GateMetricPolicy(mode=gate_mode or "soft", min_delta=min_delta, hard_regression_allowed=hard_regression_allowed)
+            policy = GateMetricPolicy(mode=gate_mode or "strict", min_delta=min_delta, hard_regression_allowed=hard_regression_allowed)
         self.policy = policy
 
     def decide(

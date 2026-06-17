@@ -111,6 +111,43 @@ def test_upstream_import_success_atomically_replaces_existing_output(tmp_path):
     assert payload["tasks"][0]["id"] == "train"
 
 
+def test_upstream_import_output_guard_blocks_live_and_runtime_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    manifest = tmp_path / "valid-upstream.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}), encoding="utf-8")
+    skill = make_skill(tmp_path)
+
+    blocked = [
+        skill,
+        tmp_path / "plugins" / "tool.json",
+        tmp_path / "cron" / "job.json",
+        tmp_path / "memories" / "memory.json",
+    ]
+    for out in blocked:
+        with pytest.raises(ValueError, match="output_path"):
+            import_upstream_manifest(manifest, out)
+
+
+def test_upstream_import_output_guard_allows_explicit_eval_staging(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    manifest = tmp_path / "valid-upstream.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}), encoding="utf-8")
+    out = tmp_path / "skillopt" / "evals" / "safe-pack.json"
+
+    result = import_upstream_manifest(manifest, out)
+
+    assert result["success"] is True
+    assert out.exists()
+
+
 def test_upstream_import_rejects_executable_fields_and_leakage(tmp_path):
     executable = tmp_path / "exec.json"
     executable.write_text(json.dumps({"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "command": "rm -rf /"}]}), encoding="utf-8")

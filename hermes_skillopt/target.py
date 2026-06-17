@@ -499,9 +499,28 @@ class TargetExecutor:
         hard_score = self._weighted_pass_rate(results, tasks)
         splits = sorted({task.split for task in tasks})
         eligibility = [production_eligibility_for_task(task).as_dict() for task in tasks]
-        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility)
-        regression_cases = [r.task_id for r in results if not r.passed]
         target_config = self.config.as_dict()
+        contract_checks: list[dict[str, object]] = []
+        for task, result in zip(tasks, results):
+            contract_raw = (task.metadata or {}).get("eval_execution_contract")
+            contract = contract_raw if isinstance(contract_raw, dict) else {}
+            classification = str(contract.get("classification") or "")
+            metadata = result.metadata or {}
+            missing_runtime: list[str] = []
+            if classification == "frozen_hermes_target_execution_v1":
+                if not target_config.get("fingerprint_sha256"):
+                    missing_runtime.append("target_config_fingerprint")
+                if not (metadata.get("trajectory") or metadata.get("trace")):
+                    missing_runtime.append("trajectory_or_transcript")
+                if not metadata.get("trace_fingerprint_sha256"):
+                    missing_runtime.append("trace_fingerprint_sha256")
+                if metadata.get("live_profile_writes") is not False:
+                    missing_runtime.append("live_profile_writes_false")
+                if metadata.get("task_commands_executed") is not False:
+                    missing_runtime.append("task_commands_executed_false")
+            contract_checks.append({"task_id": task.id, "classification": classification or None, "runtime_evidence_complete": not missing_runtime, "missing_runtime_evidence": missing_runtime})
+        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility) and all(bool(row.get("runtime_evidence_complete")) for row in contract_checks)
+        regression_cases = [r.task_id for r in results if not r.passed]
         trajectory_index = self._trajectory_index(results)
         evaluation_scope = "production_curated_pack_eligible" if production_gate_eligible else "review_only_deterministic_fallback"
         return {
@@ -522,7 +541,8 @@ class TargetExecutor:
             "total_weight": round(total_weight, 3),
             "production_gate_eligible": production_gate_eligible,
             "evaluation_scope": evaluation_scope,
-            "adoption_policy": "production adoption allowed only when every task is explicit curated-pack production eligible; otherwise review-only evidence",
+            "eval_execution_contract_checks": contract_checks,
+            "adoption_policy": "production adoption allowed only when every task is explicit curated-pack production eligible and eval execution contract/runtime evidence gates pass; otherwise review-only evidence",
             "production_eligibility_reasons": eligibility,
             "regression_cases": regression_cases,
             "trajectory_index": trajectory_index,

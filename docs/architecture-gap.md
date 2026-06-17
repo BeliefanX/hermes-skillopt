@@ -15,7 +15,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 - `trainer.py`: six-stage rollout/reflect/aggregate/select/update/evaluate loop and final held-out test evaluation.
 - `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
 - `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application.
-- `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, and frozen `TargetExecutor` wrapper.
+- `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, disabled/report-only `live-readonly` adapter interface, and frozen `TargetExecutor` wrapper.
 - `gate.py`: deterministic validation gate policies (`soft|hard|mixed|strict`) with score improvement and per-task regression checks depending on mode.
 - `webui.py`: optional Gradio UI for Hermes-specific status/full-run/review/adopt/rollback/upstream workflows.
 - `multi_agent.py`: deterministic multi-agent handoff optimizer for `delegate_task` dispatcher→worker packages.
@@ -61,6 +61,7 @@ Task schema supports `prompt`, split, expected/forbidden keywords, assertions, m
 Production adoption is intentionally stricter than generic validation:
 
 - The production validation gate can only use explicit curated eval-file validation tasks.
+- Static/keyword scorecard packs, sample packs, fallback/synthetic/session-mined tasks, legacy JSON/JSONL, and deterministic replay/report-only contracts are review-only even when stale flags claim production eligibility.
 - Eligible tasks must carry explicit scoring/assertion signal such as keywords, markers, assertions, expected behavior, failure terms, or ground truth metadata.
 - The final candidate must strictly improve production validation score over current.
 - Any hard-failed production-eligible validation row blocks production gate acceptance/adoptability, even when soft weighted score improves and regardless of gate mode.
@@ -68,11 +69,13 @@ Production adoption is intentionally stricter than generic validation:
 - Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
 - LLM judge text is explanatory evidence only and cannot bypass gates.
 
-Gate modes are deterministic metric policies: `soft` requires weighted-score improvement, `hard` requires stricter pass-rate improvement, `mixed` requires soft improvement with hard non-regression, and `strict` requires a non-no-op soft improvement, hard weighted pass-rate non-regression, and no previously passing task failures unless `hard_regression_allowed` is explicitly set. All modes keep LLM/judge output explanation-only.
+Eval execution contract classifications are part of this policy: `static_keyword_scorecard`/`static_review_only` and `deterministic_replay_report_only` are non-adoption evidence; `deterministic_replay_contract_compliant` can be adoption-eligible only inside an explicit curated v1 pack with passing provenance/runtime checks; future `frozen_hermes_target_execution_v1` additionally requires frozen target config, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions, transcript/trajectory evidence, and execution-based scoring. The current `live-readonly` surface is an interface/disabled report path, not a true live Hermes runner.
+
+Gate modes are deterministic metric policies: `strict` is the default for adoption-capable full runs and requires a non-no-op soft improvement, hard weighted pass-rate non-regression, and no previously passing task failures unless `hard_regression_allowed` is explicitly set. `soft`, `hard`, and `mixed` remain explicit review/non-production policy choices (`soft` requires weighted-score improvement, `hard` requires pass-rate improvement, `mixed` requires soft improvement with hard non-regression). All modes keep LLM/judge output explanation-only and none can override production hard-fail/test/evidence gates.
 
 ## EnvAdapter and evidence foundation
 
-`EnvAdapter` is the contract between Hermes evidence and the trainer. It exposes task splits, rollout metadata, scorer metadata, and production eligibility decisions. Built-in benchmarks and session-mined/synthetic tasks provide train/validation/test scaffolding and slow/sleep-style evidence, but they are non-production unless represented by explicit curated eval-file scorecards. Reviewed seed packs now live in `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json`; they are production-eligible curated packs for Hermes safety/tool-use domains, not universal certification suites.
+`EnvAdapter` is the contract between Hermes evidence and the trainer. It exposes task splits, rollout metadata, scorer metadata, and production eligibility decisions. Built-in benchmarks, bundled static review packs, and session-mined/synthetic tasks provide train/validation/test scaffolding and slow/sleep-style evidence, but they are non-production unless replaced by explicit curated eval-file scorecards with an adoption-eligible execution contract. The static seed packs in `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` are review-only despite their historical filenames; they use `static-review-eval-pack`/`sample_pack` policy and cannot production-adopt.
 
 ## Sandbox executor safety
 
@@ -114,7 +117,7 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 ## Current limitations
 
 - Replay/sandbox/scorecard scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
-- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports JSON manifests only and does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
+- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports embedded JSON manifests only. Safe import-only conversion is supported, but true upstream benchmark execution is unsupported until dedicated adapters and `frozen_hermes_target_execution_v1` evidence exist. It does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model performance.
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
@@ -123,4 +126,4 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 
 ## Track B P0-P2 closure notes
 
-The remaining upstream gap is now explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented by a safe disabled-by-default read-only adapter interface until credentials/service hooks and sandbox policy are available. Benchmark execution is factored behind a loader/rollout/scorer adapter (`JsonEvalPackBenchmarkAdapter`) so future upstream adapters can remain report-only/staged unless separately hardened. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.
+The remaining upstream gap is now explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented only by a safe disabled-by-default read-only adapter interface until credentials/service hooks, sandbox policy, transcript artifacts, and frozen-target evidence are available. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.

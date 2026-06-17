@@ -171,9 +171,11 @@ def test_bundled_production_eval_packs_are_loadable_and_gate_eligible():
         assert metadata.split_counts["train"] >= 1
         assert metadata.split_counts["val"] >= 1
         assert metadata.split_counts["test"] >= 1
-        assert metadata.production_policy["allow_production_adoption"] is True
-        assert metadata.production_eligible_task_count >= 2
+        assert metadata.production_policy["allow_production_adoption"] is False
+        assert metadata.production_eligible_task_count == 0
         assert metadata.fingerprint_sha256
         assert metadata.production_policy_fingerprint_sha256
-        assert any(is_production_gate_task(task) for task in tasks if task.split == "val")
+        assert metadata.eval_execution_contract["adoption_eligible"] is False
+        assert any("review-only" in reason or "non-production" in reason for reason in metadata.production_policy["refusal_reasons"])
+        assert not any(is_production_gate_task(task) for task in tasks if task.split == "val")
         assert all(not is_production_gate_task(task) for task in tasks if task.split == "train")

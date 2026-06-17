@@ -107,6 +107,46 @@ def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_pat
     assert not any((tmp_path / "skillopt" / "backups").iterdir())
 
 
+@pytest.mark.parametrize("gate_mode", ["soft", "mixed"])
+def test_soft_and_mixed_gate_modes_stage_but_never_adopt(tmp_path, gate_mode):
+    skill = make_skill(tmp_path, "demo")
+    original = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path)
+
+    out = full_run_with_deterministic_prod_optimizer(
+        skill="demo",
+        hermes_home_path=str(tmp_path),
+        eval_file=str(eval_path),
+        gate_mode=gate_mode,
+    )
+    run_dir = Path(out["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
+
+    assert out["status"] == "staged_best"
+    assert out["gate_policy"]["mode"] == gate_mode
+    assert out["production_gate_eligible"] is True
+    assert out["test_gate_eligible"] is True
+    assert out["strict_gate_mode"] is False
+    assert out["adoptable"] is False
+    assert manifest["adoptable"] is False
+    assert manifest["strict_gate_mode"] is False
+    assert any("strict gate mode" in reason for reason in manifest["production_eligibility_reasons"])
+    assert review["success"] is True
+    assert review["status"] == "staged_best"
+    assert review["adoptable"] is False
+
+    # Tamper-defense: even if mutable manifest eligibility fields are flipped,
+    # adopt-time policy validation must reject the hashed non-strict gate policy.
+    manifest["adoptable"] = True
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="strict gate mode"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+    assert skill.read_text(encoding="utf-8") == original
+    assert not any((tmp_path / "skillopt" / "backups").iterdir())
+
+
 def test_adopt_rejects_cross_profile_home_without_unsafe_confirmation(tmp_path):
     other_home = tmp_path.parent / f"other-profile-{tmp_path.name}"
     skill = make_skill(other_home, "demo")
@@ -1040,6 +1080,15 @@ def test_legacy_dry_run_manifest_refuses_adopt_even_with_force(tmp_path):
     assert skill.read_text(encoding="utf-8") == original
 
 
+def test_full_run_default_gate_mode_is_strict_for_adoption_capable_runs(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+
+    assert out["gate_policy"]["mode"] == "strict"
+
+
 def test_full_run_with_explicit_curated_scorecard_is_adoptable(tmp_path):
     skill = make_skill(tmp_path, "demo", body="Use tools safely.")
     eval_path = write_eval_file(tmp_path)
@@ -1052,6 +1101,69 @@ def test_full_run_with_explicit_curated_scorecard_is_adoptable(tmp_path):
     rb = core.rollback(out["run_id"], hermes_home_path=str(tmp_path))
     assert rb["status"] == "rolled_back"
     assert skill.read_text(encoding="utf-8") == original
+
+
+def test_static_keyword_eval_pack_cannot_make_full_run_adoptable(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = tmp_path / "skillopt" / "evals" / "static-review.json"
+    eval_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "hermes-curated-eval-pack-v1",
+        "pack_id": "static-keyword-review",
+        "version": "test",
+        "task_origin": "static-review-eval-pack",
+        "evaluation_mode": "static_keyword_scorecard",
+        "require_complete_splits": True,
+        "production_policy": {"allow_production_adoption": True, "reviewed_by": "unit-test"},
+        "tasks": [
+            {"id": "tr", "split": "train", "prompt": "train", "expected_keywords": ["tool"], "production_gate_eligible": False},
+            {"id": "v", "split": "validation", "prompt": "val", "expected_keywords": ["verify"], "production_gate_eligible": True},
+            {"id": "te", "split": "test", "prompt": "test", "expected_keywords": ["rollback"], "production_gate_eligible": True},
+        ],
+    }
+    eval_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), gate_mode="soft")
+    manifest = json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+    assert out["gate_policy"]["mode"] == "soft"
+    assert out["adoptable"] is False
+    assert manifest["production_gate_task_count"] == 0
+    assert manifest["eval_pack"]["production_policy"]["allow_production_adoption"] is False
+    assert any("static/keyword" in reason for reason in manifest["eval_pack"]["production_policy"]["refusal_reasons"])
+    with pytest.raises(ValueError, match="Only adoptable"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_replay_report_only_eval_contract_cannot_gate_adoption(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    payload = json.loads(eval_path.read_text(encoding="utf-8"))
+    payload["eval_execution_contract"] = {"classification": "deterministic_replay_report_only"}
+    eval_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    manifest = json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+    assert out["adoptable"] is False
+    contract = manifest["eval_pack"]["eval_execution_contract"]
+    assert contract["classification"] == "deterministic_replay_report_only"
+    assert contract["adoption_eligible"] is False
+    assert manifest["production_gate_task_count"] == 0
+
+
+def test_benchmark_parity_status_reports_supported_and_unsupported_levels(tmp_path):
+    status = core.benchmark_parity_status(str(tmp_path))
+
+    assert status["success"] is True
+    assert "no full upstream parity claimed" in status["upstream_parity_claim"]
+    assert status["supported_parity_levels"]["json_import_only_bridge"] == "supported_read_only_conversion_no_code_execution"
+    assert status["unsupported_parity_levels"]["true_upstream_benchmark_execution"].startswith("unsupported")
+    parity = status["upstream_benchmark_parity"]
+    assert parity["import_only_bridge"]["supported"] is True
+    assert parity["true_benchmark_execution"]["supported"] is False
+    assert parity["parity_pack_manifest_schema"]["schema_version"] == "hermes-upstream-parity-pack-manifest-v1"
+    assert "frozen_target_config" in status["hermes_benchmark_mode"]["real_target_required_evidence"]
 
 
 def test_mixed_validation_nonproduction_improvement_cannot_make_adoptable(monkeypatch, tmp_path):

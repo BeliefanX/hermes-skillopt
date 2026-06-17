@@ -47,6 +47,50 @@ FORBIDDEN_EXECUTION_FIELDS = {
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test", "dev": "val", "eval": "val"}
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def guard_eval_pack_output_path(output_path: str | Path, *, hermes_home: str | Path | None = None) -> Path:
+    """Resolve a benchmark-bridge output path that is safe for eval-pack staging.
+
+    The bridge writes generated JSON only. Even so, output paths must not target
+    live Hermes runtime areas (skills/plugins/config/memories/cron/etc.) or this
+    plugin's source tree. Under HERMES_HOME, only explicit eval/staging/report
+    output areas are accepted.
+    """
+
+    out = Path(output_path).expanduser().resolve()
+    if out.exists() and (out.is_symlink() or not out.is_file()):
+        raise ValueError("benchmark bridge output_path must be a regular eval-pack file")
+    if out.suffix.lower() != ".json":
+        raise ValueError("benchmark bridge output_path must be a .json eval-pack file")
+
+    home_raw = hermes_home or os.environ.get("HERMES_HOME")
+    if home_raw:
+        home = Path(home_raw).expanduser().resolve()
+        if _is_relative_to(out, home):
+            allowed_roots = [home / "skillopt" / "evals", home / "skillopt" / "staging", home / "skillopt" / "reports"]
+            if not any(_is_relative_to(out, root.resolve()) for root in allowed_roots):
+                raise ValueError("benchmark bridge output_path under HERMES_HOME must be an explicit skillopt eval/staging/report output path")
+            return out
+
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_blocked_roots = [repo_root / "hermes_skillopt", repo_root / "skills", repo_root / "plugins", repo_root / "cron", repo_root / "memories"]
+    if any(_is_relative_to(out, root.resolve()) for root in repo_blocked_roots) or out in {repo_root / "__init__.py", repo_root / "plugin.yaml"}:
+        raise ValueError("benchmark bridge output_path may not target plugin/repo source or runtime-sensitive paths")
+
+    blocked_names = {"SKILL.md", "plugin.yaml", "config.json", "memory.json", "memories.json", "cron.json"}
+    blocked_parts = {"skills", "plugins", "plugin", "cron", "memory", "memories", "config", "runtime", "runs"}
+    if out.name in blocked_names or any(part in blocked_parts for part in out.parts):
+        raise ValueError("benchmark bridge output_path may not target live skills, plugins, config, memory, cron, or runtime-sensitive paths")
+    return out
+
+
 @dataclass(frozen=True)
 class UpstreamImportReport:
     source_path: str
@@ -173,10 +217,13 @@ def import_upstream_manifest(input_path: str | Path, output_path: str | Path | N
         "task_origin": "sample-eval-pack" if sample else "curated",
         "upstream_bridge": {
             "schema_version": UPSTREAM_BRIDGE_SCHEMA_VERSION,
+            "parity_level": "import_only_bridge_no_upstream_execution",
             "source_path": str(path),
             "source_fingerprint_sha256": source_fp,
             "safe_adapter": "json-only-no-code-execution",
+            "true_benchmark_execution_supported": False,
         },
+        "eval_execution_contract": {"classification": "deterministic_replay_report_only", "reason": "upstream import bridge is read-only and does not execute upstream benchmark code"},
         "tasks": tasks,
     }
     payload["fingerprint_sha256"] = _stable_sha(payload)
@@ -185,7 +232,7 @@ def import_upstream_manifest(input_path: str | Path, output_path: str | Path | N
     # Validate through a sibling temporary file first so a failed validation never
     # creates or overwrites the requested output path. Only after validation
     # succeeds do we atomically replace the destination with the validated bytes.
-    output_target = Path(output_path).expanduser().resolve() if output_path else None
+    output_target = guard_eval_pack_output_path(output_path) if output_path else None
     validation_dir = output_target.parent if output_target else path.parent
     validation_dir.mkdir(parents=True, exist_ok=True)
     payload_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

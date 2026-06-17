@@ -35,7 +35,7 @@ FULL_PROPS = {
     "allow_mock": {"type": "boolean", "default": False},
     "target_executor": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard", "live-readonly"], "default": "auto"},
     "target_backend": {"type": "string", "enum": ["auto", "replay", "sandbox", "scorecard", "live-readonly"], "default": "auto"},
-    "gate_mode": {"type": "string", "enum": ["soft", "hard", "mixed", "strict"], "default": "soft"},
+    "gate_mode": {"type": "string", "enum": ["soft", "hard", "mixed", "strict"], "default": "strict", "description": "Default strict for adoption-capable runs; soft/mixed must be explicit review/non-production choices."},
     "resume_run_id": {"type": "string", "description": "Opt-in reuse of a completed checkpointed full-run when input/config/provenance fingerprints match."},
     "force": {"type": "boolean", "default": False},
 }
@@ -82,7 +82,7 @@ def _full_args(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
         "allow_mock": bool(args.get("allow_mock", False)),
         "target_executor": args.get("target_executor") or "auto",
         "target_backend": args.get("target_backend"),
-        "gate_mode": args.get("gate_mode") or "soft",
+        "gate_mode": args.get("gate_mode") or "strict",
         "resume_run_id": args.get("resume_run_id"),
         "force": bool(args.get("force", False)),
         "hermes_home_path": args.get("hermes_home"),

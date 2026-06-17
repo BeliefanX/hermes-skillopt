@@ -89,8 +89,30 @@ class BenchmarkDefinition:
 
 
 @dataclass(frozen=True)
+class EvalExecutionContract:
+    """Machine-readable eval-pack class that governs adoption eligibility."""
+
+    classification: str
+    adoption_eligible: bool
+    reasons: tuple[str, ...]
+    required_evidence: dict[str, Any] = field(default_factory=dict)
+    declared: dict[str, Any] = field(default_factory=dict)
+    policy_version: str = "hermes-eval-execution-contract-v1"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "policy_version": self.policy_version,
+            "classification": self.classification,
+            "adoption_eligible": self.adoption_eligible,
+            "reasons": list(self.reasons),
+            "required_evidence": self.required_evidence,
+            "declared": self.declared,
+        }
+
+
+@dataclass(frozen=True)
 class EvalPackMetadata:
-    """Identity, split governance, policy, and fingerprints for an explicit eval pack."""
+    """Identity, split governance, policy, contract, and fingerprints for an eval pack."""
 
     pack_id: str
     version: str
@@ -103,6 +125,7 @@ class EvalPackMetadata:
     production_eligible_task_count: int
     production_policy: dict[str, Any] = field(default_factory=dict)
     production_policy_fingerprint_sha256: str | None = None
+    eval_execution_contract: dict[str, Any] = field(default_factory=dict)
     heldout_policy: str = "validation selects candidates; held-out test is final gate only"
 
     def as_dict(self) -> dict[str, Any]:
@@ -172,13 +195,37 @@ class SessionPipelineRecord:
 
 
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
-NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark", "sample-eval-pack"}
+NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark", "sample-eval-pack", "static-review-eval-pack", "static-keyword-scorecard", "keyword-scorecard"}
 PRODUCTION_EVAL_POLICY_VERSION = "production-eval-schema-v1"
 EVAL_PACK_SCHEMA_VERSION = "hermes-curated-eval-pack-v1"
+REAL_TARGET_REQUIRED_EVIDENCE = {
+    "frozen_target_config": "target_backend_config with target_config_id, executor, and fingerprint_sha256",
+    "model_provider_fingerprint": "provider/model/toolset/session fingerprints for the frozen Hermes target",
+    "isolated_runtime": "temporary isolated HERMES_HOME/HOME/workdir; no live profile writeback",
+    "permissions": "declared command/tool permissions; task-provided command execution disabled by default",
+    "transcript_artifact": "transcript/trajectory artifact path or fingerprint captured from actual execution",
+    "execution_scoring": "scorer consumes execution result/transcript, not only SKILL.md text",
+}
+
+EVAL_CONTRACT_CLASSIFICATIONS = {
+    "static_keyword_scorecard": {"adoption_eligible": False, "kind": "static_review_only"},
+    "static_review_only": {"adoption_eligible": False, "kind": "static_review_only"},
+    "deterministic_replay_report_only": {"adoption_eligible": False, "kind": "replay_report_only"},
+    "deterministic_replay_contract_compliant": {"adoption_eligible": True, "kind": "replay_contract_compliant"},
+    "frozen_hermes_target_execution_v1": {"adoption_eligible": True, "kind": "real_target_execution", "required_evidence": REAL_TARGET_REQUIRED_EVIDENCE},
+}
+
 EXPLICIT_CURATED_EVAL_PACK_CONTRACT = {
     "schema_version": EVAL_PACK_SCHEMA_VERSION,
     "required_top_level_fields": ["schema_version", "pack_id", "version", "tasks"],
     "required_splits": ["train", "val", "test"],
+    "eval_execution_contract": {
+        "classifications": EVAL_CONTRACT_CLASSIFICATIONS,
+        "default_for_explicit_curated_packs": "deterministic_replay_contract_compliant",
+        "static_keyword_scorecard": "review-only; never adoption eligible",
+        "replay_report_only": "review-only unless explicitly classified deterministic_replay_contract_compliant",
+        "real_target_execution": "adoption eligible only with frozen target/runtime/permission/transcript/scorer evidence",
+    },
     "production_policy": "production_policy.allow_production_adoption must be true before any val/test task can gate production",
     "task_scorecard": "each production task must set production_gate_eligible=true and include deterministic expected terms/assertions/markers/ground_truth",
     "review_only_origins": sorted(NON_PRODUCTION_ORIGINS),
@@ -200,6 +247,10 @@ def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
         reasons.append("missing explicit curated eval pack provenance")
     if not bool(task.metadata.get("eval_pack_production_allowed")):
         reasons.append("eval pack production policy does not allow adoption")
+    contract_raw = task.metadata.get("eval_execution_contract")
+    contract = contract_raw if isinstance(contract_raw, dict) else {}
+    if not bool(contract.get("adoption_eligible")):
+        reasons.append("eval execution contract is not adoption eligible")
     if not task.metadata.get("eval_pack_fingerprint_sha256") or not task.metadata.get("eval_pack_policy_fingerprint_sha256"):
         reasons.append("missing eval pack/policy fingerprint provenance")
     if any(part in NON_PRODUCTION_ORIGINS for part in {task.source, origin}):
@@ -356,9 +407,19 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
     pack_meta = pack_meta or {}
     origin = str(record.get("task_origin") or pack_meta.get("task_origin") or "curated")
     sample_pack = origin == "sample-eval-pack" or bool(pack_meta.get("sample_pack"))
+    evaluation_mode = str(pack_meta.get("evaluation_mode") or "")
     explicit_curated_pack = bool(pack_meta.get("schema_version") == EVAL_PACK_SCHEMA_VERSION and pack_meta.get("pack_id") and pack_meta.get("version"))
     pack_production_allowed = bool(pack_meta.get("production_policy", {}).get("allow_production_adoption"))
     production_flag = bool(production_flag) and explicit_scorecard and explicit_curated_pack and pack_production_allowed and not sample_pack
+    contract_raw = pack_meta.get("eval_execution_contract") if isinstance(pack_meta, dict) else None
+    contract_obj = EvalExecutionContract(
+        classification=str(contract_raw.get("classification") or "deterministic_replay_report_only"),
+        adoption_eligible=bool(contract_raw.get("adoption_eligible")),
+        reasons=tuple(str(r) for r in (contract_raw.get("reasons") or ())),
+        required_evidence=dict(contract_raw.get("required_evidence") or {}),
+        declared=dict(contract_raw.get("declared") or {}),
+        policy_version=str(contract_raw.get("policy_version") or "hermes-eval-execution-contract-v1"),
+    ) if isinstance(contract_raw, dict) else EvalExecutionContract("deterministic_replay_report_only", False, ("missing eval pack contract",))
     return EvalTask(
         id=task_id,
         prompt=prompt,
@@ -390,8 +451,10 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
                 "eval_pack_schema_version": pack_meta.get("schema_version"),
                 "eval_pack_policy_fingerprint_sha256": pack_meta.get("production_policy_fingerprint_sha256"),
                 "eval_pack_production_allowed": pack_production_allowed,
+                "eval_execution_contract": contract_obj.as_dict(),
                 "explicit_curated_eval_pack": explicit_curated_pack,
                 "eval_pack_sample": bool(pack_meta.get("sample_pack")),
+                "eval_pack_evaluation_mode": evaluation_mode or None,
             } if pack_meta else {}),
         },
     )
@@ -404,6 +467,56 @@ def _eval_pack_fingerprint(data: dict[str, Any]) -> str:
 
 def _stable_json_fingerprint(data: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _eval_execution_contract_from_pack(pack_payload: dict[str, Any], schema_version: str) -> EvalExecutionContract:
+    """Classify an eval pack into static/replay/real-target adoption contract buckets."""
+
+    declared_raw = pack_payload.get("eval_execution_contract") or pack_payload.get("execution_contract") or {}
+    declared = dict(declared_raw) if isinstance(declared_raw, dict) else {}
+    mode = str(
+        declared.get("classification")
+        or declared.get("type")
+        or pack_payload.get("evaluation_mode")
+        or pack_payload.get("scoring_mode")
+        or ("deterministic_replay_contract_compliant" if schema_version == EVAL_PACK_SCHEMA_VERSION else "deterministic_replay_report_only")
+    ).strip().lower().replace("-", "_")
+    aliases = {
+        "keyword_scorecard_review_only": "static_keyword_scorecard",
+        "static_keyword_scorecard_review_only": "static_keyword_scorecard",
+        "keyword_scorecard": "static_keyword_scorecard",
+        "replay_report_only": "deterministic_replay_report_only",
+        "deterministic_replay": "deterministic_replay_contract_compliant",
+        "contract_compliant_replay": "deterministic_replay_contract_compliant",
+        "real_frozen_hermes_target": "frozen_hermes_target_execution_v1",
+    }
+    classification = aliases.get(mode, mode)
+    spec = EVAL_CONTRACT_CLASSIFICATIONS.get(classification)
+    reasons: list[str] = []
+    if spec is None:
+        classification = "deterministic_replay_report_only"
+        spec = EVAL_CONTRACT_CLASSIFICATIONS[classification]
+        reasons.append("unknown eval execution contract classification; downgraded to report-only")
+    assert spec is not None
+    if schema_version != EVAL_PACK_SCHEMA_VERSION:
+        reasons.append("legacy eval files are replay/report-only unless converted to hermes-curated-eval-pack-v1")
+    if classification in {"static_keyword_scorecard", "static_review_only"}:
+        reasons.append("static/text scorecards are review-only and never adoption eligible")
+    if classification == "deterministic_replay_report_only":
+        reasons.append("deterministic replay/report-only evidence is not adoption eligible without an explicit compliant contract")
+    required_evidence = dict(spec.get("required_evidence") or {})
+    if classification == "frozen_hermes_target_execution_v1":
+        evidence = declared.get("evidence") if isinstance(declared.get("evidence"), dict) else {}
+        missing = [name for name in required_evidence if not evidence.get(name)]
+        if missing:
+            reasons.append("missing real target execution evidence: " + ", ".join(missing))
+    adoption_eligible = bool(spec.get("adoption_eligible")) and not any(
+        reason.startswith("missing real target") or "review-only" in reason or "not adoption eligible" in reason or "legacy eval" in reason or "unknown" in reason
+        for reason in reasons
+    )
+    if adoption_eligible:
+        reasons.append("eval execution contract allows production-gate use")
+    return EvalExecutionContract(classification=classification, adoption_eligible=adoption_eligible, reasons=tuple(reasons), required_evidence=required_evidence, declared=declared)
 
 
 def _production_policy_from_pack(pack_payload: dict[str, Any], schema_version: str) -> dict[str, Any]:
@@ -420,12 +533,17 @@ def _production_policy_from_pack(pack_payload: dict[str, Any], schema_version: s
     allow = bool(raw_policy.get("allow_production_adoption", pack_payload.get("allow_production_adoption", False)))
     complete_splits_required = schema_version == EVAL_PACK_SCHEMA_VERSION or bool(pack_payload.get("require_complete_splits"))
     sample_pack = bool(pack_payload.get("sample_pack"))
+    evaluation_mode = str(pack_payload.get("evaluation_mode") or pack_payload.get("scoring_mode") or "").strip().lower()
+    static_review_only = evaluation_mode in {"static_keyword_scorecard", "static-keyword-scorecard", "keyword_scorecard_review_only", "keyword-scorecard-review-only", "static_review_only"}
+    eval_contract = _eval_execution_contract_from_pack(pack_payload, schema_version)
     origin = str(pack_payload.get("task_origin") or ("sample-eval-pack" if sample_pack else "curated"))
     allowed = bool(
         schema_version == EVAL_PACK_SCHEMA_VERSION
         and allow
         and complete_splits_required
         and not sample_pack
+        and not static_review_only
+        and bool(eval_contract.adoption_eligible)
         and origin not in NON_PRODUCTION_ORIGINS
     )
     policy = {
@@ -438,6 +556,9 @@ def _production_policy_from_pack(pack_payload: dict[str, Any], schema_version: s
         "requires_task_production_flag": True,
         "origin": origin,
         "sample_pack": sample_pack,
+        "evaluation_mode": evaluation_mode or None,
+        "eval_execution_contract": eval_contract.as_dict(),
+        "static_review_only": static_review_only,
         "refusal_reasons": [],
     }
     if schema_version != EVAL_PACK_SCHEMA_VERSION:
@@ -446,6 +567,10 @@ def _production_policy_from_pack(pack_payload: dict[str, Any], schema_version: s
         policy["refusal_reasons"].append("production_policy.allow_production_adoption is not true")
     if sample_pack or origin in NON_PRODUCTION_ORIGINS:
         policy["refusal_reasons"].append("pack origin is review-only/non-production")
+    if static_review_only:
+        policy["refusal_reasons"].append("static/keyword scorecard eval packs are review-only and cannot authorize production adoption")
+    if not eval_contract.adoption_eligible:
+        policy["refusal_reasons"].extend(str(r) for r in eval_contract.reasons if str(r))
     policy.update({k: v for k, v in raw_policy.items() if k not in policy})
     policy["policy_fingerprint_sha256"] = _stable_json_fingerprint({k: v for k, v in policy.items() if k != "policy_fingerprint_sha256"})
     return policy
@@ -527,8 +652,10 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
         "eval_file_sha256": file_sha256,
         "production_policy": production_policy,
         "production_policy_fingerprint_sha256": production_policy.get("policy_fingerprint_sha256"),
+        "eval_execution_contract": production_policy.get("eval_execution_contract") or {},
         "task_origin": pack_payload.get("task_origin") or ("sample-eval-pack" if pack_payload.get("sample_pack") else "curated"),
         "sample_pack": bool(pack_payload.get("sample_pack")),
+        "evaluation_mode": production_policy.get("evaluation_mode"),
     }
     tasks = [_task_from_record(r, str(path), i, pack_meta) for i, r in enumerate(records, 1)]
     if schema_version == EVAL_PACK_SCHEMA_VERSION or pack_payload.get("require_complete_splits"):
@@ -547,6 +674,7 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
         production_eligible_task_count=sum(1 for t in tasks if production_eligibility_for_task(t).eligible),
         production_policy=production_policy,
         production_policy_fingerprint_sha256=production_policy.get("policy_fingerprint_sha256"),
+        eval_execution_contract=production_policy.get("eval_execution_contract") or {},
     )
     return tasks, metadata
 
@@ -578,6 +706,7 @@ def eval_pack_governance_report(tasks: list[EvalTask], metadata: EvalPackMetadat
         "split_counts": metadata.split_counts,
         "production_eligible_task_count": metadata.production_eligible_task_count,
         "production_policy_fingerprint_sha256": metadata.production_policy_fingerprint_sha256,
+        "eval_execution_contract": metadata.eval_execution_contract,
         "heldout_policy": metadata.heldout_policy,
         "leakage_diagnostics": {
             "duplicate_ids_across_splits": leaked_ids,

@@ -326,6 +326,9 @@ def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> 
         raise ValueError("Mock/non-production optimizer provenance is review-only and cannot be adopted: " + "; ".join(str(r) for r in bound_mock_reasons))
     for field in ("backend", "optimizer_backend", "optimizer_backend_config", "optimizer_config", "target_backend", "target_backend_config", "target_executor", "target_config_id", "gate_policy"):
         _manifest_equal(provenance_binding.get(field), manifest.get(field), field)
+    bound_gate_policy = provenance_binding.get("gate_policy")
+    if not isinstance(bound_gate_policy, dict) or str(bound_gate_policy.get("mode") or "").lower() != "strict":
+        raise ValueError("Production adoption requires strict gate mode; soft/mixed/hard gate manifests are review-only")
 
     best_gate = gate_results.get("best_gate") if isinstance(gate_results, dict) else None
     production_best_gate = gate_results.get("production_best_gate") if isinstance(gate_results, dict) else None
@@ -1261,7 +1264,7 @@ def eval_only(skill: str | None = None, *, skill_file: str | None = None, eval_f
     return {"success": True, "run_id": rid, "status": "eval_only_complete", "adoptable": False, "run_dir": str(run_dir), "report_path": str(run_dir / "report.md"), "eval_report_path": str(run_dir / "eval_report.json"), "benchmark_report_path": str(run_dir / "benchmark_report.json"), "score": all_result.get("score"), "task_counts": report_payload["task_counts"], "eval_file": str(eval_path), "target_executor": executor.mode}
 
 
-def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, candidate_count: int = 1, backend: str = "auto", optimizer_backend: str | None = None, allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto", target_backend: str | None = None, gate_mode: str = "soft", resume_run_id: str | None = None) -> dict[str, Any]:
+def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, candidate_count: int = 1, backend: str = "auto", optimizer_backend: str | None = None, allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto", target_backend: str | None = None, gate_mode: str = "strict", resume_run_id: str | None = None) -> dict[str, Any]:
     """Run the Hermes adapter of the SkillOpt core abstraction.
 
     Pipeline: load trainable SkillState -> build benchmark tasks -> evaluate
@@ -1362,7 +1365,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     production_gate_eligible = production_gate_available and bool(
         production_validation_summary.get("accepted") if production_validation_summary else False
     )
-    adoptable = final_status == "staged_best" and production_gate_eligible and test_gate_eligible
+    strict_gate_mode = gate_policy_obj.normalized_mode() == "strict"
+    adoptable = final_status == "staged_best" and production_gate_eligible and test_gate_eligible and strict_gate_mode
     adoptability_reasons = []
     if final_status != "staged_best":
         adoptability_reasons.append("no staged_best candidate")
@@ -1370,6 +1374,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         adoptability_reasons.append("missing accepted explicit curated production validation gate")
     if not test_gate_eligible:
         adoptability_reasons.append("held-out test split is missing, non-production, or below threshold")
+    if not strict_gate_mode:
+        adoptability_reasons.append("production adoption requires strict gate mode; requested gate mode is review-only")
     proposed = best if final_status == "staged_best" else original
     diff = make_diff(original, proposed, target.relpath)
     if final_status == "staged_best":
@@ -1470,6 +1476,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "target_executor": executor.mode,
         "target_config_id": executor.target_config_id,
         "gate_policy": gate_policy,
+        "strict_gate_mode": strict_gate_mode,
         "candidate_count": max(1, int(candidate_count)),
         "rejected_history_count": len(rejected_history),
         "eval_file": eval_file_used,
@@ -1515,7 +1522,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
     _write_checkpoint(run_dir, resume_input, status="complete", completed_stages=["rollout", "reflect", "aggregate", "select", "update", "evaluate", "final_artifacts"])
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
     return result
 
 
@@ -1593,6 +1600,9 @@ def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: boo
         raise ValueError("Mock/non-production optimizer provenance is review-only and cannot be adopted: " + "; ".join(mock_reasons))
     if m.get("status") != "staged_best" or m.get("adoptable") is not True:
         raise ValueError("Only adoptable full-run staged_best manifests may be adopted; legacy/fallback/dry-run proposals are review-only")
+    gate_policy = m.get("gate_policy")
+    if not isinstance(gate_policy, dict) or str(gate_policy.get("mode") or "").lower() != "strict":
+        raise ValueError("Production adoption requires strict gate mode; soft/mixed/hard gate manifests are review-only")
     _adopt_time_artifact_crosscheck(run_dir, m)
     gate = m.get("gate")
     if not isinstance(gate, dict) or gate.get("accepted") is not True:
@@ -1760,10 +1770,20 @@ def compare_upstream_pin(hermes_home_path: str | None = None) -> dict[str, Any]:
 def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, Any]:
     """Report Hermes benchmark coverage versus upstream parity without executing benchmarks."""
 
-    from hermes_skillopt.env import built_in_benchmarks, EVAL_PACK_SCHEMA_VERSION, EXPLICIT_CURATED_EVAL_PACK_CONTRACT
+    from hermes_skillopt.env import built_in_benchmarks, EVAL_PACK_SCHEMA_VERSION, EXPLICIT_CURATED_EVAL_PACK_CONTRACT, EVAL_CONTRACT_CLASSIFICATIONS, REAL_TARGET_REQUIRED_EVIDENCE
 
     upstream = compare_upstream_pin(hermes_home_path)
     catalog = built_in_benchmarks()
+    parity_manifest_schema = {
+        "schema_version": "hermes-upstream-parity-pack-manifest-v1",
+        "safe_inputs": ["local JSON manifest", "Hermes eval pack JSON"],
+        "forbidden": ["import upstream Python", "execute benchmark commands", "network fetch", "write live skills"],
+        "adapter_levels": {
+            "import_only_bridge": "supported: JSON-only manifest conversion to Hermes eval pack",
+            "true_upstream_execution": "unsupported: no upstream runner parity claim yet",
+            "frozen_hermes_target_execution": "future: requires eval_execution_contract=frozen_hermes_target_execution_v1 evidence",
+        },
+    }
     builtin = {
         bid: {
             "name": b.name,
@@ -1779,11 +1799,36 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
         "mode": "read_only_report_only_no_rollout_no_adopt",
         "parity_label": "Hermes-native benchmark mode; not an upstream SkillOpt benchmark result",
         "upstream_parity_claim": "no full upstream parity claimed; compare-upstream-pin reports pinned source status only",
+        "supported_parity_levels": {
+            "pinned_upstream_status": "supported_read_only_no_fetch",
+            "json_import_only_bridge": "supported_read_only_conversion_no_code_execution",
+            "hermes_eval_pack_replay": "supported_native_not_upstream_parity",
+        },
+        "unsupported_parity_levels": {
+            "true_upstream_benchmark_execution": "unsupported_no_adapter_no_arbitrary_code_execution",
+            "networked_upstream_fetch_during_status": "unsupported_status_is_offline_only",
+            "upstream_result_equivalence_claim": "unsupported_no_claim_until adapters compare against pinned upstream outputs",
+        },
+        "upstream_benchmark_parity": {
+            "upstream_pin": {k: upstream.get(k) for k in ("clone_exists", "pinned_commit", "current_commit", "semantic_status", "ahead", "behind", "dirty")},
+            "local_clone_status": "available" if upstream.get("clone_exists") else "not_cloned",
+            "import_only_bridge": {"supported": True, "command": "import-upstream-benchmark", "schema_version": "hermes-upstream-benchmark-bridge-v1", "safe_read_only": True},
+            "true_benchmark_execution": {"supported": False, "reason": "no upstream execution adapter; arbitrary code/network execution remains disabled"},
+            "required_next_adapter_steps": [
+                "define a read-only upstream benchmark manifest/adapter schema with pinned expected outputs",
+                "bind adapter to pinned upstream commit and local clone fingerprint",
+                "map outputs into eval_execution_contract=frozen_hermes_target_execution_v1 with required execution evidence",
+                "add conformance tests proving no code/network/task-command execution during status/import",
+            ],
+            "parity_pack_manifest_schema": parity_manifest_schema,
+        },
         "hermes_benchmark_mode": {
             "default": "deterministic Hermes eval packs / replay / scorecard",
             "production_gate": "only explicit curated val/test eval packs can gate adoption",
             "schema_version": EVAL_PACK_SCHEMA_VERSION,
             "contract": EXPLICIT_CURATED_EVAL_PACK_CONTRACT,
+            "eval_contract_classifications": EVAL_CONTRACT_CLASSIFICATIONS,
+            "real_target_required_evidence": REAL_TARGET_REQUIRED_EVIDENCE,
         },
         "builtin_benchmarks": builtin,
         "upstream_pin": {k: upstream.get(k) for k in ("clone_exists", "pinned_commit", "current_commit", "semantic_status", "ahead", "behind", "dirty")},
