@@ -22,6 +22,12 @@ class EvalTask:
     id: str
     prompt: str
     source: str = "curated"
+    expected_behavior: str = ""
+    assertions: tuple[dict[str, Any], ...] = ()
+    judge: str = "keyword_scorecard"
+    allowed_tools: tuple[str, ...] = ()
+    timeout: float = 30.0
+    fixtures: dict[str, Any] = field(default_factory=dict)
     expected_terms: tuple[str, ...] = ()
     failure_terms: tuple[str, ...] = ()
     split: str = "validation"
@@ -103,6 +109,26 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
     return (str(value).strip(),) if str(value).strip() else ()
 
 
+def _assertions_tuple(value: Any) -> tuple[dict[str, Any], ...]:
+    if value is None:
+        return ()
+    if isinstance(value, dict):
+        return (dict(value),)
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, dict)):
+        out: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(dict(item))
+            elif str(item).strip():
+                out.append({"type": "contains", "value": str(item).strip()})
+        return tuple(out)
+    return ({"type": "contains", "value": str(value).strip()},) if str(value).strip() else ()
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _criteria_to_terms(criteria: tuple[str, ...]) -> tuple[str, ...]:
     terms: list[str] = []
     for item in criteria:
@@ -125,6 +151,20 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
     if split is None:
         raise ValueError(f"eval task {task_id} has invalid split: {split_raw}")
     criteria = _string_tuple(record.get("success_criteria"))
+    assertions_raw = record.get("assertions") or []
+    if not isinstance(assertions_raw, list):
+        raise ValueError(f"eval task {task_id} assertions must be a list")
+    assertions = tuple(a for a in assertions_raw if isinstance(a, dict))
+    allowed_tools = _string_tuple(record.get("allowed_tools"))
+    fixtures = record.get("fixtures") or {}
+    if not isinstance(fixtures, dict):
+        raise ValueError(f"eval task {task_id} fixtures must be an object")
+    try:
+        timeout = float(record.get("timeout", 30.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"eval task {task_id} has invalid timeout") from exc
+    if timeout <= 0:
+        raise ValueError(f"eval task {task_id} timeout must be > 0")
     expected = _string_tuple(record.get("expected_keywords") or record.get("expected_terms"))
     explicit_scorecard = bool(expected or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
     if not expected:
@@ -141,13 +181,19 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         id=task_id,
         prompt=prompt,
         source=source,
+        expected_behavior=str(record.get("expected_behavior") or ""),
+        assertions=assertions,
+        judge=str(record.get("judge") or "keyword_scorecard"),
+        allowed_tools=allowed_tools,
+        timeout=timeout,
+        fixtures=fixtures,
         expected_terms=expected,
         failure_terms=forbidden,
         split=split,
         weight=weight,
         success_criteria=criteria,
         metadata={
-            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "success_criteria", "split", "weight"}},
+            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
             "production_gate_eligible": explicit_scorecard,
         },
@@ -216,7 +262,7 @@ class HermesSkillEnv:
         ]
         production_gate_eligible = bool(curated_val_tasks) and all(
             bool(t.metadata.get("production_gate_eligible"))
-            and (bool(t.expected_terms) or bool(t.failure_terms) or t.metadata.get("ground_truth_score") is not None)
+            and (bool(t.expected_terms) or bool(t.assertions) or bool(t.expected_behavior) or bool(t.failure_terms) or t.metadata.get("ground_truth_score") is not None)
             for t in curated_val_tasks
         )
         evidence = {

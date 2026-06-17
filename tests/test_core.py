@@ -501,6 +501,58 @@ def test_full_run_staged_best_manifest_records_core_abstractions(tmp_path):
     assert manifest["core_abstraction"]["validation_gate"].startswith("sole_acceptance_gate")
     assert manifest["adoptable"] is False
     assert manifest["production_gate_eligible"] is False
+    stage_dir = run_dir / "stages"
+    assert {p.name.split("_", 1)[1] for p in stage_dir.glob("001_*.json")} == {
+        "rollout.json", "reflect.json", "aggregate.json", "select.json", "update.json", "evaluate.json"
+    }
+
+
+def test_extended_eval_schema_and_hermes_replay_runner(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[{
+        "id": "v-replay",
+        "prompt": "replay validation",
+        "expected_behavior": "candidate mentions verification and blockers",
+        "assertions": [{"type": "contains", "value": "verify"}, {"type": "contains", "value": "blocker"}],
+        "judge": "hermes_replay_assertions",
+        "allowed_tools": ["terminal"],
+        "timeout": 10,
+        "fixtures": {"error.txt": "tool failed"},
+        "success_criteria": ["verify", "blocker"],
+        "expected_keywords": ["verify", "blocker"],
+        "split": "validation",
+    }, {"id": "tr", "prompt": "train", "split": "train", "expected_keywords": ["tool"]}])
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    candidate_eval = json.loads((run_dir / "candidate_validation_results.json").read_text(encoding="utf-8"))
+    assert manifest["target_executor"] == "hermes_replay_runner_mvp"
+    assert manifest["target_config_id"] == "frozen-hermes-replay-mvp-v1"
+    assert candidate_eval["results"][0]["metadata"].get("assertion_results") or candidate_eval["results"][0]["metadata"].get("assertion_count") == 2
+
+
+def test_rejected_edit_history_enters_reflection_prompt(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely. uniquegold")
+    old_run = tmp_path / "skillopt" / "staging" / "old-demo"
+    old_run.mkdir(parents=True)
+    (old_run / "manifest.json").write_text(json.dumps({"skill_name": "demo"}), encoding="utf-8")
+    (old_run / "rejected_edits.jsonl").write_text(json.dumps({"iteration": 1, "reasoning": "do not repeat me"}) + "\n", encoding="utf-8")
+    prompts = []
+
+    class CaptureBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        def json(self, prompt, schema_hint, repair_path=None):
+            prompts.append(prompt)
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": []}
+            if schema_hint["kind"] == "edit":
+                return {"edits": [], "reasoning": "no-op"}
+            return {"accepted": False, "rationale": "aux only"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: CaptureBackend())
+    core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    assert any("REJECTED_EDIT_HISTORY" in p and "do not repeat me" in p for p in prompts)
 
 
 def test_legacy_dry_run_manifest_refuses_adopt_even_with_force(tmp_path):

@@ -270,6 +270,38 @@ def _jsonl_write(path: Path, rows: list[dict[str, Any]]) -> None:
     write_text(path, "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in rows))
 
 
+def _jsonl_read(path: Path, limit: int = 20) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows[-max(0, int(limit)):]
+
+
+def load_rejected_edit_history(home: Path, skill_name: str, limit: int = 20) -> list[dict[str, Any]]:
+    staging = home / "skillopt" / "staging"
+    if not staging.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(staging.glob("*/rejected_edits.jsonl"), key=lambda p: p.stat().st_mtime):
+        try:
+            manifest = json.loads((path.parent / "manifest.json").read_text(encoding="utf-8"))
+            if manifest.get("skill_name") != skill_name:
+                continue
+        except Exception:
+            pass
+        for row in _jsonl_read(path, limit=limit):
+            rows.append({"run_id": path.parent.name, **row})
+    return rows[-max(0, int(limit)):]
+
+
 def _safe_sql_ident(name: str) -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         raise ValueError("unsafe sqlite identifier")
@@ -488,7 +520,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     from hermes_skillopt.gate import ValidationGate
     from hermes_skillopt.optimizer import OptimizerBackend
     from hermes_skillopt.state import SkillOptArtifacts, SkillState
-    from hermes_skillopt.target import TargetExecutor
+    from hermes_skillopt.target import HermesRolloutRunner, TargetExecutor
+    from hermes_skillopt.trainer import StageRecorder
 
     home = hermes_home(hermes_home_path)
     dirs = ensure_dirs(home)
@@ -502,9 +535,11 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     llm = LLMBackend(backend=backend, allow_mock=allow_mock, ctx=ctx)
     env = HermesSkillEnv(state, query=query, lookback_days=lookback_days, limit=limit, eval_file=eval_file)
     tasks, evidence = env.build_tasks()
-    executor = TargetExecutor()
+    replay_enabled = any(t.assertions for split_tasks in tasks.values() for t in split_tasks)
+    executor = TargetExecutor(runner=HermesRolloutRunner() if replay_enabled else None)
     optimizer = OptimizerBackend(llm, edit_budget=edit_budget)
     gatekeeper = ValidationGate()
+    stages = StageRecorder(run_dir)
 
     current = original
     best = original
@@ -513,6 +548,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     all_edits: list[dict[str, Any]] = []
     all_gates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    rejected_history = load_rejected_edit_history(home, target.name)
 
     write_text(artifacts.original, original)
     write_text(artifacts.current, current)
@@ -523,11 +559,16 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
 
     for it in range(1, max(1, int(iterations)) + 1):
         train_eval = executor.evaluate(current, tasks["train"], label=f"current_train_{it}")
-        reflection = optimizer.reflect(tasks["train"], current, train_eval, run_dir, it)
-        candidate = optimizer.propose(reflection, current, run_dir, it)
+        stages.rollout(it, train_eval)
+        reflection = optimizer.reflect(tasks["train"], current, train_eval, run_dir, it, rejected_history=rejected_history + rejected)
+        stages.reflect(it, reflection, len(rejected_history) + len(rejected))
+        stages.aggregate(it, reflection, edit_budget)
+        candidate = optimizer.propose(reflection, current, run_dir, it, rejected_context=rejected_history + rejected)
         edit_plan = {"iteration": it, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True}
+        stages.select(it, edit_plan)
         write_text(run_dir / f"candidate_{it}_SKILL.md", candidate.text)
         write_text(run_dir / f"candidate_{it}_edits.json", json.dumps(edit_plan, ensure_ascii=False, indent=2) + "\n")
+        stages.update(it, sha256_text(candidate.text), candidate.text != current)
 
         current_val = executor.evaluate(current, tasks["val"], label=f"current_val_{it}")
         candidate_val = executor.evaluate(candidate.text, tasks["val"], label=f"candidate_val_{it}")
@@ -547,6 +588,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         except Exception as exc:
             judge = {"judge_error": str(exc)}
         gate = gatekeeper.decide(it, current_val, candidate_val, current, candidate.text, judge=judge).as_dict()
+        stages.evaluate(it, current_val, candidate_val, gate)
         if gate["accepted"]:
             current = candidate.text
             best = candidate.text
@@ -581,7 +623,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     current_score = validation_summary.get("current_score") if validation_summary else None
     candidate_score = validation_summary.get("candidate_score") if validation_summary else None
     gate_reason = validation_summary.get("rationale") if validation_summary else "none"
-    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score; fallback/synthetic scorecards are review-only\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- target_executor: {executor.mode}\n- target_config_id: {executor.target_config_id}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score; fallback/synthetic scorecards are review-only\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
     write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
@@ -596,6 +638,9 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "proposed_sha256": sha256_text(proposed),
         "engine": "hermes-native-skillopt-core-adapter",
         "backend": llm.mode,
+        "target_executor": executor.mode,
+        "target_config_id": executor.target_config_id,
+        "rejected_history_count": len(rejected_history),
         "eval_file": eval_file_used,
         "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}),
         "curated_task_count": evidence.get("curated_task_count", 0),
