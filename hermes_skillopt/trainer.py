@@ -48,29 +48,42 @@ class StageRecorder:
         self.stage_dir = run_dir / "stages"
         self.records: list[dict[str, Any]] = []
 
-    def _record(self, iteration: int, stage: str, evidence: dict[str, Any]) -> None:
+    def _fingerprint(self, payload: Any) -> str:
+        from hermes_skillopt.core import _stable_json_sha  # lazy import avoids module cycle
+
+        return _stable_json_sha(payload)
+
+    def _record(self, iteration: int, stage: str, evidence: dict[str, Any], *, input_payload: Any | None = None, output_payload: Any | None = None) -> None:
         self.stage_dir.mkdir(parents=True, exist_ok=True)
-        row = {"iteration": iteration, "stage": stage, "evidence": evidence}
+        input_payload = evidence if input_payload is None else input_payload
+        output_payload = evidence if output_payload is None else output_payload
+        row = {"schema_version": "skillopt-stage-v1", "iteration": iteration, "stage": stage, "input_sha256": self._fingerprint(input_payload), "output_sha256": self._fingerprint(output_payload), "evidence": evidence}
         self.records.append(row)
         (self.stage_dir / f"{iteration:03d}_{stage}.json").write_text(json.dumps(row, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def rollout(self, iteration: int, train_eval: dict[str, Any]) -> None:
-        self._record(iteration, "rollout", {"score": train_eval.get("score"), "num_tasks": train_eval.get("num_tasks"), "executor": train_eval.get("executor")})
+        evidence = {"score": train_eval.get("score"), "num_tasks": train_eval.get("num_tasks"), "executor": train_eval.get("executor")}
+        self._record(iteration, "rollout", evidence, output_payload=train_eval)
 
     def reflect(self, iteration: int, reflection: dict[str, Any], rejected_context_count: int) -> None:
-        self._record(iteration, "reflect", {"keys": sorted(reflection.keys()), "rejected_context_count": rejected_context_count})
+        evidence = {"keys": sorted(reflection.keys()), "rejected_context_count": rejected_context_count}
+        self._record(iteration, "reflect", evidence, input_payload={"rejected_context_count": rejected_context_count}, output_payload=reflection)
 
     def aggregate(self, iteration: int, reflection: dict[str, Any], edit_budget: int) -> None:
-        self._record(iteration, "aggregate", {"strategy": "multi_candidate_conservative_rank_select", "reflection_keys": sorted(reflection.keys()), "edit_budget": edit_budget})
+        evidence = {"strategy": "multi_candidate_conservative_rank_select", "reflection_keys": sorted(reflection.keys()), "edit_budget": edit_budget}
+        self._record(iteration, "aggregate", evidence, input_payload=reflection, output_payload=evidence)
 
     def select(self, iteration: int, edit_plan: dict[str, Any]) -> None:
-        self._record(iteration, "select", {"selected_candidate_id": edit_plan.get("candidate_id"), "selected_edits": len(edit_plan.get("edits") or []), "bounded": bool(edit_plan.get("bounded")), "validation": edit_plan.get("validation"), "ranked_candidates": edit_plan.get("ranked_candidates", [])})
+        evidence = {"selected_candidate_id": edit_plan.get("candidate_id"), "selected_edits": len(edit_plan.get("edits") or []), "bounded": bool(edit_plan.get("bounded")), "validation": edit_plan.get("validation"), "ranked_candidates": edit_plan.get("ranked_candidates", [])}
+        self._record(iteration, "select", evidence, input_payload=edit_plan.get("ranked_candidates", []), output_payload=edit_plan)
 
     def update(self, iteration: int, candidate_sha256: str, changed: bool) -> None:
-        self._record(iteration, "update", {"candidate_sha256": candidate_sha256, "candidate_changed": changed})
+        evidence = {"candidate_sha256": candidate_sha256, "candidate_changed": changed}
+        self._record(iteration, "update", evidence, output_payload=evidence)
 
     def evaluate(self, iteration: int, current_val: dict[str, Any], candidate_val: dict[str, Any], gate: dict[str, Any]) -> None:
-        self._record(iteration, "evaluate", {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted"), "candidate_id": gate.get("candidate_id")})
+        evidence = {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted"), "candidate_id": gate.get("candidate_id")}
+        self._record(iteration, "evaluate", evidence, input_payload={"current_val": current_val, "candidate_val": candidate_val}, output_payload=gate)
 
 
 class SixStageSkillOptTrainer:

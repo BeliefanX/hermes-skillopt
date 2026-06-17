@@ -65,6 +65,7 @@ class SkillOptArtifacts:
     best: Path
     target_binding: Path
     provenance_binding: Path
+    history: Path
 
     @classmethod
     def for_run(cls, run_id: str, run_dir: Path) -> "SkillOptArtifacts":
@@ -93,6 +94,7 @@ class SkillOptArtifacts:
             best=run_dir / "best_skill.md",
             target_binding=run_dir / "target_binding.json",
             provenance_binding=run_dir / "provenance_binding.json",
+            history=run_dir / "history.json",
         )
 
     def manifest_files(self, include_best: bool) -> dict[str, str]:
@@ -117,6 +119,7 @@ class SkillOptArtifacts:
             "slow_meta": self.slow_meta.name,
             "target_binding": self.target_binding.name,
             "provenance_binding": self.provenance_binding.name,
+            "history": self.history.name,
         }
         if include_best:
             files["best"] = self.best.name

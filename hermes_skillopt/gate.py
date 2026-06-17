@@ -99,8 +99,10 @@ class ValidationGate:
             rejection_reasons.append("candidate edit was a no-op")
 
         soft_ok = metrics["soft_delta"] > min_delta
-        hard_improved = metrics["hard_delta"] > 0.0
-        hard_nonregress = metrics["hard_delta"] >= 0.0 or bool(self.policy.hard_regression_allowed)
+        task_regressions = metrics.get("per_task_regressions") or []
+        per_task_nonregress = not task_regressions or bool(self.policy.hard_regression_allowed)
+        hard_improved = metrics["hard_delta"] > 0.0 and per_task_nonregress
+        hard_nonregress = (metrics["hard_delta"] >= 0.0 and per_task_nonregress) or bool(self.policy.hard_regression_allowed)
 
         if mode == "soft":
             metric_ok = soft_ok
@@ -109,7 +111,7 @@ class ValidationGate:
         elif mode == "hard":
             metric_ok = hard_improved
             if not hard_improved:
-                rejection_reasons.append("hard pass-rate metric did not strictly improve")
+                rejection_reasons.append("hard pass-rate metric did not strictly improve or a previously passing task regressed")
         elif mode == "mixed":
             metric_ok = soft_ok and hard_nonregress
             if not soft_ok:
@@ -151,11 +153,34 @@ class ValidationGate:
             "candidate": {"soft_score": candidate_soft, "hard_pass_rate": candidate_hard},
             "soft_delta": round(candidate_soft - current_soft, 6),
             "hard_delta": round(candidate_hard - current_hard, 6),
+            "per_task_regressions": self._per_task_regressions(current_eval, candidate_eval),
             "mixed": {
                 "soft_improved": candidate_soft > current_soft + float(self.policy.min_delta),
-                "hard_nonregression": candidate_hard >= current_hard or bool(self.policy.hard_regression_allowed),
+                "hard_nonregression": candidate_hard >= current_hard and not self._per_task_regressions(current_eval, candidate_eval) or bool(self.policy.hard_regression_allowed),
             },
         }
+
+    def _per_task_regressions(self, current_eval: dict[str, Any], candidate_eval: dict[str, Any]) -> list[dict[str, Any]]:
+        current_rows = [r for r in (current_eval.get("results") or []) if isinstance(r, dict)]
+        candidate_rows = [r for r in (candidate_eval.get("results") or []) if isinstance(r, dict)]
+        by_id = {str(r.get("task_id") or r.get("id") or i): r for i, r in enumerate(candidate_rows)}
+        regressions: list[dict[str, Any]] = []
+        for i, row in enumerate(current_rows):
+            task_id = str(row.get("task_id") or row.get("id") or i)
+            cand = by_id.get(task_id)
+            if cand is None:
+                continue
+            current_passed = bool(row.get("passed"))
+            candidate_passed = bool(cand.get("passed"))
+            if current_passed and not candidate_passed:
+                regressions.append({
+                    "task_id": task_id,
+                    "current_passed": current_passed,
+                    "candidate_passed": candidate_passed,
+                    "current_score": row.get("score"),
+                    "candidate_score": cand.get("score"),
+                })
+        return regressions
 
     def _weighted_pass_rate(self, eval_result: dict[str, Any]) -> float:
         rows = [r for r in (eval_result.get("results") or []) if isinstance(r, dict)]

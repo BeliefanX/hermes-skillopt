@@ -45,6 +45,7 @@ SCHEMAS = {
     "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_full_run": _schema("Run full core pipeline: load skill state, build benchmark tasks, frozen target eval, optimizer reflect/edit, validation gate (candidate_score > current_score only), staged artifacts.", FULL_PROPS),
+    "hermes_skillopt_resume_inspect": _schema("Read-only step-level resume inspection: verifies checkpoint/stage fingerprints and artifact hashes; refuses unsafe partial continuation.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, and diff/report preview.", {**COMMON_HOME, "run_id": {"type": "string"}, "include_diff_chars": {"type": "integer", "default": 4000}}, ["run_id"]),
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", WRITEBACK_PROPS, ["run_id"]),
@@ -108,6 +109,10 @@ def _handle_review(args: dict, **kw) -> str:
     return _ok(core.review, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home"), "include_diff_chars": int(args.get("include_diff_chars") or 4000)})
 
 
+def _handle_resume_inspect(args: dict, **kw) -> str:
+    return _ok(core.inspect_resume_run, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home")})
+
+
 def _handle_adopt(args: dict, **kw) -> str:
     return _ok(core.adopt, {"run_id": args.get("run_id"), "hermes_home_path": None, "force": bool(args.get("force", False))})
 
@@ -132,6 +137,7 @@ _TOOLS = (
     ("hermes_skillopt_dry_run", SCHEMAS["hermes_skillopt_dry_run"], _handle_dry_run, "🧪"),
     ("hermes_skillopt_run", SCHEMAS["hermes_skillopt_run"], _handle_run, "🧠"),
     ("hermes_skillopt_full_run", SCHEMAS["hermes_skillopt_full_run"], _handle_run, "🧠"),
+    ("hermes_skillopt_resume_inspect", SCHEMAS["hermes_skillopt_resume_inspect"], _handle_resume_inspect, "🔎"),
     ("hermes_skillopt_review", SCHEMAS["hermes_skillopt_review"], _handle_review, "🔎"),
     ("hermes_skillopt_adopt", SCHEMAS["hermes_skillopt_adopt"], _handle_adopt, "✅"),
     ("hermes_skillopt_rollback", SCHEMAS["hermes_skillopt_rollback"], _handle_rollback, "↩️"),

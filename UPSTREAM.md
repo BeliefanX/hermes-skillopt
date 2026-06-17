@@ -6,8 +6,9 @@
 
 - Local plugin: Hermes toolset, CLI, WebUI, staged artifacts, bounded edits, profile-safe adopt/rollback, tests.
 - Upstream reference: `https://github.com/microsoft/SkillOpt.git`, cloned/fetched under `$HERMES_HOME/skillopt/upstream/SkillOpt` when requested.
-- Lock file: `skillopt_upstream.lock` records the upstream URL, clone path, pinned commit, and update time.
+- Lock file: `skillopt_upstream.lock` records the upstream URL, clone path, pinned commit, last-reviewed upstream commit, and update time.
 - Current lock pin: `86bad36ffe511b7022a6c735930056c14124b960`.
+- Last-reviewed upstream commit: `86bad36ffe511b7022a6c735930056c14124b960` (reviewed against the Hermes seam matrix below; pin updates do not merge code automatically).
 
 The adapter implements SkillOpt-inspired concepts in Hermes terms:
 
@@ -35,6 +36,21 @@ Semantics:
 - `upstream-update --fetch-only` refreshes the canonical clone without adopting upstream code.
 - `upstream-update` can refresh clone/lock metadata. It does not merge files into this plugin and does not adopt any Hermes skill.
 - The production tool/CLI/WebUI upstream surface does not accept arbitrary repo paths; it uses the canonical `$HERMES_HOME/skillopt/upstream/SkillOpt` location.
+
+## Upstream seam matrix / delta checklist
+
+`upstream-status` returns this matrix under `feature_matrix`/`delta_checklist`; keep it in sync when porting upstream ideas.
+
+- `trainer_loop`: upstream rollout/reflection/update/evaluate loop is adapted as `SixStageSkillOptTrainer` rollout → reflect → aggregate → select → update → evaluate with six stage artifacts and staged-only writes.
+- `reflection_prompts`: upstream reflection prompting is adapted as redacted `OptimizerBackend.reflect` prompts with rejected-history context and prompt SHA-256 provenance.
+- `skill_aware_reflection`: upstream skill-aware analysis is adapted as deterministic `skill_defect` vs `execution_lapse` labels over Hermes `EvalTask` evidence.
+- `aggregate_clip`: upstream edit aggregation is adapted as `aggregate_edit_proposals` merge/dedupe/rejected-filter/edit-budget clipping.
+- `gate`: upstream candidate validation is adapted as deterministic `soft|hard|mixed|strict` metric gates; LLM judge text is explanation-only and hard/mixed gates include per-task regression metadata.
+- `artifact_resume`: upstream artifacts/checkpoints are adapted as manifest/checkpoint/artifact hashes with completed-run-only resume and profile/path/SHA guards.
+- `benchmarks_tests`: upstream benchmark ideas are adapted as Hermes eval packs plus explicit curated production validation/test eligibility.
+- `benchmark_bridge`: upstream-style benchmark manifests are accepted only as inert JSON data and converted to Hermes eval packs; executable/remote benchmark fields are rejected.
+- `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text, not live cross-model training or writeback.
+- `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
 
 ## Curated eval and gate alignment
 
@@ -65,6 +81,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - Production adoption is narrower than generic optimization: explicit curated validation plus held-out curated test gates are required.
 - Sandbox support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
+- Benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; transfer eval does not create real cross-model claims.
 
 ## Upstream diff/status workflow
 

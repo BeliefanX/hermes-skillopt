@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from hermes_skillopt import core
+from hermes_skillopt.env import EvalTask
+from hermes_skillopt.optimizer import OptimizerBackend, analyze_rollout_reflections, summarize_rejected_edits
 
 
 @pytest.fixture(autouse=True)
@@ -237,6 +239,24 @@ def test_upstream_status_no_network(tmp_path):
     assert out["clone_exists"] is False
     assert out["upstream_url"].endswith("microsoft/SkillOpt.git")
     assert out["clone_path"] == str((tmp_path / "skillopt" / "upstream" / "SkillOpt").resolve())
+    lock_data = json.loads((core.PLUGIN_ROOT / "skillopt_upstream.lock").read_text(encoding="utf-8"))
+    assert out["current_lock_pin"] == lock_data["pinned_commit"]
+    assert out["last_reviewed_upstream_commit"] == lock_data["last_reviewed_upstream_commit"]
+    seams = {row["seam"] for row in out["feature_matrix"]}
+    assert {"trainer_loop", "reflection_prompts", "skill_aware_reflection", "aggregate_clip", "gate", "artifact_resume", "benchmarks_tests"} <= seams
+    assert out["delta_checklist"] == out["feature_matrix"]
+
+
+def test_upstream_status_reads_enriched_lock_metadata(tmp_path):
+    lock = core.PLUGIN_ROOT / "skillopt_upstream.lock"
+    original = lock.read_text(encoding="utf-8")
+    try:
+        lock.write_text(json.dumps({"pinned_commit": "pin", "last_reviewed_upstream_commit": "reviewed"}), encoding="utf-8")
+        out = core.upstream_status(hermes_home_path=str(tmp_path))
+        assert out["current_lock_pin"] == "pin"
+        assert out["last_reviewed_upstream_commit"] == "reviewed"
+    finally:
+        lock.write_text(original, encoding="utf-8")
 
 
 def test_upstream_status_rejects_noncanonical_repo_path_by_default(tmp_path):
@@ -413,9 +433,57 @@ def test_full_run_resume_reuses_completed_checkpoint_and_refuses_mismatch(tmp_pa
     assert resumed["resumed"] is True
     assert resumed["resume_reused"] is True
     assert resumed["run_id"] == out["run_id"]
+    inspection = resumed["resume_inspection"]
+    assert inspection["safe_reuse_completed"] is True
+    assert inspection["partial_continuation_available"] is False
+    assert all(s["fingerprints_present"] for s in inspection["stages"])
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
         core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, edit_budget=2, resume_run_id=out["run_id"])
+
+
+def test_resume_checkpoint_relative_eval_file_hashes_profile_local_file(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    eval_rel = eval_path.relative_to(tmp_path).as_posix()
+
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=eval_rel, backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    input_payload = checkpoint["input"]
+    original_sha = input_payload["eval_file_sha256"]
+
+    assert input_payload["eval_file"] == str(eval_path.resolve())
+    assert original_sha == core.sha256_file(eval_path)
+
+    eval_path.write_text(
+        json.dumps({"id": "v2", "prompt": "changed validation", "expected_keywords": ["changed"], "split": "validation"}) + "\n",
+        encoding="utf-8",
+    )
+    assert core.sha256_file(eval_path) != original_sha
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=eval_rel, backend="mock", allow_mock=True, resume_run_id=out["run_id"])
+
+
+def test_resume_inspection_refuses_incomplete_or_unfingerprinted_stage(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    checkpoint["status"] = "running"
+    (run_dir / "checkpoint.json").write_text(json.dumps(checkpoint), encoding="utf-8")
+    stage = run_dir / "stages" / "001_rollout.json"
+    row = json.loads(stage.read_text(encoding="utf-8"))
+    row.pop("input_sha256", None)
+    stage.write_text(json.dumps(row), encoding="utf-8")
+
+    inspection = core.inspect_resume_run(out["run_id"], hermes_home_path=str(tmp_path))
+    assert inspection["safe_reuse_completed"] is False
+    assert inspection["partial_continuation_available"] is False
+    assert any("missing input/output fingerprint" in reason for reason in inspection["refusal_reasons"])
+    assert any("partial-stage continuation is refused" in reason for reason in inspection["refusal_reasons"])
 
 
 def test_rejected_step_buffer_reused_by_next_candidate(monkeypatch, tmp_path):
@@ -453,11 +521,27 @@ def test_protected_region_rejection_and_slow_meta_artifact(tmp_path):
     assert any(r.get("reason") == "outside_allowed_region" or r.get("reason") == "protected_section" for r in result.rejected_edits)
 
     make_skill(tmp_path, "demo", body="Use tools safely.")
+    live_before = (tmp_path / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8")
     out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
-    slow = json.loads((Path(out["run_dir"]) / "slow_meta.json").read_text(encoding="utf-8"))
+    run_dir = Path(out["run_dir"])
+    slow = json.loads((run_dir / "slow_meta.json").read_text(encoding="utf-8"))
     assert slow["mode"] == "evidence_only_no_live_write"
+    assert slow["optimizer_memory_mode"] == "optimizer_only_evidence_no_live_write"
+    assert slow["artifact_role"] == "optimizer_memory_only_not_deployable_skill"
     assert slow["normal_gate_required_for_any_write"] is True
-    assert "slow_meta" in json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))["files"]
+    assert "optimizer_rejected_memory" in slow
+    assert (tmp_path / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8") == live_before
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "slow_meta" in manifest["files"]
+    assert "history" in manifest["files"]
+    history = json.loads((run_dir / "history.json").read_text(encoding="utf-8"))
+    assert history["schema_version"] == "skillopt-history-v1"
+    assert history["parent_sha256"] == manifest["original_sha256"]
+    assert history["proposed_sha256"] == manifest["proposed_sha256"]
+    assert history["timeline"]
+    assert history["candidates"]
+    assert all("parent_sha256" in c and "accept_reject_reasons" in c for c in history["candidates"])
+    core.verify_artifact_hashes(run_dir, manifest)
 
 
 def test_append_cannot_replace_protected_heading_or_mutate_allowed_markers():
@@ -727,9 +811,11 @@ def test_extended_eval_schema_and_hermes_replay_runner(tmp_path):
     run_dir = Path(out["run_dir"])
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     candidate_eval = json.loads((run_dir / "candidate_validation_results.json").read_text(encoding="utf-8"))
-    assert manifest["target_executor"] == "hermes_replay_runner_mvp"
-    assert manifest["target_config_id"] == "frozen-hermes-replay-mvp-v1"
+    assert manifest["target_executor"] == "hermes_trace_replay_runner_v1"
+    assert manifest["target_config_id"] == "frozen-hermes-trace-replay-v2"
+    assert candidate_eval["target_backend_config"]["parameters"]["trace_schema"] == "hermes-target-trace-v1"
     assert candidate_eval["results"][0]["metadata"].get("assertion_results") or candidate_eval["results"][0]["metadata"].get("assertion_count") == 2
+    assert candidate_eval["results"][0]["metadata"]["trajectory"]["messages"]
 
 
 def test_rejected_edit_history_enters_reflection_prompt(monkeypatch, tmp_path):
@@ -884,6 +970,11 @@ def test_stage_recorder_writes_all_six_stage_artifacts(tmp_path):
     assert {p.name for p in (tmp_path / "stages").glob("001_*.json")} == {
         "001_rollout.json", "001_reflect.json", "001_aggregate.json", "001_select.json", "001_update.json", "001_evaluate.json"
     }
+    for p in (tmp_path / "stages").glob("001_*.json"):
+        row = json.loads(p.read_text(encoding="utf-8"))
+        assert row["schema_version"] == "skillopt-stage-v1"
+        assert row["input_sha256"]
+        assert row["output_sha256"]
 
 
 def test_discover_skills_rejects_symlink_escape_before_read(tmp_path):
@@ -948,8 +1039,14 @@ def test_backend_separation_configs_and_fingerprints(tmp_path):
     assert prov["target_backend_config"] == manifest["target_backend_config"]
     assert prov["gate_policy"] == manifest["gate_policy"]
     assert prov["optimizer_fingerprint_sha256"]
-    assert prov["target_fingerprint_sha256"]
+    assert prov["target_fingerprint_sha256"] == manifest["target_backend_config"]["fingerprint_sha256"]
     assert prov["gate_policy_fingerprint_sha256"]
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["input"]["target_config_id"] == manifest["target_config_id"]
+    assert checkpoint["input"]["target_trace_schema"] == manifest["target_backend_config"]["parameters"]["trace_schema"]
+    gate = manifest["gate"]
+    assert gate["current_eval"]["target_fingerprint_sha256"] == gate["candidate_eval"]["target_fingerprint_sha256"]
+    assert gate["current_eval"]["target_backend_config"] == gate["candidate_eval"]["target_backend_config"]
 
 
 def test_validation_gate_hard_soft_mixed_modes_ignore_llm_override():
@@ -990,6 +1087,31 @@ def test_validation_gate_hard_soft_mixed_modes_ignore_llm_override():
     assert "explanation-only" in rejected.as_dict()["acceptance_rule"]
 
 
+def test_validation_gate_hard_mixed_report_and_block_per_task_regression():
+    from hermes_skillopt.gate import ValidationGate
+
+    current = {"score": 0.5, "results": [
+        {"task_id": "keep", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+        {"task_id": "gain1", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+        {"task_id": "gain2", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+    ]}
+    candidate = {"score": 0.8, "results": [
+        {"task_id": "keep", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+        {"task_id": "gain1", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+        {"task_id": "gain2", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+    ]}
+
+    hard = ValidationGate(gate_mode="hard").decide(1, current, candidate, "a", "b")
+    mixed = ValidationGate(gate_mode="mixed").decide(1, current, candidate, "a", "b")
+    assert hard.accepted is False
+    assert mixed.accepted is False
+    assert hard.metric_summary is not None
+    assert hard.metric_summary["hard_delta"] > 0
+    assert hard.metric_summary["per_task_regressions"][0]["task_id"] == "keep"
+    assert "previously passing task regressed" in hard.rationale
+    assert "hard pass-rate regressed" in mixed.rationale
+
+
 def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):
     make_skill(tmp_path, "demo", body="Use tools safely.")
     eval_path = write_eval_file(tmp_path)
@@ -1004,6 +1126,13 @@ def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):
     assert manifest["provenance_fingerprint"]["eval_file_sha256"] == core.sha256_file(eval_path)
     assert manifest["provenance_fingerprint"]["fingerprint_sha256"]
     assert manifest["provenance_fingerprint"]["schema_version"] == "skillopt-provenance-v2"
+    assert manifest["provenance_fingerprint"]["algorithm_version"] == manifest["algorithm_version"] == core.ALGORITHM_VERSION
+    assert manifest["optimizer_backend_config"]["prompt_fingerprints"]
+    assert manifest["optimizer_backend_config"]["prompt_fingerprint_sha256"] == manifest["provenance_fingerprint"]["optimizer_prompt_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["optimizer_prompt_fingerprints"][0]["prompt_sha256"]
+    assert manifest["optimizer_backend_config"]["sampling"]["deterministic"] is True
+    assert "optimizer_prompt_fingerprint" in report
+    assert "algorithm_version" in report
     assert manifest["provenance_fingerprint"]["plugin_repo"]["repo_path"] == str(core.PLUGIN_ROOT.resolve())
     assert "commit" in manifest["provenance_fingerprint"]["plugin_repo"]
     assert "sha256" in manifest["provenance_fingerprint"]["upstream_lock"]
@@ -1113,18 +1242,21 @@ def test_multi_candidate_rank_select_buffers_rejected_candidates(monkeypatch, tm
     eval_path = write_eval_file(tmp_path)
 
     class MultiBackend(core.LLMBackend):
-        def __init__(self): pass
+        def __init__(self):
+            self.edit_prompts: list[str] = []
         mode = "mock"
         def json(self, prompt, schema_hint, repair_path=None):
             if schema_hint["kind"] == "reflect":
                 return {"recurring_defects": ["need validation"]}
             if schema_hint["kind"] == "edit":
+                self.edit_prompts.append(prompt)
                 if "CANDIDATE_INDEX=1" in prompt:
                     return {"edits": [{"op": "append", "text": "\n\n## Weak candidate\n\n- mention tool only.\n"}], "reasoning": "weak"}
                 return {"edits": [{"op": "append", "text": "\n\n## Strong candidate\n\n- verify blockers and rollback with tool checks.\n"}], "reasoning": "strong"}
             return {"rationale": "aux"}
 
-    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: MultiBackend())
+    backend = MultiBackend()
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: backend)
     out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, candidate_count=2)
     run_dir = Path(out["run_dir"])
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -1138,7 +1270,63 @@ def test_multi_candidate_rank_select_buffers_rejected_candidates(monkeypatch, tm
     assert all("metric_summary" in row and "rejection_reasons" in row and "rank" in row for row in ranked)
     assert any(row["selected"] is True for row in ranked)
     assert "candidate-1-1" in rejected and "selection_rejection" in rejected
+    assert len(backend.edit_prompts) == 2
+    assert "candidate-1-1" in backend.edit_prompts[1]
+    assert "Weak candidate" in backend.edit_prompts[1]
     assert "Strong candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
+
+
+def test_optimizer_reflection_separates_success_failure_and_labels_lapses():
+    tasks = [
+        EvalTask(id="skill-miss", prompt="p", expected_terms=("verify",), split="train"),
+        EvalTask(id="tool-lapse", prompt="p", expected_terms=("tool",), split="train"),
+        EvalTask(id="ok", prompt="p", expected_terms=("tool",), split="train"),
+    ]
+    current_eval = {
+        "results": [
+            {"task_id": "skill-miss", "score": 0.2, "passed": False, "feedback": "failed=['expected_keyword:verify']"},
+            {"task_id": "tool-lapse", "score": 0.0, "passed": False, "feedback": "timeout blocked tool error", "metadata": {"sandbox_command_blocked": True}},
+            {"task_id": "ok", "score": 0.8, "passed": True, "feedback": "passed=['expected_keyword:tool']"},
+        ]
+    }
+
+    reflection = analyze_rollout_reflections(tasks, current_eval)
+
+    assert [r["label"] for r in reflection["failure_reflections"]] == ["skill_defect", "execution_lapse"]
+    assert reflection["success_reflections"][0]["task_id"] == "ok"
+    assert reflection["reflection_counts"] == {"skill_defect": 1, "execution_lapse": 1, "success": 1}
+
+
+def test_optimizer_budget_clip_and_rejected_filter_are_deterministic(tmp_path):
+    current = "---\nname: demo\n---\n# demo\n\nBase.\n"
+    rejected_edit = {"op": "append", "text": "\n\n## Bad prior\n\n- avoid repeating this.\n"}
+    rejected_context = summarize_rejected_edits([{"iteration": 0, "candidate_id": "old", "edits": [rejected_edit], "gate": {"rejection_reasons": ["non-selected"]}}])
+
+    class Backend:
+        mode = "hermes"
+        def json(self, prompt, schema_hint, repair_path=None):
+            assert "REJECTED_EDIT_HISTORY" in prompt
+            return {
+                "edits": [
+                    rejected_edit,
+                    {"op": "append", "text": "\n\n## First kept\n\n- verify blocker.\n"},
+                    {"op": "append", "text": "\n\n## Clipped\n\n- rollback.\n"},
+                ],
+                "reasoning": "fixture",
+            }
+
+    opt = OptimizerBackend(Backend(), edit_budget=1)
+    cand1 = opt.propose_candidate({"recurring_defects": ["x"]}, current, tmp_path, 1, 1, rejected_context=rejected_context)
+    cand2 = opt.propose_candidate({"recurring_defects": ["x"]}, current, tmp_path, 1, 1, rejected_context=rejected_context)
+
+    assert cand1.text == cand2.text
+    assert len(cand1.edits) == 1
+    assert "First kept" in cand1.text
+    assert "Bad prior" not in cand1.text
+    aggregate = cand1.validation["aggregate"]
+    assert aggregate["filtered_rejected_count"] == 1
+    assert aggregate["clipped_count"] == 1
+    assert [r["reason"] for r in aggregate["rejected"]] == ["previously_rejected", "edit_budget_clip"]
 
 
 def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch, tmp_path):

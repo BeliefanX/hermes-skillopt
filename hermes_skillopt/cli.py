@@ -36,10 +36,17 @@ def main() -> int:
     fr = sub.add_parser("full-run"); add_full_args(fr)
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
     r = sub.add_parser("review"); r.add_argument("run_id")
+    ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
     a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true"); a.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true"); rb.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     sub.add_parser("upstream-status")
     uu = sub.add_parser("upstream-update"); uu.add_argument("--fetch-only", action="store_true")
+    ubi = sub.add_parser("import-upstream-benchmark", help="Safely convert an upstream-style JSON benchmark manifest into a Hermes eval pack")
+    ubi.add_argument("manifest"); ubi.add_argument("--output"); ubi.add_argument("--pack-id"); ubi.add_argument("--version"); ubi.add_argument("--curated", action="store_true", help="Mark imported pack as curated instead of sample/review-only")
+    te = sub.add_parser("transfer-eval", help="Read-only staged/proposed skill transfer evaluation across target/profile configs")
+    te.add_argument("--run-id"); te.add_argument("--skill-file"); te.add_argument("--eval-file"); te.add_argument("--target", action="append", choices=["scorecard", "replay", "sandbox"], dest="targets"); te.add_argument("--profile-home", action="append", dest="profile_homes"); te.add_argument("--output"); te.add_argument("--allow-live-skill-file", action="store_true", help="Allow explicit --skill-file input; still never writes live skills")
+    conf = sub.add_parser("conformance", help="Run deterministic local conformance suite and write a JSON report")
+    conf.add_argument("--output"); conf.add_argument("--pytest-arg", action="append", dest="pytest_args"); conf.add_argument("--timeout", type=int, default=180)
     ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
     web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
     web.add_argument("--host", default="127.0.0.1")
@@ -58,6 +65,8 @@ def main() -> int:
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
         out = core.review(args.run_id, args.home)
+    elif args.cmd == "resume-inspect":
+        out = core.inspect_resume_run(args.run_id, hermes_home_path=args.home)
     elif args.cmd == "adopt":
         if args.unsafe_cross_profile_writeback and not args.home:
             print("--unsafe-cross-profile-writeback requires --home", file=sys.stderr)
@@ -72,6 +81,15 @@ def main() -> int:
         out = core.upstream_status(args.home)
     elif args.cmd == "upstream-update":
         out = core.upstream_update(args.home, None, args.fetch_only)
+    elif args.cmd == "import-upstream-benchmark":
+        from hermes_skillopt.benchmark_bridge import import_upstream_manifest
+        out = import_upstream_manifest(args.manifest, args.output, pack_id=args.pack_id, version=args.version, sample_pack=not args.curated)
+    elif args.cmd == "transfer-eval":
+        from hermes_skillopt.transfer import transfer_eval
+        out = transfer_eval(hermes_home_path=args.home, run_id=args.run_id, skill_file=args.skill_file, eval_file=args.eval_file, targets=args.targets, profile_homes=args.profile_homes, output_path=args.output, staged_only=not args.allow_live_skill_file)
+    elif args.cmd == "conformance":
+        from hermes_skillopt.conformance import run_conformance
+        out = run_conformance(output_path=args.output, pytest_args=args.pytest_args, timeout=args.timeout)
     elif args.cmd == "handoff-optimize":
         out = multi_agent.optimize_delegate_handoff(args.requirements, worker=args.worker, context_budget_chars=args.context_budget_chars)
     elif args.cmd == "webui":

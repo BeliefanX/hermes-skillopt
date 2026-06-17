@@ -17,6 +17,9 @@ webui = ["gradio>=4"]
 [project.scripts]
 hermes-skillopt = "hermes_skillopt.cli:main"
 
+[tool.setuptools.package-data]
+hermes_skillopt = ["eval_packs/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

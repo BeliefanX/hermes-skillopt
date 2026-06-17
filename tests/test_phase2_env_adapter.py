@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from hermes_skillopt import core
 from hermes_skillopt.env import (
     EnvAdapter,
@@ -12,10 +14,11 @@ from hermes_skillopt.env import (
     benchmark_task_splits,
     built_in_benchmarks,
     is_production_gate_task,
+    load_eval_pack,
     production_eligibility_for_task,
 )
 from hermes_skillopt.state import SkillState
-from hermes_skillopt.target import DeterministicKeywordScorecard, TargetExecutor
+from hermes_skillopt.target import DeterministicKeywordScorecard, HermesRolloutRunner, HermesSandboxRunner, TargetExecutor
 
 
 def make_skill(home: Path, name: str = "demo", body: str = "Use tools safely.") -> Path:
@@ -95,3 +98,117 @@ def test_report_fields_and_target_split_output(tmp_path):
     assert eval_out["split_score"] == eval_out["score"]
     assert eval_out["split"] == "val"
     assert "regression_cases" in eval_out
+
+
+def test_trace_replay_returns_structured_trajectory_and_blocks_commands():
+    task = EvalTask(
+        "trace-1",
+        "Use tool evidence without executing fixture commands.",
+        split="val",
+        expected_terms=("verify", "tool"),
+        allowed_tools=("read_file",),
+        fixtures={
+            "tool_calls": [{"name": "read_file", "args": {"path": "SKILL.md"}}, {"name": "terminal", "args": {"command": "rm -rf /"}}],
+            "observations": ["fixture observation only"],
+            "command": "touch /tmp/should-not-run",
+        },
+        metadata={"task_origin": "curated", "scorecard_explicit": True},
+    )
+    out = TargetExecutor(runner=HermesRolloutRunner()).evaluate("Verify with tool evidence.", [task], label="current_val")
+    result = out["results"][0]
+    trace = result["metadata"]["trajectory"]
+
+    assert out["target_backend_config"] == TargetExecutor(runner=HermesRolloutRunner()).config.as_dict()
+    assert out["target_fingerprint_sha256"] == out["target_backend_config"]["fingerprint_sha256"]
+    assert trace["schema_version"] == "hermes-target-trace-v1"
+    assert trace["messages"] and trace["tool_calls"] and trace["observations"] and trace["scores"]
+    assert result["metadata"]["task_commands_executed"] is False
+    assert result["metadata"]["sandbox_command_blocked"] is True
+    assert "task_provided_command_blocked" in result["metadata"]["failure_tags"]
+    assert any(call["name"] == "terminal" and call["blocked_reason"] == "tool_not_in_allowed_tools" for call in trace["tool_calls"])
+
+
+def test_sandbox_rejects_task_command_before_command_runner_is_called():
+    called = False
+
+    def runner(argv, cwd, env, timeout):
+        nonlocal called
+        called = True
+        return 0, "should not run"
+
+    task = EvalTask("sandbox-block", "blocked", fixtures={"command": "touch /tmp/nope"})
+    out = TargetExecutor(runner=HermesSandboxRunner(command_runner=runner), requested_executor="sandbox").evaluate("verify", [task])
+    result = out["results"][0]
+
+    assert called is False
+    assert result["score"] == 0.0
+    assert result["metadata"]["sandbox_command_blocked"] is True
+    assert result["metadata"]["task_commands_executed"] is False
+    assert result["metadata"]["trajectory"]["tool_calls"][0]["blocked_reason"] == "arbitrary_command_execution_disabled"
+
+
+def _write_pack(path: Path, *, sample: bool = False, duplicate_test_id: bool = False) -> Path:
+    payload = {
+        "schema_version": "hermes-curated-eval-pack-v1",
+        "pack_id": "demo-hermes-pack",
+        "version": "2026.06",
+        "sample_pack": sample,
+        "require_complete_splits": True,
+        "tasks": [
+            {"id": "train-tool", "split": "train", "prompt": "Train on tool use verification.", "expected_keywords": ["tool", "verify"], "production_gate_eligible": False},
+            {"id": "val-edit", "split": "validation", "prompt": "Validate bounded file editing safety.", "expected_keywords": ["bounded", "guard"], "production_gate_eligible": True},
+            {"id": "test-profile" if not duplicate_test_id else "val-edit", "split": "test", "prompt": "Held-out test for profile isolation and rollback.", "expected_keywords": ["profile", "rollback"], "production_gate_eligible": True},
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_eval_pack_loading_validation_fingerprint_and_split_isolation(tmp_path):
+    pack_path = _write_pack(tmp_path / "skillopt" / "evals" / "demo.json")
+    tasks, meta = load_eval_pack(pack_path)
+
+    assert meta.pack_id == "demo-hermes-pack"
+    assert meta.version == "2026.06"
+    assert len(meta.fingerprint_sha256) == 64
+    assert meta.split_counts == {"train": 1, "val": 1, "test": 1}
+    assert {t.metadata["eval_pack_id"] for t in tasks} == {"demo-hermes-pack"}
+    assert [t.id for t in tasks if t.split == "test"] == ["test-profile"]
+    assert is_production_gate_task(next(t for t in tasks if t.id == "val-edit"))
+
+    bad_path = _write_pack(tmp_path / "skillopt" / "evals" / "bad.json", duplicate_test_id=True)
+    with pytest.raises(ValueError, match="leaks task id"):
+        load_eval_pack(bad_path)
+
+
+def test_sample_eval_pack_is_review_only_even_with_production_flags(tmp_path):
+    pack_path = _write_pack(tmp_path / "skillopt" / "evals" / "sample.json", sample=True)
+    tasks, meta = load_eval_pack(pack_path)
+
+    assert meta.production_eligible_task_count == 0
+    for task in tasks:
+        assert task.metadata["task_origin"] == "sample-eval-pack"
+        assert not is_production_gate_task(task)
+        assert production_eligibility_for_task(task).eligible is False
+
+
+def test_eval_pack_metadata_flows_to_evidence_report_manifest_and_checkpoint(tmp_path):
+    make_skill(tmp_path, body="Use tools safely. verify tool bounded guard profile rollback blocker")
+    pack_path = _write_pack(tmp_path / "skillopt" / "evals" / "demo.json")
+
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(pack_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    evidence = json.loads((run_dir / "evidence.json").read_text(encoding="utf-8"))
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert manifest["eval_pack_id"] == "demo-hermes-pack"
+    assert manifest["eval_pack_fingerprint_sha256"] == evidence["eval_pack_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["eval_pack_id"] == "demo-hermes-pack"
+    assert manifest["production_eval_policy"]["eval_pack_id"] == "demo-hermes-pack"
+    assert checkpoint["input"]["eval_pack_id"] == "demo-hermes-pack"
+    assert "eval_pack_id: demo-hermes-pack" in report
+    assert "validation_selects_candidates_test_is_heldout" in report
+    assert evidence["split_governance"]["test"].startswith("held-out final gate")

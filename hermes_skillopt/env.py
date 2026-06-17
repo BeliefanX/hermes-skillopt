@@ -88,6 +88,24 @@ class BenchmarkDefinition:
     origin: str = "builtin-benchmark"
 
 
+@dataclass(frozen=True)
+class EvalPackMetadata:
+    """Identity, split governance, and fingerprint for an explicit eval pack."""
+
+    pack_id: str
+    version: str
+    schema_version: str
+    path: str | None
+    fingerprint_sha256: str
+    task_count: int
+    split_counts: dict[str, int]
+    production_eligible_task_count: int
+    heldout_policy: str = "validation selects candidates; held-out test is final gate only"
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
 class EnvAdapter(Protocol):
     """Hermes EnvAdapter contract for loaders, rollout metadata, scoring and policy."""
 
@@ -117,7 +135,8 @@ class SessionPipelineRecord:
 
 
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
-NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark"}
+NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark", "sample-eval-pack"}
+EVAL_PACK_SCHEMA_VERSION = "hermes-curated-eval-pack-v1"
 
 
 def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
@@ -238,7 +257,7 @@ def _criteria_to_terms(criteria: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(t.lower() for t in terms))
 
 
-def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTask:
+def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta: dict[str, Any] | None = None) -> EvalTask:
     if not isinstance(record, dict):
         raise ValueError(f"eval task #{index} must be an object")
     prompt = str(record.get("prompt") or "").strip()
@@ -279,6 +298,9 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         raise ValueError(f"eval task {task_id} has invalid weight") from exc
     if weight <= 0:
         raise ValueError(f"eval task {task_id} weight must be > 0")
+    pack_meta = pack_meta or {}
+    origin = str(record.get("task_origin") or pack_meta.get("task_origin") or "curated")
+    sample_pack = origin == "sample-eval-pack" or bool(pack_meta.get("sample_pack"))
     return EvalTask(
         id=task_id,
         prompt=prompt,
@@ -299,31 +321,103 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         metadata={
             **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
-            "production_gate_eligible": bool(production_flag) and explicit_scorecard,
+            "production_gate_eligible": bool(production_flag) and explicit_scorecard and not sample_pack,
             "production_eval_schema_policy": "production-eval-schema-v1",
-            "task_origin": "curated",
+            "task_origin": origin,
+            **({
+                "eval_pack_id": pack_meta.get("pack_id"),
+                "eval_pack_version": pack_meta.get("version"),
+                "eval_pack_fingerprint_sha256": pack_meta.get("fingerprint_sha256"),
+                "eval_pack_schema_version": pack_meta.get("schema_version"),
+                "eval_pack_sample": bool(pack_meta.get("sample_pack")),
+            } if pack_meta else {}),
         },
     )
 
 
-def load_eval_tasks(path: Path) -> list[EvalTask]:
+def _eval_pack_fingerprint(data: dict[str, Any]) -> str:
+    comparable = {k: v for k, v in data.items() if k not in {"fingerprint_sha256", "fingerprint"}}
+    return hashlib.sha256(json.dumps(comparable, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _validate_eval_pack_tasks(tasks: list[EvalTask], pack_id: str) -> dict[str, int]:
+    split_counts = {"train": 0, "val": 0, "test": 0}
+    seen_ids: dict[str, str] = {}
+    seen_prompts: dict[str, str] = {}
+    for task in tasks:
+        split = _SPLIT_ALIASES.get(task.split, task.split)
+        if split not in split_counts:
+            raise ValueError(f"eval pack {pack_id} task {task.id} has invalid split: {task.split}")
+        split_counts[split] += 1
+        if task.id in seen_ids and seen_ids[task.id] != split:
+            raise ValueError(f"eval pack {pack_id} leaks task id {task.id!r} across {seen_ids[task.id]} and {split}")
+        seen_ids[task.id] = split
+        prompt_fp = hashlib.sha256(task.prompt.strip().lower().encode("utf-8")).hexdigest()
+        if prompt_fp in seen_prompts and seen_prompts[prompt_fp] != split:
+            raise ValueError(f"eval pack {pack_id} reuses an identical prompt across {seen_prompts[prompt_fp]} and {split}")
+        seen_prompts[prompt_fp] = split
+    missing = [name for name, count in split_counts.items() if count <= 0]
+    if missing:
+        raise ValueError(f"eval pack {pack_id} must include train/val/test tasks; missing: {', '.join(missing)}")
+    return split_counts
+
+
+def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
     text = path.read_text(encoding="utf-8")
     records: list[dict[str, Any]] = []
+    pack_payload: dict[str, Any] = {}
     if path.suffix.lower() == ".jsonl":
         for i, line in enumerate(text.splitlines(), 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             records.append(json.loads(line))
+        pack_payload = {"schema_version": "legacy-jsonl-eval-file-v1", "pack_id": path.stem, "version": "unversioned", "tasks": records}
     else:
         data = json.loads(text)
         if isinstance(data, dict) and isinstance(data.get("tasks"), list):
+            pack_payload = data
             records = data["tasks"]
         elif isinstance(data, list):
             records = data
+            pack_payload = {"schema_version": "legacy-json-eval-list-v1", "pack_id": path.stem, "version": "unversioned", "tasks": records}
         else:
             raise ValueError("eval JSON must be a list or {'tasks': [...]} object")
-    return [_task_from_record(r, str(path), i) for i, r in enumerate(records, 1)]
+    pack_id = str(pack_payload.get("pack_id") or pack_payload.get("id") or path.stem).strip() or path.stem
+    version = str(pack_payload.get("version") or pack_payload.get("pack_version") or "unversioned")
+    schema_version = str(pack_payload.get("schema_version") or (EVAL_PACK_SCHEMA_VERSION if pack_payload.get("pack_id") or pack_payload.get("version") or pack_payload.get("pack_version") else "legacy-json-eval-file-v1"))
+    fingerprint = _eval_pack_fingerprint(pack_payload)
+    declared_fp = pack_payload.get("fingerprint_sha256") or pack_payload.get("fingerprint")
+    if declared_fp and str(declared_fp) != fingerprint:
+        raise ValueError(f"eval pack {pack_id} fingerprint mismatch")
+    pack_meta = {
+        "pack_id": pack_id,
+        "version": version,
+        "schema_version": schema_version,
+        "fingerprint_sha256": fingerprint,
+        "task_origin": pack_payload.get("task_origin") or ("sample-eval-pack" if pack_payload.get("sample_pack") else "curated"),
+        "sample_pack": bool(pack_payload.get("sample_pack")),
+    }
+    tasks = [_task_from_record(r, str(path), i, pack_meta) for i, r in enumerate(records, 1)]
+    if schema_version == EVAL_PACK_SCHEMA_VERSION or pack_payload.get("require_complete_splits"):
+        split_counts = _validate_eval_pack_tasks(tasks, pack_id)
+    else:
+        split_counts = {s: sum(1 for t in tasks if _SPLIT_ALIASES.get(t.split, t.split) == s) for s in ("train", "val", "test")}
+    metadata = EvalPackMetadata(
+        pack_id=pack_id,
+        version=version,
+        schema_version=schema_version,
+        path=str(path),
+        fingerprint_sha256=fingerprint,
+        task_count=len(tasks),
+        split_counts=split_counts,
+        production_eligible_task_count=sum(1 for t in tasks if production_eligibility_for_task(t).eligible),
+    )
+    return tasks, metadata
+
+
+def load_eval_tasks(path: Path) -> list[EvalTask]:
+    return load_eval_pack(path)[0]
 
 
 def _builtin_task(benchmark_id: str, split: str, prompt: str, expected_terms: tuple[str, ...], *, suffix: str | None = None) -> EvalTask:
@@ -444,7 +538,11 @@ class HermesSkillEnv:
         from hermes_skillopt import core  # lazy import avoids a core<->env import cycle
 
         eval_path = resolve_eval_file(self.state.hermes_home, self.state, self.eval_file)
-        curated_tasks = load_eval_tasks(eval_path) if eval_path else []
+        curated_tasks: list[EvalTask] = []
+        eval_pack_metadata: dict[str, Any] | None = None
+        if eval_path:
+            curated_tasks, eval_pack = load_eval_pack(eval_path)
+            eval_pack_metadata = eval_pack.as_dict()
         tasks: dict[str, list[EvalTask]] = {"train": [], "val": [], "test": []}
         for task in curated_tasks:
             tasks[_SPLIT_ALIASES.get(task.split, task.split)].append(task)
@@ -487,6 +585,17 @@ class HermesSkillEnv:
             "split_policy": SplitPolicy().as_dict(),
             "scorer_judge_metadata": {"default_judge": "keyword_scorecard", "llm_judge_can_accept": False},
             "eval_file": str(eval_path) if eval_path else None,
+            "eval_pack": eval_pack_metadata,
+            "eval_pack_id": eval_pack_metadata.get("pack_id") if eval_pack_metadata else None,
+            "eval_pack_version": eval_pack_metadata.get("version") if eval_pack_metadata else None,
+            "eval_pack_fingerprint_sha256": eval_pack_metadata.get("fingerprint_sha256") if eval_pack_metadata else None,
+            "eval_pack_split_counts": eval_pack_metadata.get("split_counts") if eval_pack_metadata else None,
+            "split_governance": {
+                "train": "optimizer reflection/update evidence only",
+                "validation": "candidate selection and deterministic inner gate",
+                "test": "held-out final gate; never used for candidate selection",
+                "no_leakage": "eval pack validator rejects duplicate ids/prompts across splits for v1 packs",
+            },
             "curated_task_count": len(curated_tasks),
             "task_counts": {k: len(v) for k, v in tasks.items()},
             "production_gate_task_count": len(curated_val_tasks),

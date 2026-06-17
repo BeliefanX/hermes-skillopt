@@ -1,6 +1,6 @@
 # Hermes SkillOpt architecture
 
-This document describes the current main-branch architecture. It intentionally omits obsolete historical gap lists.
+This document describes the current P0-P3 architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
 
 ## Boundaries
 
@@ -16,9 +16,12 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 - `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
 - `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application.
 - `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, and frozen `TargetExecutor` wrapper.
-- `gate.py`: strict validation gate (`candidate_score > current_score`).
+- `gate.py`: deterministic validation gate policies (`soft|hard|mixed|strict`) with score improvement and per-task regression checks depending on mode.
 - `webui.py`: optional Gradio UI for Hermes-specific status/full-run/review/adopt/rollback/upstream workflows.
 - `multi_agent.py`: deterministic multi-agent handoff optimizer for `delegate_task` dispatcher→worker packages.
+- `benchmark_bridge.py`: safe JSON-only upstream-style benchmark manifest importer into Hermes eval-pack format.
+- `transfer.py`: read-only staged/proposed skill transfer evaluation across deterministic targets/profile homes.
+- `conformance.py`: local compile/pytest conformance runner that writes machine-readable reports.
 
 ## Full-run flow
 
@@ -43,9 +46,9 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 ## Artifact model
 
-Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, candidate rank/select summary, rejected edits, `slow_meta.json`, gate results, report, diff, manifest, `checkpoint.json`, and per-stage JSON under `stages/`.
+Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, candidate rank/select summary, rejected edits, `slow_meta.json`, `target_binding.json`, `provenance_binding.json`, `history.json`, gate results, report, diff, manifest, `checkpoint.json`, and per-stage JSON under `stages/`.
 
-The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, per-task deltas, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy.
+The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, per-task deltas, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
 
 Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed.
 
@@ -90,13 +93,26 @@ Adopt requires:
 
 Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
 
+## P0-P3 closure map
+
+Current code closes the earlier architecture gaps in these bounded ways:
+
+- P0/P1 core abstraction: `SKILL.md` is explicit trainable state; optimizer and target executor are separate; candidate edits are bounded and staged; validation/test gates drive adoption status.
+- P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, and conservative completed-run resume inspection.
+- P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only.
+- P3 integration utilities: benchmark bridge imports safe JSON manifests into eval packs, transfer eval is read-only across deterministic targets/profile homes, and conformance writes local compile/pytest reports.
+
+Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
+
 ## Upstream strategy
 
 Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical clone under `$HERMES_HOME/skillopt/upstream/SkillOpt`. Upstream status/update commands refresh metadata and pinning only; they do not merge code or alter live skills.
 
 ## Current limitations
 
-- Replay/sandbox scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
+- Replay/sandbox/scorecard scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
+- Benchmark bridge imports JSON manifests only; it does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
+- Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model performance.
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
 - WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts.

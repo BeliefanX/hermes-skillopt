@@ -10,6 +10,8 @@ with timeouts.  Task-provided commands are blocked by default.
 """
 
 import os
+import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,25 @@ class ScorecardRunner(Protocol):
     def mode(self) -> str: ...
 
     def score(self, skill_text: str, task: EvalTask) -> EvalResult: ...
+
+
+TRACE_SCHEMA_VERSION = "hermes-target-trace-v1"
+
+
+def _stable_json_sha(data: object) -> str:
+    return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _preview(text: str, limit: int = 500) -> str:
+    return (text or "")[:limit]
+
+
+def _safe_fixture_list(value: object, *, limit: int = 12) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)[:limit]
+    return [value]
 
 
 def _variants(term: str) -> set[str]:
@@ -46,6 +67,14 @@ class DeterministicKeywordScorecard:
     """Deterministic/mock fallback scorecard for smoke tasks."""
 
     mode: str = "deterministic_mock_scorecard"
+
+    def config_parameters(self) -> dict[str, object]:
+        return {
+            "trace_schema": TRACE_SCHEMA_VERSION,
+            "scoring_policy": "deterministic_keyword_scorecard_v1",
+            "judge_can_accept": False,
+            "executes_task_commands": False,
+        }
 
     def score(self, skill_text: str, task: EvalTask) -> EvalResult:
         low = skill_text.lower()
@@ -72,9 +101,23 @@ class DeterministicKeywordScorecard:
 
 @dataclass(frozen=True)
 class HermesRolloutRunner:
-    """Safe offline/local replay runner for curated Hermes eval tasks."""
+    """Safe deterministic replay runner for curated Hermes eval tasks.
 
-    mode: str = "hermes_replay_runner_mvp"
+    This runner never executes task-provided commands.  Instead it replays a
+    frozen fixture/scorecard into structured trajectory evidence so current and
+    candidate skills differ only by skill_text under the same target config.
+    """
+
+    mode: str = "hermes_trace_replay_runner_v1"
+
+    def config_parameters(self) -> dict[str, object]:
+        return {
+            "trace_schema": TRACE_SCHEMA_VERSION,
+            "scoring_policy": "deterministic_keywords_assertions_markers_v1",
+            "judge_can_accept": False,
+            "executes_task_commands": False,
+            "task_command_policy": "record_and_block",
+        }
 
     def score(self, skill_text: str, task: EvalTask) -> EvalResult:
         low = skill_text.lower()
@@ -96,14 +139,61 @@ class HermesRolloutRunner:
                     checks.append((f"expected_behavior:{word}", word in low, 0.25))
         penalties = [term for term in task.failure_terms if term.lower() in low]
         penalties.extend([m for m in task.forbidden_markers if m.lower() in low])
+        command_blocked = task.fixtures.get("command") is not None or task.metadata.get("command") is not None
+        failure_tags = list(dict.fromkeys((["task_provided_command_blocked"] if command_blocked else []) + [f"penalty:{p}" for p in penalties]))
         score, passed_names, failed_names = _score_checks(checks, penalties)
+        trajectory = self._trajectory(skill_text, task, checks, penalties, passed_names, failed_names, score, failure_tags)
         return EvalResult(
             task.id,
             score,
-            score >= 0.55 and not penalties,
-            f"runner={self.mode}; passed={passed_names}; failed={failed_names}; penalties={penalties}; judge=not_used_for_acceptance",
-            {**_result_metadata(task), "assertion_count": len(task.assertions), "assertion_results": {name: ok for name, ok, _ in checks if name.startswith("assertion:")}, "judge_present": bool(task.judge)},
+            score >= 0.55 and not penalties and not command_blocked,
+            f"runner={self.mode}; passed={passed_names}; failed={failed_names}; penalties={penalties}; failure_tags={failure_tags}; judge=not_used_for_acceptance",
+            {
+                **_result_metadata(task),
+                "assertion_count": len(task.assertions),
+                "assertion_results": {name: ok for name, ok, _ in checks if name.startswith("assertion:")},
+                "judge_present": bool(task.judge),
+                "trajectory": trajectory,
+                "trace": trajectory,
+                "trace_schema": TRACE_SCHEMA_VERSION,
+                "trace_fingerprint_sha256": _stable_json_sha(trajectory),
+                "failure_tags": failure_tags,
+                "sandbox_command_blocked": command_blocked,
+                "task_commands_executed": False,
+            },
         )
+
+    def _trajectory(self, skill_text: str, task: EvalTask, checks: list[tuple[str, bool, float]], penalties: list[str], passed_names: list[str], failed_names: list[str], score: float, failure_tags: list[str]) -> dict[str, object]:
+        allowed_tools = set(task.allowed_tools or ())
+        tool_calls: list[dict[str, object]] = []
+        for idx, raw in enumerate(_safe_fixture_list(task.fixtures.get("tool_calls")), 1):
+            if isinstance(raw, dict):
+                name = str(raw.get("name") or raw.get("tool") or "fixture_tool")
+                args = raw.get("args") or raw.get("arguments") or {}
+            else:
+                name, args = str(raw), {}
+            allowed = not allowed_tools or name in allowed_tools
+            tool_calls.append({"id": f"fixture-tool-{idx}", "name": name, "args_preview": _preview(json.dumps(args, ensure_ascii=False, default=str), 400), "allowed": allowed, "executed": False, "blocked_reason": None if allowed else "tool_not_in_allowed_tools"})
+        if task.fixtures.get("command") is not None or task.metadata.get("command") is not None:
+            tool_calls.append({"id": "task-command", "name": "task_provided_command", "args_preview": _preview(str(task.fixtures.get("command") or task.metadata.get("command")), 400), "allowed": False, "executed": False, "blocked_reason": "arbitrary_command_execution_disabled"})
+        observations = []
+        for idx, raw in enumerate(_safe_fixture_list(task.fixtures.get("observations")), 1):
+            observations.append({"id": f"fixture-observation-{idx}", "content_preview": _preview(json.dumps(raw, ensure_ascii=False, default=str) if not isinstance(raw, str) else raw, 800)})
+        observations.extend({"id": f"check-{i}", "check": name, "passed": ok, "weight": weight} for i, (name, ok, weight) in enumerate(checks, 1))
+        return {
+            "schema_version": TRACE_SCHEMA_VERSION,
+            "task_id": task.id,
+            "messages": [
+                {"role": "user", "content_preview": _preview(task.prompt, 800)},
+                {"role": "assistant", "content_preview": _preview(skill_text, 800), "skill_sha256": _stable_json_sha({"skill_text": skill_text})},
+            ],
+            "tool_calls": tool_calls,
+            "observations": observations,
+            "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties},
+            "failure_tags": failure_tags,
+            "replay_deterministic": True,
+            "task_commands_executed": False,
+        }
 
     def _assertion_passed(self, low_skill: str, assertion: dict[str, object]) -> tuple[str, bool]:
         typ = str(assertion.get("type") or assertion.get("op") or "contains").lower()
@@ -141,6 +231,16 @@ class HermesSandboxRunner:
     command_runner: CommandRunner | None = None
     mode: str = "hermes_sandbox_executor_mvp"
 
+    def config_parameters(self) -> dict[str, object]:
+        return {
+            "trace_schema": TRACE_SCHEMA_VERSION,
+            "fixed_internal_runner": "python -m hermes_skillopt.sandbox_runner",
+            "task_command_policy": "reject_before_subprocess",
+            "isolated_home": True,
+            "live_profile_writes": False,
+            "path": os.defpath,
+        }
+
     def score(self, skill_text: str, task: EvalTask) -> EvalResult:
         if task.fixtures.get("command") is not None or task.metadata.get("command") is not None:
             transcript = "SANDBOX_COMMAND_BLOCKED: task-provided commands are not allowed by the sandbox executor MVP"
@@ -152,6 +252,19 @@ class HermesSandboxRunner:
                 "sandbox_command_blocked": True,
                 "live_profile_writes": False,
                 "production_gate_eligible": False,
+                "trace_schema": TRACE_SCHEMA_VERSION,
+                "failure_tags": ["task_provided_command_blocked"],
+                "task_commands_executed": False,
+                "trajectory": {
+                    "schema_version": TRACE_SCHEMA_VERSION,
+                    "task_id": task.id,
+                    "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}],
+                    "tool_calls": [{"id": "task-command", "name": "task_provided_command", "allowed": False, "executed": False, "blocked_reason": "arbitrary_command_execution_disabled"}],
+                    "observations": [{"id": "sandbox-block", "content_preview": transcript}],
+                    "scores": {"score": 0.0, "passed_checks": [], "failed_checks": ["sandbox_command_blocked"], "penalties": []},
+                    "failure_tags": ["task_provided_command_blocked"],
+                    "task_commands_executed": False,
+                },
             }
             return EvalResult(task.id, 0.0, False, f"runner={self.mode}; exit=126; blocked=task_provided_command", metadata)
 
@@ -195,7 +308,8 @@ class HermesSandboxRunner:
         penalties = [term for term in task.failure_terms if term.lower() in low_skill or term.lower() in low_transcript]
         penalties.extend([m for m in task.forbidden_markers if m.lower() in low_transcript or m.lower() in low_skill])
         score, passed_names, failed_names = _score_checks(checks, penalties)
-        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False}
+        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
+        metadata["trace_fingerprint_sha256"] = _stable_json_sha(metadata["trajectory"])
         return EvalResult(task.id, score, code == 0 and score >= 0.55 and not penalties, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}", metadata)
 
 
@@ -212,25 +326,27 @@ class TargetBackendConfig:
     """Explicit frozen target backend identity for provenance/artifacts."""
 
     executor: str
-    target_config_id: str = "frozen-hermes-replay-mvp-v1"
+    target_config_id: str = "frozen-hermes-trace-replay-v2"
     requested_executor: str = "auto"
     role: str = "frozen_current_candidate_evaluator_no_editing"
     parameters: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload = {
+            "schema_version": "skillopt-target-backend-config-v2",
             "executor": self.executor,
             "target_config_id": self.target_config_id,
             "requested_executor": self.requested_executor,
             "role": self.role,
             "parameters": self.parameters,
         }
+        return {**payload, "fingerprint_sha256": _stable_json_sha(payload)}
 
 
 @dataclass(frozen=True)
 class TargetExecutor:
     runner: ScorecardRunner | None = None
-    target_config_id: str = "frozen-hermes-replay-mvp-v1"
+    target_config_id: str = "frozen-hermes-trace-replay-v2"
     requested_executor: str = "auto"
 
     def __post_init__(self) -> None:
@@ -244,7 +360,8 @@ class TargetExecutor:
 
     @property
     def config(self) -> TargetBackendConfig:
-        return TargetBackendConfig(executor=self.mode, target_config_id=self.target_config_id, requested_executor=self.requested_executor)
+        parameters = getattr(self.runner, "config_parameters", lambda: {})()
+        return TargetBackendConfig(executor=self.mode, target_config_id=self.target_config_id, requested_executor=self.requested_executor, parameters=dict(parameters or {}))
 
     def evaluate(self, skill_text: str, tasks: list[EvalTask], label: str = "skill") -> dict[str, object]:
         assert self.runner is not None
@@ -256,10 +373,14 @@ class TargetExecutor:
         splits = sorted({task.split for task in tasks})
         eligibility = [production_eligibility_for_task(task).as_dict() for task in tasks]
         regression_cases = [r.task_id for r in results if not r.passed]
+        target_config = self.config.as_dict()
         return {
             "label": label,
             "executor": self.mode,
             "target_config_id": self.target_config_id,
+            "target_backend_config": target_config,
+            "target_fingerprint_sha256": target_config["fingerprint_sha256"],
+            "trace_schema": TRACE_SCHEMA_VERSION,
             "score": mean,
             "split_score": mean,
             "split": splits[0] if len(splits) == 1 else "mixed" if splits else None,
