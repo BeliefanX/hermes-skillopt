@@ -293,10 +293,10 @@ def load_rejected_edit_history(home: Path, skill_name: str, limit: int = 20) -> 
     for path in sorted(staging.glob("*/rejected_edits.jsonl"), key=lambda p: p.stat().st_mtime):
         try:
             manifest = json.loads((path.parent / "manifest.json").read_text(encoding="utf-8"))
-            if manifest.get("skill_name") != skill_name:
+            if not isinstance(manifest, dict) or manifest.get("skill_name") != skill_name:
                 continue
         except Exception:
-            pass
+            continue
         for row in _jsonl_read(path, limit=limit):
             rows.append({"run_id": path.parent.name, **row})
     return rows[-max(0, int(limit)):]
@@ -516,7 +516,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         raise ValueError("auto_adopt cannot be combined with force")
     if auto_adopt:
         raise ValueError("auto_adopt is disabled in production; run full-run, review artifacts, then call adopt explicitly")
-    from hermes_skillopt.env import HermesSkillEnv
+    from hermes_skillopt.env import HermesSkillEnv, is_production_gate_task
     from hermes_skillopt.gate import ValidationGate
     from hermes_skillopt.optimizer import OptimizerBackend
     from hermes_skillopt.state import SkillOptArtifacts, SkillState
@@ -535,6 +535,10 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     llm = LLMBackend(backend=backend, allow_mock=allow_mock, ctx=ctx)
     env = HermesSkillEnv(state, query=query, lookback_days=lookback_days, limit=limit, eval_file=eval_file)
     tasks, evidence = env.build_tasks()
+    production_val_tasks = [t for t in tasks["val"] if is_production_gate_task(t)]
+    production_gate_available = bool(production_val_tasks) and bool(evidence.get("production_gate_eligible"))
+    evidence["production_gate_task_count"] = len(production_val_tasks)
+    evidence["production_gate_eligible"] = production_gate_available
     replay_enabled = any(t.assertions for split_tasks in tasks.values() for t in split_tasks)
     executor = TargetExecutor(runner=HermesRolloutRunner() if replay_enabled else None)
     optimizer = OptimizerBackend(llm, edit_budget=edit_budget)
@@ -547,6 +551,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     all_reflections: list[dict[str, Any]] = []
     all_edits: list[dict[str, Any]] = []
     all_gates: list[dict[str, Any]] = []
+    all_production_gates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     rejected_history = load_rejected_edit_history(home, target.name)
 
@@ -588,6 +593,22 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         except Exception as exc:
             judge = {"judge_error": str(exc)}
         gate = gatekeeper.decide(it, current_val, candidate_val, current, candidate.text, judge=judge).as_dict()
+        production_gate: dict[str, Any] | None = None
+        if production_gate_available:
+            production_current_val = executor.evaluate(current, production_val_tasks, label=f"production_current_val_{it}")
+            production_candidate_val = executor.evaluate(candidate.text, production_val_tasks, label=f"production_candidate_val_{it}")
+            production_gate = gatekeeper.decide(
+                it,
+                production_current_val,
+                production_candidate_val,
+                current,
+                candidate.text,
+                judge={"note": "production/adopt gate uses only explicit curated validation tasks; non-production validation is evidence only"},
+            ).as_dict()
+            production_gate["gate_scope"] = "production_curated_validation_only"
+            production_gate["task_ids"] = [t.id for t in production_val_tasks]
+            write_text(run_dir / f"production_current_validation_results_{it}.json", json.dumps(production_current_val, ensure_ascii=False, indent=2) + "\n")
+            write_text(run_dir / f"production_candidate_validation_results_{it}.json", json.dumps(production_candidate_val, ensure_ascii=False, indent=2) + "\n")
         stages.evaluate(it, current_val, candidate_val, gate)
         if gate["accepted"]:
             current = candidate.text
@@ -600,13 +621,18 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         all_reflections.append(reflection)
         all_edits.append(edit_plan)
         all_gates.append(gate | {"status": status_value})
+        if production_gate is not None:
+            all_production_gates.append(production_gate | {"status": status_value})
         write_text(artifacts.current, current)
 
     final_status = "staged_best" if best != original else "rejected"
     eval_file_used = evidence.get("eval_file")
     validation_summary = best_gate or (all_gates[-1] if all_gates else None)
-    production_gate_eligible = bool(evidence.get("production_gate_eligible")) and bool(
-        validation_summary.get("accepted") if validation_summary else False
+    production_validation_summary = next((g for g in reversed(all_production_gates) if g.get("status") == "accepted"), None)
+    if production_validation_summary is None and all_production_gates:
+        production_validation_summary = all_production_gates[-1]
+    production_gate_eligible = production_gate_available and bool(
+        production_validation_summary.get("accepted") if production_validation_summary else False
     )
     adoptable = final_status == "staged_best" and production_gate_eligible
     proposed = best if final_status == "staged_best" else original
@@ -617,13 +643,15 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     write_text(artifacts.diff, diff)
     write_text(artifacts.reflections, json.dumps(all_reflections, ensure_ascii=False, indent=2) + "\n")
     write_text(artifacts.candidate_edits, json.dumps(all_edits, ensure_ascii=False, indent=2) + "\n")
-    write_text(artifacts.gate_results, json.dumps({"gates": all_gates, "best_gate": best_gate}, ensure_ascii=False, indent=2) + "\n")
+    write_text(artifacts.gate_results, json.dumps({"gates": all_gates, "best_gate": best_gate, "production_gates": all_production_gates, "production_best_gate": production_validation_summary}, ensure_ascii=False, indent=2) + "\n")
     _jsonl_write(artifacts.rejected_edits, rejected)
 
     current_score = validation_summary.get("current_score") if validation_summary else None
     candidate_score = validation_summary.get("candidate_score") if validation_summary else None
+    production_current_score = production_validation_summary.get("current_score") if production_validation_summary else None
+    production_candidate_score = production_validation_summary.get("candidate_score") if production_validation_summary else None
     gate_reason = validation_summary.get("rationale") if validation_summary else "none"
-    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- target_executor: {executor.mode}\n- target_config_id: {executor.target_config_id}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate validation score must be strictly greater than current validation score; fallback/synthetic scorecards are review-only\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- target_executor: {executor.mode}\n- target_config_id: {executor.target_config_id}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- production_gate_task_count: {len(production_val_tasks)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- production_validation_scores: current={production_current_score}, candidate={production_candidate_score}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate production curated validation score must strictly improve for adoptable; session/fallback/synthetic validation is review-only evidence\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- production_best_gate: {json.dumps(production_validation_summary, ensure_ascii=False) if production_validation_summary else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
     write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
@@ -646,7 +674,10 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "curated_task_count": evidence.get("curated_task_count", 0),
         "validation_current_score": current_score,
         "validation_candidate_score": candidate_score,
+        "production_validation_current_score": production_current_score,
+        "production_validation_candidate_score": production_candidate_score,
         "production_gate_eligible": production_gate_eligible,
+        "production_gate_task_count": len(production_val_tasks),
         "gate_reason": gate_reason,
         "core_abstraction": {
             "skill_document": "trainable_state",
@@ -657,10 +688,11 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
             "hermes_outer_shell": "staged_safety_adopt_rollback_profile_isolation",
         },
         "gate": best_gate,
+        "production_gate": production_validation_summary,
         "files": artifacts.manifest_files(include_best=final_status == "staged_best"),
     }
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "gate_reason": gate_reason}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason}
     return result
 
 

@@ -555,6 +555,46 @@ def test_rejected_edit_history_enters_reflection_prompt(monkeypatch, tmp_path):
     assert any("REJECTED_EDIT_HISTORY" in p and "do not repeat me" in p for p in prompts)
 
 
+def test_rejected_edit_history_skips_missing_malformed_and_mismatched_manifests(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely. uniquegold")
+    staging = tmp_path / "skillopt" / "staging"
+    cases = {
+        "missing-manifest": (None, "missing manifest contam"),
+        "malformed-manifest": ("{not json", "malformed manifest contam"),
+        "list-manifest": (json.dumps([{"skill_name": "demo"}]), "list manifest contam"),
+        "wrong-skill": (json.dumps({"skill_name": "other"}), "wrong skill contam"),
+        "valid-demo": (json.dumps({"skill_name": "demo"}), "valid history"),
+    }
+    for dirname, (manifest_text, rejected_reason) in cases.items():
+        run = staging / dirname
+        run.mkdir(parents=True)
+        if manifest_text is not None:
+            (run / "manifest.json").write_text(manifest_text, encoding="utf-8")
+        (run / "rejected_edits.jsonl").write_text(json.dumps({"iteration": 1, "reasoning": rejected_reason}) + "\n", encoding="utf-8")
+
+    prompts = []
+
+    class CaptureBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        def json(self, prompt, schema_hint, repair_path=None):
+            prompts.append(prompt)
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": []}
+            if schema_hint["kind"] == "edit":
+                return {"edits": [], "reasoning": "no-op"}
+            return {"accepted": False, "rationale": "aux only"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: CaptureBackend())
+    core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    joined = "\n".join(prompts)
+    assert "valid history" in joined
+    assert "missing manifest contam" not in joined
+    assert "malformed manifest contam" not in joined
+    assert "list manifest contam" not in joined
+    assert "wrong skill contam" not in joined
+
+
 def test_legacy_dry_run_manifest_refuses_adopt_even_with_force(tmp_path):
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
@@ -576,6 +616,73 @@ def test_full_run_with_explicit_curated_scorecard_is_adoptable(tmp_path):
     rb = core.rollback(out["run_id"], hermes_home_path=str(tmp_path))
     assert rb["status"] == "rolled_back"
     assert skill.read_text(encoding="utf-8") == original
+
+
+def test_mixed_validation_nonproduction_improvement_cannot_make_adoptable(monkeypatch, tmp_path):
+    from hermes_skillopt.env import EvalTask, HermesSkillEnv
+
+    make_skill(tmp_path, "demo", body="Use tools safely. uniquegold")
+    eval_source = str(tmp_path / "skillopt" / "evals" / "demo.jsonl")
+
+    def mixed_tasks(self):
+        curated = EvalTask(
+            id="curated-stable",
+            prompt="curated production validation",
+            source=eval_source,
+            expected_terms=("uniquegold",),
+            split="val",
+            metadata={"scorecard_explicit": True, "production_gate_eligible": True},
+        )
+        mined = EvalTask(
+            id="session-lift",
+            prompt="session mined review-only validation",
+            source="session-mined",
+            expected_terms=("verify",),
+            split="val",
+            metadata={"production_gate_eligible": False},
+        )
+        train = EvalTask(id="train", prompt="train", source="curated-fallback", expected_terms=("tool",), split="train")
+        test = EvalTask(id="test", prompt="test", source="synthetic", expected_terms=("rollback",), split="test")
+        return {"train": [train], "val": [curated, mined], "test": [test]}, {
+            "snippets": [],
+            "items": [],
+            "abstraction": "environment/benchmark",
+            "eval_file": eval_source,
+            "curated_task_count": 1,
+            "task_counts": {"train": 1, "val": 2, "test": 1},
+            "production_gate_task_count": 1,
+            "production_gate_eligible": True,
+        }
+
+    monkeypatch.setattr(HermesSkillEnv, "build_tasks", mixed_tasks)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    gate_data = json.loads((run_dir / "gate_results.json").read_text(encoding="utf-8"))
+    assert out["status"] == "staged_best"
+    assert out["adoptable"] is False
+    assert manifest["adoptable"] is False
+    assert manifest["production_gate_eligible"] is False
+    assert gate_data["best_gate"]["accepted"] is True
+    assert gate_data["production_best_gate"]["accepted"] is False
+    assert gate_data["production_best_gate"]["current_score"] == gate_data["production_best_gate"]["candidate_score"]
+    with pytest.raises(ValueError, match="Only adoptable"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_stage_recorder_writes_all_six_stage_artifacts(tmp_path):
+    from hermes_skillopt.trainer import StageRecorder
+
+    stages = StageRecorder(tmp_path)
+    stages.rollout(1, {"score": 0.1, "num_tasks": 1, "executor": "mock"})
+    stages.reflect(1, {"recurring_defects": []}, 0)
+    stages.aggregate(1, {"recurring_defects": []}, 3)
+    stages.select(1, {"edits": [{"op": "append"}], "bounded": True})
+    stages.update(1, "abc123", True)
+    stages.evaluate(1, {"score": 0.2}, {"score": 0.3}, {"accepted": True})
+    assert {p.name for p in (tmp_path / "stages").glob("001_*.json")} == {
+        "001_rollout.json", "001_reflect.json", "001_aggregate.json", "001_select.json", "001_update.json", "001_evaluate.json"
+    }
 
 
 def test_discover_skills_rejects_symlink_escape_before_read(tmp_path):

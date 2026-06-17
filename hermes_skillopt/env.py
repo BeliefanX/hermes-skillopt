@@ -48,6 +48,23 @@ class EvalResult:
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
 
 
+def is_production_gate_task(task: EvalTask) -> bool:
+    """Return True only for explicit curated validation tasks allowed to gate adoption."""
+    return (
+        task.split == "val"
+        and task.source not in {"synthetic", "curated-fallback", "session-mined"}
+        and str(task.source).endswith((".json", ".jsonl"))
+        and bool(task.metadata.get("production_gate_eligible"))
+        and (
+            bool(task.expected_terms)
+            or bool(task.assertions)
+            or bool(task.expected_behavior)
+            or bool(task.failure_terms)
+            or task.metadata.get("ground_truth_score") is not None
+        )
+    )
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -256,15 +273,8 @@ class HermesSkillEnv:
         for name, rows in splits.items():
             tasks[name].extend(self._item_to_task(item, name) for item in rows)
         self._ensure_minimum_tasks(tasks)
-        curated_val_tasks = [
-            t for t in tasks["val"]
-            if t.source not in {"synthetic", "curated-fallback", "session-mined"} and str(t.source).endswith((".json", ".jsonl"))
-        ]
-        production_gate_eligible = bool(curated_val_tasks) and all(
-            bool(t.metadata.get("production_gate_eligible"))
-            and (bool(t.expected_terms) or bool(t.assertions) or bool(t.expected_behavior) or bool(t.failure_terms) or t.metadata.get("ground_truth_score") is not None)
-            for t in curated_val_tasks
-        )
+        curated_val_tasks = [t for t in tasks["val"] if is_production_gate_task(t)]
+        production_gate_eligible = bool(curated_val_tasks)
         evidence = {
             "snippets": snippets,
             "items": items,
@@ -272,6 +282,7 @@ class HermesSkillEnv:
             "eval_file": str(eval_path) if eval_path else None,
             "curated_task_count": len(curated_tasks),
             "task_counts": {k: len(v) for k, v in tasks.items()},
+            "production_gate_task_count": len(curated_val_tasks),
             "production_gate_eligible": production_gate_eligible,
         }
         return tasks, evidence
