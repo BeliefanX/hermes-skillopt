@@ -66,6 +66,32 @@ def test_webui_adopt_and_rollback_require_exact_confirmation(tmp_path):
     assert "refused" in webui.rollback_callback(rid, "ROLLBACK wrong", False, str(tmp_path))
 
 
+def test_webui_writeback_callbacks_ignore_home_override(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(core, "adopt", lambda *args, **kwargs: calls.append(("adopt", args, kwargs)) or {"success": True})
+    monkeypatch.setattr(core, "rollback", lambda *args, **kwargs: calls.append(("rollback", args, kwargs)) or {"success": True})
+
+    assert "Adopt complete" in webui.adopt_callback("rid", "ADOPT rid", False, str(tmp_path / "other"))
+    assert "Rollback complete" in webui.rollback_callback("rid", "ROLLBACK rid", True, str(tmp_path / "other"))
+    assert calls == [
+        ("adopt", ("rid",), {"hermes_home_path": None, "force": False}),
+        ("rollback", ("rid",), {"hermes_home_path": None, "force": True}),
+    ]
+
+
+def test_cli_writeback_unsafe_flag_is_explicit(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(cli.core, "adopt", lambda *args, **kwargs: calls.append((args, kwargs)) or {"success": True})
+
+    monkeypatch.setattr(sys, "argv", ["hermes-skillopt", "--home", str(tmp_path), "adopt", "rid", "--unsafe-cross-profile-writeback"])
+    assert cli.main() == 0
+    assert calls == [(("rid", str(tmp_path), False), {"unsafe_cross_profile": True})]
+
+    monkeypatch.setattr(sys, "argv", ["hermes-skillopt", "adopt", "rid", "--unsafe-cross-profile-writeback"])
+    assert cli.main() == 2
+    assert "requires --home" in capsys.readouterr().err
+
+
 def test_webui_review_latest_reads_only_staging_artifacts(tmp_path):
     make_skill(tmp_path, "demo")
     run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))

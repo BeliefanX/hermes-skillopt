@@ -11,6 +11,11 @@ import pytest
 from hermes_skillopt import core
 
 
+@pytest.fixture(autouse=True)
+def active_tmp_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+
 def make_skill(home: Path, name="demo", body="Use tools safely.") -> Path:
     p = home / "skills" / name / "SKILL.md"
     p.parent.mkdir(parents=True)
@@ -72,6 +77,32 @@ def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_pat
 
     assert skill.read_text(encoding="utf-8") == original
     assert not any((tmp_path / "skillopt" / "backups").iterdir())
+
+
+def test_adopt_rejects_cross_profile_home_without_unsafe_confirmation(tmp_path):
+    other_home = tmp_path.parent / f"other-profile-{tmp_path.name}"
+    skill = make_skill(other_home, "demo")
+    original = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(other_home)
+    out = core.full_run(skill="demo", hermes_home_path=str(other_home), eval_file=str(eval_path), backend="mock", allow_mock=True)
+
+    with pytest.raises(ValueError, match="outside the active Hermes profile home"):
+        core.adopt(out["run_id"], hermes_home_path=str(other_home))
+
+    assert skill.read_text(encoding="utf-8") == original
+
+
+def test_cross_profile_writeback_requires_explicit_unsafe_confirmation(tmp_path):
+    other_home = tmp_path.parent / f"offline-profile-{tmp_path.name}"
+    skill = make_skill(other_home, "demo")
+    eval_path = write_eval_file(other_home)
+    out = core.full_run(skill="demo", hermes_home_path=str(other_home), eval_file=str(eval_path), backend="mock", allow_mock=True)
+
+    adopt = core.adopt(out["run_id"], hermes_home_path=str(other_home), unsafe_cross_profile=True)
+    assert adopt["status"] == "adopted"
+    rollback = core.rollback(out["run_id"], hermes_home_path=str(other_home), unsafe_cross_profile=True)
+    assert rollback["status"] == "rolled_back"
+    assert skill.read_text(encoding="utf-8").startswith("---\nname: demo")
 
 
 def test_absolute_run_id_rejected(tmp_path):
@@ -285,6 +316,29 @@ def test_plugin_registration_includes_full_tool_schema():
     assert "repo_path" not in update_schema["properties"]
     status_schema = dict(names)["hermes_skillopt_upstream_status"]
     assert "repo_path" not in status_schema["properties"]
+    adopt_schema = dict(names)["hermes_skillopt_adopt"]
+    rollback_schema = dict(names)["hermes_skillopt_rollback"]
+    assert "hermes_home" not in adopt_schema["properties"]
+    assert "hermes_home" not in rollback_schema["properties"]
+
+
+def test_plugin_writeback_handlers_ignore_home_override(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("skillopt_plugin_writeback", Path(__file__).resolve().parents[1] / "__init__.py")
+    assert spec and spec.loader
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+
+    calls = []
+    monkeypatch.setattr(plugin.core, "adopt", lambda **kwargs: calls.append(("adopt", kwargs)) or {"success": True})
+    monkeypatch.setattr(plugin.core, "rollback", lambda **kwargs: calls.append(("rollback", kwargs)) or {"success": True})
+
+    plugin._handle_adopt({"run_id": "rid", "hermes_home": "/tmp/other", "force": True})
+    plugin._handle_rollback({"run_id": "rid", "hermes_home": "/tmp/other", "force": True})
+    assert calls == [
+        ("adopt", {"run_id": "rid", "hermes_home_path": None, "force": True}),
+        ("rollback", {"run_id": "rid", "hermes_home_path": None, "force": True}),
+    ]
 
 
 def test_plugin_yaml_provides_tools_matches_registered_tools():

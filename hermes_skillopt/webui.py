@@ -176,7 +176,7 @@ def adopt_callback(run_id: str, confirmation: str, force: bool, home: str | None
     if (confirmation or "").strip() != expected:
         return f"Adopt refused: type `{expected}` exactly to confirm."
     try:
-        return "Adopt complete:\n\n```json\n" + _json(core.adopt(rid, hermes_home_path=home or None, force=bool(force))) + "\n```"
+        return "Adopt complete:\n\n```json\n" + _json(core.adopt(rid, hermes_home_path=None, force=bool(force))) + "\n```"
     except Exception as exc:
         return f"Adopt failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
@@ -189,7 +189,7 @@ def rollback_callback(run_id: str, confirmation: str, force: bool, home: str | N
     if (confirmation or "").strip() != expected:
         return f"Rollback refused: type `{expected}` exactly to confirm."
     try:
-        return "Rollback complete:\n\n```json\n" + _json(core.rollback(rid, hermes_home_path=home or None, force=bool(force))) + "\n```"
+        return "Rollback complete:\n\n```json\n" + _json(core.rollback(rid, hermes_home_path=None, force=bool(force))) + "\n```"
     except Exception as exc:
         return f"Rollback failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
@@ -217,7 +217,7 @@ def build_app(home_default: str | None = None):
             "the target executor is frozen, optimizer backends only propose bounded edits, and a "
             "held-out validation gate is the sole acceptance gate. Hermes staged safety/adopt/rollback/profile isolation remains the outer shell."
         )
-        home = gr.Textbox(label="HERMES_HOME override (optional)", placeholder="Defaults to ~/.hermes", value=home_default or "")
+        home = gr.Textbox(label="HERMES_HOME override for staged read/run operations (optional)", placeholder="Defaults to active HERMES_HOME/~/.hermes; Adopt/Rollback always use active profile", value=home_default or "")
 
         with gr.Tabs():
             with gr.Tab("Status"):
@@ -252,6 +252,7 @@ def build_app(home_default: str | None = None):
                 rejected = gr.Code(label="rejected_edits.jsonl", language="json")
 
             with gr.Tab("Adopt"):
+                gr.Markdown("Adopt writes only to the active Hermes profile. The HERMES_HOME override textbox is ignored for live writeback.")
                 adopt_run_id = gr.Textbox(label="Run ID")
                 adopt_confirm = gr.Textbox(label="Confirmation", placeholder="Type: ADOPT <run_id>")
                 adopt_force = gr.Checkbox(value=False, label="Force sha guard override")
@@ -259,6 +260,7 @@ def build_app(home_default: str | None = None):
                 adopt_out = gr.Markdown()
 
             with gr.Tab("Rollback"):
+                gr.Markdown("Rollback writes only to the active Hermes profile. The HERMES_HOME override textbox is ignored for live writeback.")
                 rollback_run_id = gr.Textbox(label="Run ID")
                 rollback_confirm = gr.Textbox(label="Confirmation", placeholder="Type: ROLLBACK <run_id>")
                 rollback_force = gr.Checkbox(value=False, label="Force sha guard override")

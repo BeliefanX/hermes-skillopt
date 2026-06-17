@@ -46,6 +46,25 @@ def hermes_home(explicit: str | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def active_hermes_home() -> Path:
+    """Return the active runtime Hermes profile home, ignoring per-call overrides."""
+    return hermes_home(None)
+
+
+def guard_writeback_home(home: Path, *, unsafe_cross_profile: bool = False) -> None:
+    """Prevent adopt/rollback from writing a non-active profile by default."""
+    active = active_hermes_home()
+    if home == active:
+        return
+    if unsafe_cross_profile:
+        return
+    raise ValueError(
+        "Refusing live skill writeback outside the active Hermes profile home; "
+        f"requested {home}, active {active}. Set HERMES_HOME to the target profile "
+        "or use the explicit unsafe cross-profile CLI confirmation for offline maintenance."
+    )
+
+
 def ensure_dirs(home: Path) -> dict[str, Path]:
     base = home / "skillopt"
     dirs = {"base": base, "staging": base / "staging", "backups": base / "backups", "upstream": base / "upstream"}
@@ -659,8 +678,9 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
     return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "skill": m.get("skill_name"), "gate": gate, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
 
 
-def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False) -> dict[str, Any]:
+def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
+    guard_writeback_home(home, unsafe_cross_profile=unsafe_cross_profile)
     dirs = ensure_dirs(home)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
@@ -697,8 +717,9 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False)
     return {"success": True, "run_id": run_id, "status": "adopted", "skill_path": str(target), "backup_dir": str(backup_dir)}
 
 
-def rollback(run_id: str, hermes_home_path: str | None = None, force: bool = False) -> dict[str, Any]:
+def rollback(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
+    guard_writeback_home(home, unsafe_cross_profile=unsafe_cross_profile)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
     target = manifest_skill_path(home, m)

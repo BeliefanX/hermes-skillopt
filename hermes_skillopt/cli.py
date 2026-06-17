@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from hermes_skillopt import core
 from hermes_skillopt import multi_agent
 
@@ -30,8 +31,8 @@ def main() -> int:
     fr = sub.add_parser("full-run"); add_full_args(fr)
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
     r = sub.add_parser("review"); r.add_argument("run_id")
-    a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true")
-    rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true")
+    a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true"); a.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
+    rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true"); rb.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     sub.add_parser("upstream-status")
     uu = sub.add_parser("upstream-update"); uu.add_argument("--fetch-only", action="store_true")
     ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
@@ -53,9 +54,15 @@ def main() -> int:
     elif args.cmd == "review":
         out = core.review(args.run_id, args.home)
     elif args.cmd == "adopt":
-        out = core.adopt(args.run_id, args.home, args.force)
+        if args.unsafe_cross_profile_writeback and not args.home:
+            print("--unsafe-cross-profile-writeback requires --home", file=sys.stderr)
+            return 2
+        out = core.adopt(args.run_id, args.home, args.force, unsafe_cross_profile=args.unsafe_cross_profile_writeback)
     elif args.cmd == "rollback":
-        out = core.rollback(args.run_id, args.home, args.force)
+        if args.unsafe_cross_profile_writeback and not args.home:
+            print("--unsafe-cross-profile-writeback requires --home", file=sys.stderr)
+            return 2
+        out = core.rollback(args.run_id, args.home, args.force, unsafe_cross_profile=args.unsafe_cross_profile_writeback)
     elif args.cmd == "upstream-status":
         out = core.upstream_status(args.home)
     elif args.cmd == "upstream-update":

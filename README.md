@@ -14,7 +14,7 @@
 
 完整流程：load skill state → build train/validation/test tasks → evaluate current with frozen target → optimizer reflects/proposes bounded edits from rollout evidence → apply candidate → evaluate candidate on held-out validation → validation gate compares current vs candidate → if improved stage `best_skill.md` → user review/adopt/rollback。
 
-Hermes staged safety 是外壳：full-run 只写 `$HERMES_HOME/skillopt/staging/<run-id>/`；`adopt`/`rollback` 必须显式、可逆、带 path/sha/manifest gate guard，并限制在当前 `$HERMES_HOME/skills`。生产 tool/CLI 不提供 auto-adopt。
+Hermes staged safety 是外壳：full-run 只写 `$HERMES_HOME/skillopt/staging/<run-id>/`；`adopt`/`rollback` 必须显式、可逆、带 path/sha/manifest gate guard，并限制在当前 active `$HERMES_HOME/skills`。生产 tool/WebUI 的 live writeback 不接受任意 `hermes_home` override；CLI 只有带 `--unsafe-cross-profile-writeback --home ...` 的显式离线维护确认才允许跨 active profile 写回。生产 tool/CLI 不提供 auto-adopt。
 
 Artifacts：每个 run 写入 `manifest.json`, `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, `diff.patch`, `report.md`, `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`, `current_validation_results.json`, `candidate_validation_results.json`, `reflections.json`, `candidate_edits.json`, `gate_results.json`, `rejected_edits.jsonl`；只有 validation gate 通过时才额外 stage `best_skill.md`。
 
@@ -68,8 +68,8 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_full_run`: 明确执行完整 cycle。
 - `hermes_skillopt_dry_run`: legacy staged proposal，不写目标技能。
 - `hermes_skillopt_review`: 查看 run 状态、gate score、accepted/rejected、diff/report 路径和摘要。
-- `hermes_skillopt_adopt`: sha/path guard 通过后，只写目标 `SKILL.md`，并创建备份。
-- `hermes_skillopt_rollback`: 通过已校验的 backup manifest 和备份 `SKILL.md` 恢复（无 staged original fallback）。
+- `hermes_skillopt_adopt`: sha/path guard 通过后，只写 active profile 的目标 `SKILL.md`，并创建备份；tool schema 不接受 `hermes_home` override。
+- `hermes_skillopt_rollback`: 在 active profile 内通过已校验的 backup manifest 和备份 `SKILL.md` 恢复（无 staged original fallback）；tool schema 不接受 `hermes_home` override。
 - `hermes_skillopt_upstream_status`: 查看 canonical HERMES_HOME upstream clone/lock 状态；生产 tool/CLI/WebUI 不接受任意 `repo_path`。
 - `hermes_skillopt_upstream_update`: clone/fetch/pin canonical upstream；不合并插件代码。
 - `hermes_skillopt_handoff_optimize`: 生成/评分 Hermes `delegate_task` 的 multi-agent dispatcher→worker handoff 包；无 LLM/network 调用，不自动修改全局 prompt/skill。
@@ -115,7 +115,7 @@ WebUI 暴露的是 Hermes-specific workflow，而不是 upstream generic trainin
 - **Status**：当前 `HERMES_HOME`、skills count、最近 staged runs。
 - **Full run**：`skill/query/eval_file/lookback/limit/iterations/edit_budget/backend/allow_mock` 控件；始终 staged-only，`auto_adopt` 在 WebUI 中固定为 false。
 - **Review artifacts**：只读取 `$HERMES_HOME/skillopt/staging/<run_id>/` 内的 `report.md`、`diff.patch`、`gate_results.json`、`proposed_SKILL.md`、`rejected_edits.jsonl` 等固定 artifact，不提供任意文件浏览。
-- **Adopt / Rollback**：必须显式输入 `ADOPT <run_id>` 或 `ROLLBACK <run_id>` 才会执行；仍使用 core 的 path/sha guards 和 backup/rollback 机制。
+- **Adopt / Rollback**：必须显式输入 `ADOPT <run_id>` 或 `ROLLBACK <run_id>` 才会执行；仍使用 core 的 path/sha guards 和 backup/rollback 机制。WebUI live writeback 固定使用 active profile，忽略 HERMES_HOME override，避免浏览器界面成为跨 profile 写回入口。
 - **Upstream**：可查看/更新 pinned Microsoft SkillOpt upstream clone；只更新 lock/clone，不自动合并插件代码。
 
 若未安装 Gradio，启动会给出明确安装提示，不影响测试和 Hermes 插件加载。
@@ -136,4 +136,4 @@ WebUI 暴露的是 Hermes-specific workflow，而不是 upstream generic trainin
 - Adopt 前备份到 `$HERMES_HOME/skillopt/backups/<timestamp-run-id>/`。
 - Rollback 只通过已校验的 backup manifest 和备份 `SKILL.md` 恢复，并带 current-sha guard。
 - session evidence 和 LLM artifact 均做常见 token/key/password/Authorization 脱敏。
-- 路径 guard 限制 manifest target 必须在当前 `$HERMES_HOME/skills` 下。
+- 路径 guard 限制 manifest target 必须在当前 active `$HERMES_HOME/skills` 下；`adopt`/`rollback` 默认拒绝对非 active home 的 live writeback，`force=true` 只绕过 sha guard，不绕过 validation/production eligibility/profile isolation。CLI 的 `--unsafe-cross-profile-writeback --home ...` 仅用于显式离线维护，并有回归测试覆盖。

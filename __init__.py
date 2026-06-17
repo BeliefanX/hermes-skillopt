@@ -19,6 +19,7 @@ def _schema(description: str, props: dict[str, Any] | None = None, required: lis
     return {"type": "object", "description": description, "properties": props or {}, "required": required or []}
 
 COMMON_HOME = {"hermes_home": {"type": "string", "description": "Optional HERMES_HOME override; defaults to current profile home (~/.hermes)."}}
+WRITEBACK_PROPS = {"run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}
 FULL_PROPS = {
     **COMMON_HOME,
     "skill": {"type": "string"},
@@ -40,8 +41,8 @@ SCHEMAS = {
     "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_full_run": _schema("Run full core pipeline: load skill state, build benchmark tasks, frozen target eval, optimizer reflect/edit, validation gate (candidate_score > current_score only), staged artifacts.", FULL_PROPS),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, and diff/report preview.", {**COMMON_HOME, "run_id": {"type": "string"}, "include_diff_chars": {"type": "integer", "default": 4000}}, ["run_id"]),
-    "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md after sha guard and backup.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
-    "hermes_skillopt_rollback": _schema("Rollback an adopted run using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", {**COMMON_HOME, "run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}, ["run_id"]),
+    "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", WRITEBACK_PROPS, ["run_id"]),
+    "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
     "hermes_skillopt_upstream_update": _schema("Fetch/update the canonical pinned Microsoft SkillOpt upstream clone under HERMES_HOME and write lock; never merges into plugin code.", {**COMMON_HOME, "fetch_only": {"type": "boolean", "default": False}}),
     "hermes_skillopt_handoff_optimize": _schema("Build and score a staged multi-agent delegate_task handoff package. No LLM/network calls and no global prompt auto-adopt.", {"requirements": {"type": "string"}, "worker": {"type": "string"}, "context_budget_chars": {"type": "integer", "default": 6000}}, ["requirements"]),
@@ -98,11 +99,11 @@ def _handle_review(args: dict, **kw) -> str:
 
 
 def _handle_adopt(args: dict, **kw) -> str:
-    return _ok(core.adopt, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home"), "force": bool(args.get("force", False))})
+    return _ok(core.adopt, {"run_id": args.get("run_id"), "hermes_home_path": None, "force": bool(args.get("force", False))})
 
 
 def _handle_rollback(args: dict, **kw) -> str:
-    return _ok(core.rollback, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home"), "force": bool(args.get("force", False))})
+    return _ok(core.rollback, {"run_id": args.get("run_id"), "hermes_home_path": None, "force": bool(args.get("force", False))})
 
 
 def _handle_upstream_status(args: dict, **kw) -> str:
