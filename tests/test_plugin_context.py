@@ -28,6 +28,35 @@ class FakePluginCtx:
         }
 
 
+def test_full_run_schema_exposes_parameters_properties():
+    plugin = load_plugin_module()
+
+    props = plugin.SCHEMAS["hermes_skillopt_full_run"]["parameters"]["properties"]
+
+    assert {"skill", "eval_file", "optimizer_backend", "allow_mock", "target_executor", "gate_mode"}.issubset(props)
+
+
+def test_registered_full_run_schema_exposes_skill_parameter():
+    plugin = load_plugin_module()
+    ctx = FakePluginCtx()
+
+    plugin.register(ctx)
+
+    schema = ctx.registered["hermes_skillopt_full_run"]["schema"]
+    assert schema["parameters"]["properties"]["skill"]["type"] == "string"
+
+
+def test_registry_wrapped_full_run_definition_exposes_skill_parameter():
+    plugin = load_plugin_module()
+    ctx = FakePluginCtx()
+
+    plugin.register(ctx)
+
+    schema = ctx.registered["hermes_skillopt_full_run"]["schema"]
+    definition = {"type": "function", "function": {**schema, "name": "hermes_skillopt_full_run"}}
+    assert definition["function"]["parameters"]["properties"]["skill"]["type"] == "string"
+
+
 def test_registered_full_run_handler_binds_plugin_ctx(monkeypatch):
     plugin = load_plugin_module()
     ctx = FakePluginCtx()

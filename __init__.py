@@ -16,7 +16,7 @@ except Exception:  # local CLI/tests outside Hermes core
 
 
 def _schema(description: str, props: dict[str, Any] | None = None, required: list[str] | None = None) -> dict[str, Any]:
-    return {"type": "object", "description": description, "properties": props or {}, "required": required or []}
+    return {"description": description, "parameters": {"type": "object", "properties": props or {}, "required": required or []}}
 
 COMMON_HOME = {"hermes_home": {"type": "string", "description": "Optional HERMES_HOME override; defaults to current profile home (~/.hermes)."}}
 WRITEBACK_PROPS = {"run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}

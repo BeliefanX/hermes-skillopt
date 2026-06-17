@@ -262,7 +262,7 @@ def test_plugin_metadata_matches_registered_tools_and_p3_tools_present():
     registered = [name for name, _schema, _handler, _emoji in plugin._TOOLS]
     assert provided == registered
     assert {"hermes_skillopt_import_upstream_benchmark", "hermes_skillopt_transfer_eval", "hermes_skillopt_conformance"}.issubset(registered)
-    assert "hermes_home" not in plugin.SCHEMAS["hermes_skillopt_upstream_update"]["properties"]
+    assert "hermes_home" not in plugin.SCHEMAS["hermes_skillopt_upstream_update"]["parameters"]["properties"]
 
 
 def test_p3_seam_matrix_entries_are_recorded():

@@ -761,18 +761,19 @@ def test_plugin_registration_includes_full_tool_schema():
     plugin.register(Ctx())
     assert "hermes_skillopt_full_run" in [n for n, _ in names]
     run_schema = dict(names)["hermes_skillopt_run"]
-    assert "iterations" in run_schema["properties"]
-    assert "backend" in run_schema["properties"]
-    assert "eval_file" in run_schema["properties"]
-    assert "auto_adopt" not in run_schema["properties"]
+    run_props = run_schema["parameters"]["properties"]
+    assert "iterations" in run_props
+    assert "backend" in run_props
+    assert "eval_file" in run_props
+    assert "auto_adopt" not in run_props
     update_schema = dict(names)["hermes_skillopt_upstream_update"]
-    assert "repo_path" not in update_schema["properties"]
+    assert "repo_path" not in update_schema["parameters"]["properties"]
     status_schema = dict(names)["hermes_skillopt_upstream_status"]
-    assert "repo_path" not in status_schema["properties"]
+    assert "repo_path" not in status_schema["parameters"]["properties"]
     adopt_schema = dict(names)["hermes_skillopt_adopt"]
     rollback_schema = dict(names)["hermes_skillopt_rollback"]
-    assert "hermes_home" not in adopt_schema["properties"]
-    assert "hermes_home" not in rollback_schema["properties"]
+    assert "hermes_home" not in adopt_schema["parameters"]["properties"]
+    assert "hermes_home" not in rollback_schema["parameters"]["properties"]
 
 
 def test_plugin_writeback_handlers_ignore_home_override(monkeypatch):
