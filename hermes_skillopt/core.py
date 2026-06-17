@@ -26,6 +26,9 @@ UPSTREAM_SEAM_MATRIX = [
     {"seam": "gate", "upstream_concept": "candidate validation gate", "hermes_adapter": "ValidationGate soft/hard/mixed/strict metric policy; LLM judge explanation-only", "status": "hardened"},
     {"seam": "artifact_resume", "upstream_concept": "checkpoint and artifacts", "hermes_adapter": "manifest/checkpoint/artifact hashes; completed-run resume only", "status": "hardened"},
     {"seam": "benchmarks_tests", "upstream_concept": "benchmark/evaluation packs", "hermes_adapter": "Hermes eval packs plus curated production validation/test policy", "status": "adapted"},
+    {"seam": "benchmark_bridge", "upstream_concept": "external benchmark manifest ingestion", "hermes_adapter": "JSON-only importer converts upstream-style manifests to Hermes eval packs; rejects executable/remote fields", "status": "p3_local_adapter"},
+    {"seam": "transfer_eval", "upstream_concept": "cross-target/generalization evaluation", "hermes_adapter": "read-only staged skill evaluation across deterministic target/profile configurations with fingerprints", "status": "p3_report_only"},
+    {"seam": "conformance", "upstream_concept": "adapter regression/conformance checks", "hermes_adapter": "local compile/pytest conformance reports; no upstream code execution or external services required", "status": "p3_local_contract"},
 ]
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SECRET_PATTERNS = [
@@ -900,11 +903,9 @@ def _resume_input_payload(*, home: Path, target: Skill, original: str, query: st
     from hermes_skillopt.state import SkillState
     from hermes_skillopt.target import TRACE_SCHEMA_VERSION, TargetExecutor
 
-    eval_path = None
-    if eval_file:
-        state = SkillState(name=target.name, path=target.path, relpath=target.relpath, text=original, sha256=sha256_text(original), hermes_home=home)
-        resolved_eval = resolve_eval_file(home, state, eval_file)
-        eval_path = str(resolved_eval) if resolved_eval else None
+    state = SkillState(name=target.name, path=target.path, relpath=target.relpath, text=original, sha256=sha256_text(original), hermes_home=home)
+    resolved_eval = resolve_eval_file(home, state, eval_file)
+    eval_path = str(resolved_eval) if resolved_eval else None
     eval_pack_identity: dict[str, Any] | None = None
     if eval_path and Path(eval_path).is_file():
         try:
@@ -1021,6 +1022,21 @@ def _slow_meta_artifact(original: str, evidence: dict[str, Any], rejected: list[
     suggestions = []
     for row in candidate_summary[-3:]:
         suggestions.append({"source": "candidate_summary", "iteration": row.get("iteration"), "selected_candidate_id": row.get("selected_candidate_id"), "rationale": row.get("selected_candidate_rationale")})
+    stability_epochs = []
+    accepted_total = 0
+    for row in candidate_summary:
+        ranked = row.get("ranked_candidates", []) if isinstance(row, dict) else []
+        accepted = sum(1 for cand in ranked if isinstance(cand, dict) and cand.get("accepted"))
+        rejected_in_epoch = sum(1 for cand in ranked if isinstance(cand, dict) and not cand.get("accepted"))
+        accepted_total += accepted
+        stability_epochs.append({
+            "iteration": row.get("iteration") if isinstance(row, dict) else None,
+            "selected_candidate_id": row.get("selected_candidate_id") if isinstance(row, dict) else None,
+            "accepted_candidates": accepted,
+            "rejected_candidates": rejected_in_epoch,
+            "selected_rationale": row.get("selected_candidate_rationale") if isinstance(row, dict) else None,
+            "stable_signal": "accepted_candidate_available" if accepted else "no_accepted_candidate_rejected_or_noop",
+        })
     rejected_memory = []
     for row in rejected[-20:]:
         if not isinstance(row, dict):
@@ -1048,6 +1064,19 @@ def _slow_meta_artifact(original: str, evidence: dict[str, Any], rejected: list[
         "rejected_buffer_count": len(rejected),
         "optimizer_rejected_memory": rejected_memory,
         "candidate_context_suggestions": suggestions,
+        "deployed_skill_boundary": {
+            "live_skill_content_included": False,
+            "source_skill_sha256": sha256_text(original),
+            "optimizer_memory_must_not_be_deployed_as_skill": True,
+            "deployed_skill_artifacts": ["proposed_SKILL.md", "best_skill.md when present"],
+        },
+        "epoch_stability_signals": {
+            "iterations_observed": len(candidate_summary),
+            "accepted_candidate_count": accepted_total,
+            "rejected_candidate_count": len(rejected),
+            "epochs": stability_epochs,
+            "rejection_buffer_captured": bool(rejected_memory),
+        },
         "normal_gate_required_for_any_write": True,
     }
 
@@ -1083,6 +1112,108 @@ def _history_artifact(*, run_id: str, original_sha256: str, proposed_sha256: str
     timeline = [{"type": "stage", "iteration": getattr(r, "iteration", None), "stage": getattr(r, "stage", None), "evidence": getattr(r, "evidence", {})} for r in stage_records]
     timeline.extend({"type": "candidate", "iteration": c.get("iteration"), "candidate_id": c.get("candidate_id"), "status": c.get("lineage_status"), "rank": c.get("rank")} for c in candidates)
     return {"schema_version": "skillopt-history-v1", "run_id": run_id, "parent_run_id": parent_run_id, "parent_sha256": original_sha256, "proposed_sha256": proposed_sha256, "timeline": timeline, "candidates": candidates, "accepted_candidate_ids": [c["candidate_id"] for c in candidates if c.get("accepted")], "rejected_candidate_ids": [c["candidate_id"] for c in candidates if not c.get("accepted")], "explainability": "candidate rows preserve rank, selected flag, gates, production gates, rejection reasons, and parent hash"}
+
+
+def eval_only(skill: str | None = None, *, skill_file: str | None = None, eval_file: str | None = None, hermes_home_path: str | None = None, target_executor: str = "auto", target_backend: str | None = None) -> dict[str, Any]:
+    """Read-only evaluation of a fixed skill against an explicit eval pack."""
+
+    if not eval_file:
+        raise ValueError("eval_only requires an explicit --eval-file")
+    if skill and skill_file:
+        raise ValueError("pass either --skill or --skill-file, not both")
+    from hermes_skillopt.env import load_eval_pack, resolve_eval_file
+    from hermes_skillopt.state import SkillState
+    from hermes_skillopt.target import DeterministicKeywordScorecard, HermesRolloutRunner, HermesSandboxRunner, TargetExecutor
+
+    home = hermes_home(hermes_home_path)
+    dirs = ensure_dirs(home)
+    if skill_file:
+        raw_skill = Path(skill_file).expanduser()
+        candidate_skill_path = raw_skill if raw_skill.is_absolute() else home / raw_skill
+        resolved_skill_path = candidate_skill_path.resolve(strict=True)
+        if candidate_skill_path.is_symlink() or not resolved_skill_path.is_file() or not _is_relative_to(resolved_skill_path, home.resolve()):
+            raise ValueError("skill_file must resolve to a regular file under HERMES_HOME")
+        skill_text = read_text(resolved_skill_path)
+        skill_name = resolved_skill_path.parent.name
+        skill_relpath = str(resolved_skill_path.relative_to(home.resolve()))
+        skill_path = resolved_skill_path
+    else:
+        target = find_skill(home, skill)
+        skill_text = read_text(target.path)
+        skill_name = target.name
+        skill_relpath = target.relpath
+        skill_path = target.path
+
+    state = SkillState(name=skill_name, path=skill_path, relpath=skill_relpath, text=skill_text, sha256=sha256_text(skill_text), hermes_home=home)
+    eval_path = resolve_eval_file(home, state, eval_file)
+    if eval_path is None:
+        raise FileNotFoundError(f"eval_file not found: {eval_file}")
+    tasks_all, eval_pack = load_eval_pack(eval_path)
+    tasks: dict[str, list[Any]] = {"train": [], "val": [], "test": []}
+    alias = {"validation": "val", "valid": "val", "dev": "val"}
+    for task in tasks_all:
+        split = alias.get(task.split, task.split)
+        tasks.setdefault(split, []).append(task)
+
+    requested_target = target_backend or target_executor
+    if requested_target == "sandbox":
+        runner = HermesSandboxRunner()
+    elif requested_target == "scorecard":
+        runner = DeterministicKeywordScorecard()
+    else:
+        runner = HermesRolloutRunner()
+    executor = TargetExecutor(runner=runner, requested_executor=requested_target)
+    split_results = {name: executor.evaluate(skill_text, split_tasks, label=f"eval_only_{name}") for name, split_tasks in tasks.items() if split_tasks}
+    all_result = executor.evaluate(skill_text, tasks_all, label="eval_only_all")
+
+    rid = now_id() + "-eval-only-" + skill_name.replace("/", "-")
+    run_dir = dirs["staging"] / rid
+    run_dir.mkdir(parents=True, exist_ok=False)
+    report_payload = {
+        "schema_version": "skillopt-eval-only-v1",
+        "run_id": rid,
+        "mode": "eval_only_no_training_no_adoption",
+        "skill_name": skill_name,
+        "skill_path": str(skill_path),
+        "skill_relpath": skill_relpath,
+        "skill_sha256": sha256_text(skill_text),
+        "eval_file": str(eval_path),
+        "eval_file_sha256": sha256_file(eval_path),
+        "eval_pack": eval_pack.as_dict(),
+        "target_executor": executor.mode,
+        "target_backend_config": executor.config.as_dict(),
+        "task_counts": {name: len(split_tasks) for name, split_tasks in tasks.items()},
+        "split_results": split_results,
+        "all_results": all_result,
+        "side_effect_policy": "read-only evaluation; no optimizer/training/adoption artifacts are produced",
+    }
+    write_text(run_dir / "evaluated_SKILL.md", skill_text)
+    write_text(run_dir / "eval_report.json", json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    write_text(run_dir / "report.md", f"# Hermes SkillOpt eval-only\n\n- run_id: {rid}\n- mode: eval_only_no_training_no_adoption\n- skill: {skill_name}\n- eval_file: {eval_path}\n- eval_pack_id: {eval_pack.pack_id}\n- target_executor: {executor.mode}\n- score: {all_result.get('score')}\n- task_counts: {json.dumps(report_payload['task_counts'], ensure_ascii=False)}\n- no_training_or_adoption_side_effects: true\n")
+    files = {"evaluated_skill": "evaluated_SKILL.md", "eval_report": "eval_report.json", "report": "report.md"}
+    manifest = {
+        "run_id": rid,
+        "status": "eval_only_complete",
+        "adoptable": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "hermes_home": str(home),
+        "skill_name": skill_name,
+        "skill_path": str(skill_path),
+        "skill_relpath": skill_relpath,
+        "skill_sha256": sha256_text(skill_text),
+        "eval_file": str(eval_path),
+        "eval_file_sha256": sha256_file(eval_path),
+        "eval_pack": eval_pack.as_dict(),
+        "target_executor": executor.mode,
+        "target_backend_config": executor.config.as_dict(),
+        "task_counts": report_payload["task_counts"],
+        "score": all_result.get("score"),
+        "mode": "eval_only_no_training_no_adoption",
+        "files": files,
+    }
+    manifest["artifact_sha256"] = artifact_hashes(run_dir, files)
+    save_manifest(run_dir, manifest)
+    return {"success": True, "run_id": rid, "status": "eval_only_complete", "adoptable": False, "run_dir": str(run_dir), "report_path": str(run_dir / "report.md"), "eval_report_path": str(run_dir / "eval_report.json"), "score": all_result.get("score"), "task_counts": report_payload["task_counts"], "eval_file": str(eval_path), "target_executor": executor.mode}
 
 
 def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, candidate_count: int = 1, backend: str = "auto", optimizer_backend: str | None = None, allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto", target_backend: str | None = None, gate_mode: str = "soft", resume_run_id: str | None = None) -> dict[str, Any]:

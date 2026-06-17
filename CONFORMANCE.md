@@ -47,14 +47,22 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Default posture: staged/report-only; no live skill writeback.
 
 - `hermes_skillopt.conformance.run_conformance(...)`
-  - Runs: `python -m compileall -q hermes_skillopt tests` and deterministic pytest args.
-  - Output: `hermes-skillopt-conformance-v1` JSON report.
+  - Modes: `quick` (default deterministic smoke/regression suite) and `full` (all local pytest tests).
+  - Important: quick mode is not a full repository health check and must not be reported as one.
+  - Runs: `python -m compileall -q hermes_skillopt tests` plus mode-selected/custom pytest args.
+  - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`.
 
 CLI equivalents (console script after editable install, or `python3 -m hermes_skillopt.cli ...` from the repo):
 
 - `hermes-skillopt import-upstream-benchmark MANIFEST --output PACK.json`
 - `hermes-skillopt transfer-eval --run-id RUN --target scorecard --target replay --output report.json`
 - `hermes-skillopt conformance --output conformance.json`
+
+Hermes plugin tool equivalents registered in `plugin.yaml`:
+
+- `hermes_skillopt_import_upstream_benchmark`
+- `hermes_skillopt_transfer_eval`
+- `hermes_skillopt_conformance`
 
 ## Known limitations
 

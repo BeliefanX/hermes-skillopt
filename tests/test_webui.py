@@ -79,6 +79,13 @@ def test_webui_writeback_callbacks_ignore_home_override(monkeypatch, tmp_path):
     ]
 
 
+def test_webui_upstream_update_ignores_home_override(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(core, "upstream_update", lambda **kwargs: calls.append(kwargs) or {"success": True})
+    assert "success" in webui.upstream_update_markdown(str(tmp_path / "other"), fetch_only=True)
+    assert calls == [{"hermes_home_path": None, "repo_path": None, "fetch_only": True}]
+
+
 def test_cli_writeback_unsafe_flag_is_explicit(monkeypatch, tmp_path, capsys):
     calls = []
     monkeypatch.setattr(cli.core, "adopt", lambda *args, **kwargs: calls.append((args, kwargs)) or {"success": True})

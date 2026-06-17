@@ -30,6 +30,9 @@ class ScorecardRunner(Protocol):
 
 
 TRACE_SCHEMA_VERSION = "hermes-target-trace-v1"
+FROZEN_TARGET_MODEL_ID = "no-live-model-deterministic-target-v1"
+FROZEN_PROFILE_POLICY = "isolated-or-readonly-profile-no-live-profile-writes"
+FROZEN_TOOL_POLICY = "task-commands-never-executed; fixture-tools-recorded-or-fixed-runner-only"
 
 
 def _stable_json_sha(data: object) -> str:
@@ -71,9 +74,13 @@ class DeterministicKeywordScorecard:
     def config_parameters(self) -> dict[str, object]:
         return {
             "trace_schema": TRACE_SCHEMA_VERSION,
+            "backend_kind": "deterministic_fallback_scorecard",
             "scoring_policy": "deterministic_keyword_scorecard_v1",
+            "deterministic": True,
+            "review_only_unless_curated_pack": True,
             "judge_can_accept": False,
             "executes_task_commands": False,
+            "task_command_policy": "not_supported",
         }
 
     def score(self, skill_text: str, task: EvalTask) -> EvalResult:
@@ -96,7 +103,7 @@ class DeterministicKeywordScorecard:
             matched.append("bounded_edit")
         penalties = [term for term in task.failure_terms if term.lower() in low]
         score = round(max(0.0, min(1.0, score - 0.15 * len(penalties))), 3)
-        return EvalResult(task.id, score, score >= 0.55, f"runner={self.mode}; matched={matched}; penalties={penalties}", _result_metadata(task))
+        return EvalResult(task.id, score, score >= 0.55, f"runner={self.mode}; matched={matched}; penalties={penalties}", {**_result_metadata(task), "runner_label": "deterministic_fallback_review_only", "task_commands_executed": False, "hard_pass": score >= 0.55, "soft_score": score})
 
 
 @dataclass(frozen=True)
@@ -113,10 +120,14 @@ class HermesRolloutRunner:
     def config_parameters(self) -> dict[str, object]:
         return {
             "trace_schema": TRACE_SCHEMA_VERSION,
+            "backend_kind": "deterministic_trace_replay",
             "scoring_policy": "deterministic_keywords_assertions_markers_v1",
+            "deterministic": True,
+            "review_only_unless_curated_pack": True,
             "judge_can_accept": False,
             "executes_task_commands": False,
             "task_command_policy": "record_and_block",
+            "fixture_tool_policy": "record_only_never_execute",
         }
 
     def score(self, skill_text: str, task: EvalTask) -> EvalResult:
@@ -160,6 +171,9 @@ class HermesRolloutRunner:
                 "failure_tags": failure_tags,
                 "sandbox_command_blocked": command_blocked,
                 "task_commands_executed": False,
+                "runner_label": "deterministic_replay_review_only_unless_curated_pack",
+                "hard_pass": score >= 0.55 and not penalties and not command_blocked,
+                "soft_score": score,
             },
         )
 
@@ -234,8 +248,12 @@ class HermesSandboxRunner:
     def config_parameters(self) -> dict[str, object]:
         return {
             "trace_schema": TRACE_SCHEMA_VERSION,
+            "backend_kind": "sandbox_fixed_internal_runner",
             "fixed_internal_runner": "python -m hermes_skillopt.sandbox_runner",
             "task_command_policy": "reject_before_subprocess",
+            "fixture_tool_policy": "fixed_runner_only_no_task_shell",
+            "deterministic": False,
+            "review_only_unless_curated_pack": True,
             "isolated_home": True,
             "live_profile_writes": False,
             "path": os.defpath,
@@ -255,6 +273,9 @@ class HermesSandboxRunner:
                 "trace_schema": TRACE_SCHEMA_VERSION,
                 "failure_tags": ["task_provided_command_blocked"],
                 "task_commands_executed": False,
+                "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack",
+                "hard_pass": False,
+                "soft_score": 0.0,
                 "trajectory": {
                     "schema_version": TRACE_SCHEMA_VERSION,
                     "task_id": task.id,
@@ -308,7 +329,7 @@ class HermesSandboxRunner:
         penalties = [term for term in task.failure_terms if term.lower() in low_skill or term.lower() in low_transcript]
         penalties.extend([m for m in task.forbidden_markers if m.lower() in low_transcript or m.lower() in low_skill])
         score, passed_names, failed_names = _score_checks(checks, penalties)
-        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
+        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": code == 0 and score >= 0.55 and not penalties, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
         metadata["trace_fingerprint_sha256"] = _stable_json_sha(metadata["trajectory"])
         return EvalResult(task.id, score, code == 0 and score >= 0.55 and not penalties, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}", metadata)
 
@@ -329,6 +350,9 @@ class TargetBackendConfig:
     target_config_id: str = "frozen-hermes-trace-replay-v2"
     requested_executor: str = "auto"
     role: str = "frozen_current_candidate_evaluator_no_editing"
+    model_id: str = FROZEN_TARGET_MODEL_ID
+    profile_policy: str = FROZEN_PROFILE_POLICY
+    tool_policy: str = FROZEN_TOOL_POLICY
     parameters: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
@@ -338,6 +362,11 @@ class TargetBackendConfig:
             "target_config_id": self.target_config_id,
             "requested_executor": self.requested_executor,
             "role": self.role,
+            "model_id": self.model_id,
+            "profile_policy": self.profile_policy,
+            "tool_policy": self.tool_policy,
+            "live_tool_execution_allowed": False,
+            "task_provided_commands_allowed": False,
             "parameters": self.parameters,
         }
         return {**payload, "fingerprint_sha256": _stable_json_sha(payload)}
@@ -363,17 +392,46 @@ class TargetExecutor:
         parameters = getattr(self.runner, "config_parameters", lambda: {})()
         return TargetBackendConfig(executor=self.mode, target_config_id=self.target_config_id, requested_executor=self.requested_executor, parameters=dict(parameters or {}))
 
+    def _weighted_pass_rate(self, results: list[EvalResult], tasks: list[EvalTask]) -> float:
+        total_weight = sum(max(0.0, float(task.weight)) for task in tasks)
+        if not results or total_weight <= 0:
+            return 0.0
+        passed = sum(max(0.0, float(task.weight)) for result, task in zip(results, tasks) if result.passed)
+        return round(passed / total_weight, 6)
+
+    def _trajectory_index(self, results: list[EvalResult]) -> dict[str, object]:
+        items: list[dict[str, object]] = []
+        for result in results:
+            metadata = result.metadata or {}
+            trajectory = metadata.get("trajectory") or metadata.get("trace")
+            item: dict[str, object] = {
+                "task_id": result.task_id,
+                "score": result.score,
+                "passed": result.passed,
+                "evidence_preview": _preview(result.evidence, 800),
+                "failure_tags": list(metadata.get("failure_tags") or []),
+                "trace_fingerprint_sha256": metadata.get("trace_fingerprint_sha256") or (_stable_json_sha(trajectory) if trajectory else None),
+                "has_trajectory": bool(trajectory),
+            }
+            if trajectory:
+                item["trajectory"] = trajectory
+            items.append(item)
+        return {"schema_version": TRACE_SCHEMA_VERSION, "items": items, "fingerprint_sha256": _stable_json_sha(items)}
+
     def evaluate(self, skill_text: str, tasks: list[EvalTask], label: str = "skill") -> dict[str, object]:
         assert self.runner is not None
         results = [self.runner.score(skill_text, task) for task in tasks]
         total_weight = sum(max(0.0, float(task.weight)) for task in tasks)
         weighted = sum(r.score * max(0.0, float(task.weight)) for r, task in zip(results, tasks))
         mean = round(weighted / total_weight, 3) if results and total_weight > 0 else 0.0
-        production_gate_eligible = bool(results) and all(bool(r.metadata.get("production_gate_eligible")) for r in results)
+        hard_score = self._weighted_pass_rate(results, tasks)
         splits = sorted({task.split for task in tasks})
         eligibility = [production_eligibility_for_task(task).as_dict() for task in tasks]
+        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility)
         regression_cases = [r.task_id for r in results if not r.passed]
         target_config = self.config.as_dict()
+        trajectory_index = self._trajectory_index(results)
+        evaluation_scope = "production_curated_pack_eligible" if production_gate_eligible else "review_only_deterministic_fallback"
         return {
             "label": label,
             "executor": self.mode,
@@ -382,14 +440,22 @@ class TargetExecutor:
             "target_fingerprint_sha256": target_config["fingerprint_sha256"],
             "trace_schema": TRACE_SCHEMA_VERSION,
             "score": mean,
+            "soft_score": mean,
+            "hard_score": hard_score,
+            "hard_pass_rate": hard_score,
             "split_score": mean,
             "split": splits[0] if len(splits) == 1 else "mixed" if splits else None,
             "splits": splits,
             "num_tasks": len(results),
             "total_weight": round(total_weight, 3),
             "production_gate_eligible": production_gate_eligible,
+            "evaluation_scope": evaluation_scope,
+            "adoption_policy": "production adoption allowed only when every task is explicit curated-pack production eligible; otherwise review-only evidence",
             "production_eligibility_reasons": eligibility,
             "regression_cases": regression_cases,
+            "trajectory_index": trajectory_index,
+            "trajectory_fingerprint_sha256": trajectory_index["fingerprint_sha256"],
+            "result_summary": [{"task_id": r.task_id, "score": r.score, "soft_score": r.score, "passed": r.passed, "hard_pass": r.passed, "failure_tags": list((r.metadata or {}).get("failure_tags") or []), "trace_fingerprint_sha256": (r.metadata or {}).get("trace_fingerprint_sha256")} for r in results],
             "results": [r.__dict__ for r in results],
         }
 

@@ -10,7 +10,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 ## Main modules
 
-- `core.py`: orchestration, status/review/adopt/rollback, artifact hashing, upstream status/update wrappers, profile/path guards.
+- `core.py`: orchestration, status/review/adopt/rollback, eval-only fixed-skill reports, artifact hashing, upstream status/update wrappers, profile/path guards.
 - `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
 - `trainer.py`: six-stage rollout/reflect/aggregate/select/update/evaluate loop and final held-out test evaluation.
 - `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
@@ -39,10 +39,12 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
    - update a candidate copy
    - evaluate and gate on held-out validation
 6. Evaluate the final best candidate on held-out test.
-7. Write report, diff, stage JSON artifacts, rejected edits, slow/meta evidence, gate results, manifest, checkpoint, and artifact SHA-256 map.
+7. Write report, diff, stage JSON artifacts, rejected edits, `slow_meta.json` evidence, gate results, manifest, checkpoint, and artifact SHA-256 map.
 8. Mark the run adoptable only if production validation and held-out test gates are eligible and passing.
 
 `full_run(dry_run=True)` is rejected by code; CLI has no `full-run --dry-run` option. Legacy `dry-run`/`run --mode legacy` remains review-only.
+
+`eval_only()`/CLI `eval-only` is a separate fixed-skill scoring path. It requires an explicit eval file, writes `evaluated_SKILL.md`, `eval_report.json`, `report.md`, and `manifest.json` under a staging run with `status == "eval_only_complete"`, and is always `adoptable: false`. It has no optimizer/training/candidate-selection side effects and cannot production-adopt.
 
 ## Artifact model
 
@@ -65,7 +67,7 @@ Production adoption is intentionally stricter than generic validation:
 - Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
 - LLM judge text is explanatory evidence only and cannot bypass gates.
 
-Gate modes are deterministic metric policies: `soft` requires weighted-score improvement, `hard`/`strict` require stricter per-task pass/non-regression semantics, and `mixed` combines generic improvement with stricter production candidate preference. All modes keep LLM/judge output explanation-only.
+Gate modes are deterministic metric policies: `soft` requires weighted-score improvement, `hard` requires stricter pass-rate improvement, `mixed` requires soft improvement with hard non-regression, and `strict` requires a non-no-op soft improvement, hard weighted pass-rate non-regression, and no previously passing task failures unless `hard_regression_allowed` is explicitly set. All modes keep LLM/judge output explanation-only.
 
 ## EnvAdapter and evidence foundation
 

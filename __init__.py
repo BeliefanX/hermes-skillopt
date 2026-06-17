@@ -50,7 +50,10 @@ SCHEMAS = {
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", WRITEBACK_PROPS, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
-    "hermes_skillopt_upstream_update": _schema("Fetch/update the canonical pinned Microsoft SkillOpt upstream clone under HERMES_HOME and write lock; never merges into plugin code.", {**COMMON_HOME, "fetch_only": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_upstream_update": _schema("Fetch/update the canonical pinned Microsoft SkillOpt upstream clone for the active profile and write lock; ignores arbitrary HERMES_HOME overrides and never merges into plugin code.", {"fetch_only": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_import_upstream_benchmark": _schema("Safely convert an upstream-style embedded JSON benchmark manifest into a Hermes eval pack; rejects executable/remote/network fields and never imports upstream code.", {"manifest": {"type": "string"}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string"}, "curated": {"type": "boolean", "default": False}}, ["manifest"]),
+    "hermes_skillopt_transfer_eval": _schema("Read-only/report-only staged skill transfer evaluation across target/profile configs; never writes live skills.", {**COMMON_HOME, "run_id": {"type": "string"}, "skill_file": {"type": "string"}, "eval_file": {"type": "string"}, "targets": {"type": "array", "items": {"type": "string", "enum": ["scorecard", "replay", "sandbox"]}}, "profile_homes": {"type": "array", "items": {"type": "string"}}, "output": {"type": "string"}, "allow_live_skill_file": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_conformance": _schema("Run local conformance and write a JSON report. Default mode=quick is a smoke suite, not full repo health; use mode=full for all pytest tests.", {"output": {"type": "string"}, "pytest_args": {"type": "array", "items": {"type": "string"}}, "timeout": {"type": "integer", "default": 180}, "mode": {"type": "string", "enum": ["quick", "full"], "default": "quick"}}),
     "hermes_skillopt_handoff_optimize": _schema("Build and score a staged multi-agent delegate_task handoff package. No LLM/network calls and no global prompt auto-adopt.", {"requirements": {"type": "string"}, "worker": {"type": "string"}, "context_budget_chars": {"type": "integer", "default": 6000}}, ["requirements"]),
 }
 
@@ -126,7 +129,22 @@ def _handle_upstream_status(args: dict, **kw) -> str:
 
 
 def _handle_upstream_update(args: dict, **kw) -> str:
-    return _ok(core.upstream_update, {"hermes_home_path": args.get("hermes_home"), "repo_path": None, "fetch_only": bool(args.get("fetch_only", False))})
+    return _ok(core.upstream_update, {"hermes_home_path": None, "repo_path": None, "fetch_only": bool(args.get("fetch_only", False))})
+
+
+def _handle_import_upstream_benchmark(args: dict, **kw) -> str:
+    from hermes_skillopt.benchmark_bridge import import_upstream_manifest
+    return _ok(import_upstream_manifest, {"input_path": args.get("manifest"), "output_path": args.get("output"), "pack_id": args.get("pack_id"), "version": args.get("version"), "sample_pack": not bool(args.get("curated", False))})
+
+
+def _handle_transfer_eval(args: dict, **kw) -> str:
+    from hermes_skillopt.transfer import transfer_eval
+    return _ok(transfer_eval, {"hermes_home_path": args.get("hermes_home"), "run_id": args.get("run_id"), "skill_file": args.get("skill_file"), "eval_file": args.get("eval_file"), "targets": args.get("targets"), "profile_homes": args.get("profile_homes"), "output_path": args.get("output"), "staged_only": not bool(args.get("allow_live_skill_file", False))})
+
+
+def _handle_conformance(args: dict, **kw) -> str:
+    from hermes_skillopt.conformance import run_conformance
+    return _ok(run_conformance, {"output_path": args.get("output"), "pytest_args": args.get("pytest_args"), "timeout": int(args.get("timeout") or 180), "mode": args.get("mode") or "quick"})
 
 
 def _handle_handoff_optimize(args: dict, **kw) -> str:
@@ -143,6 +161,9 @@ _TOOLS = (
     ("hermes_skillopt_rollback", SCHEMAS["hermes_skillopt_rollback"], _handle_rollback, "↩️"),
     ("hermes_skillopt_upstream_status", SCHEMAS["hermes_skillopt_upstream_status"], _handle_upstream_status, "🌊"),
     ("hermes_skillopt_upstream_update", SCHEMAS["hermes_skillopt_upstream_update"], _handle_upstream_update, "⬆️"),
+    ("hermes_skillopt_import_upstream_benchmark", SCHEMAS["hermes_skillopt_import_upstream_benchmark"], _handle_import_upstream_benchmark, "🌉"),
+    ("hermes_skillopt_transfer_eval", SCHEMAS["hermes_skillopt_transfer_eval"], _handle_transfer_eval, "🔁"),
+    ("hermes_skillopt_conformance", SCHEMAS["hermes_skillopt_conformance"], _handle_conformance, "✅"),
     ("hermes_skillopt_handoff_optimize", SCHEMAS["hermes_skillopt_handoff_optimize"], _handle_handoff_optimize, "🤝"),
 )
 

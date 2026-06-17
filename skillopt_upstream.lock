@@ -3,6 +3,12 @@
   "feature_matrix_version": "upstream-seam-matrix-v1",
   "last_reviewed_upstream_commit": "86bad36ffe511b7022a6c735930056c14124b960",
   "note": "Pinned external upstream only; no plugin code merged automatically.",
+  "p3_seam_matrix": {
+    "benchmark_bridge": "JSON/schema-only import; executable, remote, and network fields rejected; no upstream code import or execution.",
+    "conformance": "quick mode is deterministic smoke only; full mode runs all local pytest; neither requires external services.",
+    "transfer_eval": "report-only/read-only staged evaluation; output reports are blocked from live HERMES_HOME/skills targets.",
+    "webui_writeback": "adopt/rollback/upstream update ignore arbitrary WebUI HERMES_HOME overrides and remain active-profile guarded."
+  },
   "pinned_commit": "86bad36ffe511b7022a6c735930056c14124b960",
   "updated_at": "2026-06-14T17:04:18.324719+00:00",
   "upstream_url": "https://github.com/microsoft/SkillOpt.git"

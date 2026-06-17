@@ -8,6 +8,8 @@ network references, or executes benchmark-defined commands.
 
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,7 +31,18 @@ FORBIDDEN_EXECUTION_FIELDS = {
     "dockerfile",
     "image",
     "url",
+    "uri",
     "remote_url",
+    "api_url",
+    "endpoint",
+    "host",
+    "port",
+    "socket",
+    "network",
+    "request",
+    "requests",
+    "http",
+    "https",
 }
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test", "dev": "val", "eval": "val"}
 
@@ -68,6 +81,8 @@ def _walk_forbidden(value: Any, path: str = "$", found: list[str] | None = None)
     elif isinstance(value, list):
         for i, child in enumerate(value):
             _walk_forbidden(child, f"{path}[{i}]", found)
+    elif isinstance(value, str) and value.strip().lower().startswith(("http://", "https://", "ssh://", "git://")):
+        found.append(path)
     return found
 
 
@@ -167,17 +182,27 @@ def import_upstream_manifest(input_path: str | Path, output_path: str | Path | N
     payload["fingerprint_sha256"] = _stable_sha(payload)
 
     # Reuse Hermes eval-pack validation for complete splits, leakage and eligibility.
-    tmp_path = Path(output_path).expanduser().resolve() if output_path else None
-    validation_path = tmp_path or (path.parent / f".{path.stem}.hermes-eval-pack.tmp.json")
-    validation_path.parent.mkdir(parents=True, exist_ok=True)
-    validation_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Validate through a sibling temporary file first so a failed validation never
+    # creates or overwrites the requested output path. Only after validation
+    # succeeds do we atomically replace the destination with the validated bytes.
+    output_target = Path(output_path).expanduser().resolve() if output_path else None
+    validation_dir = output_target.parent if output_target else path.parent
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    payload_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    tmp_prefix = f".{(output_target.name if output_target else path.stem)}.hermes-eval-pack."
+    fd, validation_name = tempfile.mkstemp(prefix=tmp_prefix, suffix=".tmp.json", dir=validation_dir)
+    validation_path = Path(validation_name)
     try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload_text)
         _, meta = load_eval_pack(validation_path)
+        if output_target:
+            os.replace(validation_path, output_target)
     finally:
-        if output_path is None:
+        if validation_path.exists():
             validation_path.unlink(missing_ok=True)
     if output_path:
-        out_path = validation_path
+        out_path = output_target
     else:
         out_path = None
     report = UpstreamImportReport(

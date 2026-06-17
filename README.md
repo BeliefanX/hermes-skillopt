@@ -52,9 +52,12 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_rollback`: explicit restore from verified backup manifest/SKILL.md; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_upstream_status`: local pinned upstream clone/lock status; no network fetch.
 - `hermes_skillopt_upstream_update`: clone/fetch/pin Microsoft SkillOpt upstream metadata only; does not merge plugin code.
+- `hermes_skillopt_import_upstream_benchmark`: safe JSON-only upstream-style manifest import into a Hermes eval pack; rejects executable/remote fields.
+- `hermes_skillopt_transfer_eval`: read-only/report-only staged skill evaluation across deterministic target/profile configs; never writes live skills.
+- `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services.
 - `hermes_skillopt_handoff_optimize`: deterministic multi-agent `delegate_task` dispatcher→worker handoff package optimizer; staged output only.
 
-P3 import/transfer/conformance surfaces are CLI/module commands, not Hermes plugin tools in `plugin.yaml`: `import-upstream-benchmark`, `transfer-eval`, and `conformance`.
+P3 import/transfer/conformance surfaces are available both as Hermes plugin tools (`hermes_skillopt_import_upstream_benchmark`, `hermes_skillopt_transfer_eval`, `hermes_skillopt_conformance`) and as CLI/module commands (`import-upstream-benchmark`, `transfer-eval`, and `conformance`). `eval-only` is currently CLI/core-only.
 
 Important full-run parameters:
 
@@ -63,7 +66,7 @@ Important full-run parameters:
 - `optimizer_backend`: `auto|hermes|mock`; controls reflection/bounded edit proposal generation
 - `allow_mock`: required before `backend=auto` may fall back to mock outside Hermes.
 - `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard`; controls the frozen evaluator, separate from the optimizer backend
-- `gate_mode`: `soft|hard|mixed|strict`; deterministic metric policy, with LLM/judge text kept explanation-only
+- `gate_mode`: `soft|hard|mixed|strict`; deterministic metric policy (`strict` requires soft improvement plus hard pass-rate/per-task non-regression), with LLM/judge text kept explanation-only
 - `resume_run_id`: opt-in reuse of a completed checkpointed run only when the stored input/config/provenance fingerprint matches
 - `force`: only affects adopt/rollback current-sha guard behavior where exposed; it does not bypass artifact, profile, validation, production, or test gates.
 
@@ -72,6 +75,7 @@ CLI help confirms the supported surface:
 ```bash
 python3 -m hermes_skillopt.cli --help
 python3 -m hermes_skillopt.cli full-run --help
+python3 -m hermes_skillopt.cli eval-only --help
 python3 -m hermes_skillopt.cli resume-inspect --help
 ```
 
@@ -108,6 +112,16 @@ python3 -m hermes_skillopt.cli resume-inspect RUN_ID
 ```
 
 It verifies checkpoint/stage fingerprints and manifest hashes. It reports whether a completed run is safe to reuse; incomplete checkpoints are refused rather than replayed from the middle of the six-stage lifecycle.
+
+## Eval-only
+
+`eval-only` evaluates a fixed skill against an explicit curated eval pack without optimizer reflection, training, candidate selection, adoption eligibility, or live writeback:
+
+```bash
+python3 -m hermes_skillopt.cli eval-only --skill my-skill --eval-file skillopt/evals/my-skill.jsonl --target-executor replay
+```
+
+It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval_report.json`, `report.md`, and `manifest.json`. The manifest is always `adoptable: false`; this command is for fixed-skill scoring/reporting only, not production adoption.
 
 ## Eval schema and production eligibility
 
@@ -167,6 +181,7 @@ python3 -m hermes_skillopt.cli conformance --output conformance.json
 - `import-upstream-benchmark` converts common upstream-style JSON manifests with embedded `tasks` or `splits` into a Hermes `hermes-curated-eval-pack-v1` JSON pack. It rejects executable/remote fields such as commands, code, entrypoints, modules, URLs, containers, and images. Imported packs are sample/review-only unless `--curated` is explicitly supplied and individual tasks still satisfy the production eval policy.
 - `transfer-eval` evaluates a staged run's proposed skill (or, with `--allow-live-skill-file`, an explicit skill file) across selected deterministic target executors and optional profile homes. It is read-only/report-only and records target/profile fingerprints; it does not adopt or mutate skills.
 - `conformance` runs local deterministic checks (`compileall` and pytest args) and writes a `hermes-skillopt-conformance-v1` JSON report. It does not contact upstream, run external benchmark code, or require live Hermes services.
+- Default `conformance` mode is `quick`, a deterministic smoke/regression subset. Use `--mode full` when you need all local pytest tests; do not report quick mode as full repository health.
 
 These utilities are useful for local regression evidence. They do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
 

@@ -22,7 +22,7 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--allow-mock", action="store_true")
     p.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto", help="Frozen evaluator mode; sandbox uses isolated temp HOME/HERMES_HOME/workspace")
     p.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"], help="Explicit target backend alias for --target-executor")
-    p.add_argument("--gate-mode", choices=["soft", "hard", "mixed", "strict"], default="soft", help="Deterministic metric gate; default soft preserves strict weighted score improvement")
+    p.add_argument("--gate-mode", choices=["soft", "hard", "mixed", "strict"], default="soft", help="Deterministic metric gate; strict also requires hard pass-rate and per-task non-regression")
     p.add_argument("--force", action="store_true")
     p.add_argument("--resume-run-id", help="Opt-in resume/reuse of a prior checkpointed full-run when input/config/provenance fingerprints match")
 
@@ -34,6 +34,8 @@ def main() -> int:
     sub.add_parser("status")
     d = sub.add_parser("dry-run"); d.add_argument("--skill"); d.add_argument("--goal"); d.add_argument("--session-search"); d.add_argument("--use-llm", action="store_true")
     fr = sub.add_parser("full-run"); add_full_args(fr)
+    eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
+    eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"])
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
     r = sub.add_parser("review"); r.add_argument("run_id")
     ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
@@ -45,8 +47,8 @@ def main() -> int:
     ubi.add_argument("manifest"); ubi.add_argument("--output"); ubi.add_argument("--pack-id"); ubi.add_argument("--version"); ubi.add_argument("--curated", action="store_true", help="Mark imported pack as curated instead of sample/review-only")
     te = sub.add_parser("transfer-eval", help="Read-only staged/proposed skill transfer evaluation across target/profile configs")
     te.add_argument("--run-id"); te.add_argument("--skill-file"); te.add_argument("--eval-file"); te.add_argument("--target", action="append", choices=["scorecard", "replay", "sandbox"], dest="targets"); te.add_argument("--profile-home", action="append", dest="profile_homes"); te.add_argument("--output"); te.add_argument("--allow-live-skill-file", action="store_true", help="Allow explicit --skill-file input; still never writes live skills")
-    conf = sub.add_parser("conformance", help="Run deterministic local conformance suite and write a JSON report")
-    conf.add_argument("--output"); conf.add_argument("--pytest-arg", action="append", dest="pytest_args"); conf.add_argument("--timeout", type=int, default=180)
+    conf = sub.add_parser("conformance", help="Run local conformance and write a JSON report. Default mode=quick is a smoke suite, not full repo health; use --mode full for all pytest tests.")
+    conf.add_argument("--output"); conf.add_argument("--pytest-arg", action="append", dest="pytest_args"); conf.add_argument("--timeout", type=int, default=180); conf.add_argument("--mode", choices=["quick", "full"], default="quick")
     ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
     web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
     web.add_argument("--host", default="127.0.0.1")
@@ -61,6 +63,8 @@ def main() -> int:
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
         out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, candidate_count=getattr(args, "candidate_count", 1), backend=args.backend, optimizer_backend=getattr(args, "optimizer_backend", None), allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"), target_backend=getattr(args, "target_backend", None), gate_mode=getattr(args, "gate_mode", "soft"), resume_run_id=getattr(args, "resume_run_id", None))
+    elif args.cmd == "eval-only":
+        out = core.eval_only(skill=args.skill, skill_file=args.skill_file, eval_file=args.eval_file, hermes_home_path=args.home, target_executor=args.target_executor, target_backend=args.target_backend)
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
@@ -89,7 +93,7 @@ def main() -> int:
         out = transfer_eval(hermes_home_path=args.home, run_id=args.run_id, skill_file=args.skill_file, eval_file=args.eval_file, targets=args.targets, profile_homes=args.profile_homes, output_path=args.output, staged_only=not args.allow_live_skill_file)
     elif args.cmd == "conformance":
         from hermes_skillopt.conformance import run_conformance
-        out = run_conformance(output_path=args.output, pytest_args=args.pytest_args, timeout=args.timeout)
+        out = run_conformance(output_path=args.output, pytest_args=args.pytest_args, timeout=args.timeout, mode=args.mode)
     elif args.cmd == "handoff-optimize":
         out = multi_agent.optimize_delegate_handoff(args.requirements, worker=args.worker, context_budget_chars=args.context_budget_chars)
     elif args.cmd == "webui":

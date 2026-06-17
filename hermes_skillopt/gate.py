@@ -8,19 +8,20 @@ from typing import Any
 
 @dataclass(frozen=True)
 class GateMetricPolicy:
-    """Deterministic hard/soft/mixed metric gate policy.
+    """Deterministic hard/soft/mixed/strict metric gate policy.
 
     default ``soft`` preserves Phase0 behavior: candidate weighted validation
-    score must strictly improve and the edit must not be a no-op.
+    score must strictly improve and the edit must not be a no-op. ``strict`` is
+    a stronger policy: it also requires hard weighted pass-rate non-regression
+    and no previously-passing task failures unless explicitly allowed.
     """
 
-    mode: str = "soft"  # soft|hard|mixed|strict (strict aliases soft)
+    mode: str = "soft"  # soft|hard|mixed|strict
     min_delta: float = 0.0
     hard_regression_allowed: bool = False
 
     def normalized_mode(self) -> str:
-        mode = (self.mode or "soft").lower()
-        return "soft" if mode == "strict" else mode
+        return (self.mode or "soft").lower()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -30,7 +31,20 @@ class GateMetricPolicy:
             "hard_regression_allowed": bool(self.hard_regression_allowed),
             "deterministic": True,
             "llm_override_allowed": False,
+            "policy_semantics": self._semantics(),
         }
+
+    def _semantics(self) -> str:
+        mode = self.normalized_mode()
+        if mode == "soft":
+            return "non-no-op candidate and soft weighted score strictly improves by min_delta"
+        if mode == "hard":
+            return "non-no-op candidate and hard weighted pass-rate strictly improves; per-task pass regressions fail unless hard_regression_allowed"
+        if mode == "mixed":
+            return "non-no-op candidate, soft weighted score strictly improves by min_delta, and hard weighted pass-rate does not regress; per-task pass regressions fail unless hard_regression_allowed"
+        if mode == "strict":
+            return "non-no-op candidate, soft weighted score strictly improves by min_delta, hard weighted pass-rate does not regress, and previously passing tasks remain passing unless hard_regression_allowed is explicit"
+        return "unsupported gate mode"
 
 
 @dataclass(frozen=True)
@@ -69,9 +83,9 @@ class GateDecision:
 class ValidationGate:
     """The only inner acceptance gate.
 
-    Supports soft, hard, and mixed metric policies while preserving default
-    strict weighted score improvement behavior. LLM judge output is recorded as
-    auxiliary evidence and cannot override deterministic metric decisions.
+    Supports soft, hard, mixed, and strict metric policies. LLM judge output is
+    recorded as auxiliary evidence and cannot override deterministic metric
+    decisions.
     """
 
     def __init__(self, policy: GateMetricPolicy | None = None, *, gate_mode: str | None = None, min_delta: float = 0.0, hard_regression_allowed: bool = False):
@@ -118,6 +132,16 @@ class ValidationGate:
                 rejection_reasons.append("mixed gate soft weighted score did not strictly improve")
             if not hard_nonregress:
                 rejection_reasons.append("mixed gate hard pass-rate regressed")
+        elif mode == "strict":
+            strict_hard_nonregress = metrics["hard_delta"] >= 0.0
+            strict_task_nonregress = not task_regressions or bool(self.policy.hard_regression_allowed)
+            metric_ok = soft_ok and strict_hard_nonregress and strict_task_nonregress
+            if not soft_ok:
+                rejection_reasons.append("strict gate soft weighted score did not strictly improve")
+            if not strict_hard_nonregress:
+                rejection_reasons.append("strict gate hard weighted pass-rate regressed")
+            if task_regressions and not bool(self.policy.hard_regression_allowed):
+                rejection_reasons.append("strict gate previously passing task regressed")
         else:
             raise ValueError(f"unsupported gate mode: {self.policy.mode}")
 
@@ -157,6 +181,11 @@ class ValidationGate:
             "mixed": {
                 "soft_improved": candidate_soft > current_soft + float(self.policy.min_delta),
                 "hard_nonregression": candidate_hard >= current_hard and not self._per_task_regressions(current_eval, candidate_eval) or bool(self.policy.hard_regression_allowed),
+            },
+            "strict": {
+                "soft_improved": candidate_soft > current_soft + float(self.policy.min_delta),
+                "hard_nonregression": candidate_hard >= current_hard,
+                "per_task_nonregression": not self._per_task_regressions(current_eval, candidate_eval) or bool(self.policy.hard_regression_allowed),
             },
         }
 

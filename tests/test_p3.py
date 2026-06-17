@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -62,6 +63,54 @@ def test_upstream_manifest_imports_to_hermes_eval_pack(tmp_path):
     assert result["report"]["production_eligible_task_count"] == 0
 
 
+def test_upstream_import_invalid_manifest_does_not_create_output(tmp_path):
+    manifest = tmp_path / "missing-test-split.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+    ]}), encoding="utf-8")
+    out = tmp_path / "should-not-exist.json"
+
+    with pytest.raises(ValueError, match="must include train/val/test tasks"):
+        import_upstream_manifest(manifest, out)
+
+    assert not out.exists()
+
+
+def test_upstream_import_invalid_manifest_preserves_existing_output(tmp_path):
+    manifest = tmp_path / "missing-test-split.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+    ]}), encoding="utf-8")
+    out = tmp_path / "existing-pack.json"
+    sentinel = "sentinel: keep this existing file intact\n"
+    out.write_text(sentinel, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include train/val/test tasks"):
+        import_upstream_manifest(manifest, out)
+
+    assert out.read_text(encoding="utf-8") == sentinel
+
+
+def test_upstream_import_success_atomically_replaces_existing_output(tmp_path):
+    manifest = tmp_path / "valid-upstream.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}), encoding="utf-8")
+    out = tmp_path / "existing-pack.json"
+    out.write_text("old contents\n", encoding="utf-8")
+
+    result = import_upstream_manifest(manifest, out)
+
+    assert result["success"] is True
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["pack_id"] == "valid-upstream"
+    assert payload["tasks"][0]["id"] == "train"
+
+
 def test_upstream_import_rejects_executable_fields_and_leakage(tmp_path):
     executable = tmp_path / "exec.json"
     executable.write_text(json.dumps({"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "command": "rm -rf /"}]}), encoding="utf-8")
@@ -76,6 +125,17 @@ def test_upstream_import_rejects_executable_fields_and_leakage(tmp_path):
     ]}), encoding="utf-8")
     with pytest.raises(ValueError, match="leaks task id"):
         import_upstream_manifest(leaking)
+
+
+def test_upstream_import_rejects_remote_network_fields_and_values(tmp_path):
+    for name, payload in {
+        "endpoint": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "endpoint": "/v1/run"}]},
+        "url_value": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "metadata": {"reference": "https://example.invalid/bench.json"}}]},
+    }.items():
+        manifest = tmp_path / f"{name}.json"
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError, match="executable/remote fields"):
+            import_upstream_manifest(manifest)
 
 
 def test_transfer_eval_is_read_only_and_fingerprinted(tmp_path):
@@ -115,6 +175,15 @@ def test_transfer_eval_defaults_to_staged_input(tmp_path):
         transfer_eval(hermes_home_path=str(tmp_path), eval_file=str(eval_pack), skill_file=None)
 
 
+def test_transfer_eval_report_output_cannot_target_live_skills(tmp_path):
+    skill = make_skill(tmp_path)
+    eval_pack = write_eval_pack(tmp_path)
+    staged = tmp_path / "staged_SKILL.md"
+    staged.write_text(skill.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(ValueError, match="report-only"):
+        transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(skill), staged_only=False)
+
+
 def test_conformance_report_generation(tmp_path):
     report_path = tmp_path / "conformance.json"
     result = run_conformance(repo_root=Path(__file__).resolve().parents[1], output_path=report_path, pytest_args=["tests/test_p3.py::test_transfer_eval_defaults_to_staged_input"], timeout=60)
@@ -122,6 +191,46 @@ def test_conformance_report_generation(tmp_path):
     assert report_path.exists()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["schema_version"] == "hermes-skillopt-conformance-v1"
+    assert report["mode"] == "quick"
+    assert report["quick_is_full_repo_health"] is False
+    assert "not necessarily a full repository health" in report["scope_note"]
     assert report["external_services_required"] is False
     assert len(report["commands"]) == 2
     assert result["success"] is True
+
+
+def test_conformance_full_mode_uses_all_tests_when_no_pytest_override(tmp_path, monkeypatch):
+    import hermes_skillopt.conformance as conformance
+
+    calls = []
+
+    def fake_run(cmd, cwd, timeout):
+        calls.append(cmd)
+        return {"cmd": cmd, "returncode": 0, "passed": True, "output_tail": ""}
+
+    monkeypatch.setattr(conformance, "_run", fake_run)
+    result = conformance.run_conformance(repo_root=Path(__file__).resolve().parents[1], output_path=tmp_path / "full.json", mode="full")
+    assert result["report"]["suite"] == "full-local-pytest"
+    assert result["report"]["pytest_args"] == ["tests"]
+    assert calls[1][-1] == "tests"
+
+
+def test_plugin_metadata_matches_registered_tools_and_p3_tools_present():
+    repo = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("skillopt_plugin_root", repo / "__init__.py")
+    assert spec and spec.loader
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+    provided = [line.strip()[2:] for line in (repo / "plugin.yaml").read_text(encoding="utf-8").splitlines() if line.strip().startswith("- ")]
+    registered = [name for name, _schema, _handler, _emoji in plugin._TOOLS]
+    assert provided == registered
+    assert {"hermes_skillopt_import_upstream_benchmark", "hermes_skillopt_transfer_eval", "hermes_skillopt_conformance"}.issubset(registered)
+    assert "hermes_home" not in plugin.SCHEMAS["hermes_skillopt_upstream_update"]["properties"]
+
+
+def test_p3_seam_matrix_entries_are_recorded():
+    lock = json.loads((Path(__file__).resolve().parents[1] / "skillopt_upstream.lock").read_text(encoding="utf-8"))
+    seams = lock["p3_seam_matrix"]
+    assert set(seams) >= {"benchmark_bridge", "transfer_eval", "conformance", "webui_writeback"}
+    assert "JSON/schema-only" in seams["benchmark_bridge"]
+    assert "report-only/read-only" in seams["transfer_eval"]

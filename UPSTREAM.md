@@ -39,7 +39,7 @@ Semantics:
 
 ## Upstream seam matrix / delta checklist
 
-`upstream-status` returns this matrix under `feature_matrix`/`delta_checklist`; keep it in sync when porting upstream ideas.
+`upstream-status` returns this matrix under `feature_matrix`/`delta_checklist`; `skillopt_upstream.lock` also records the P3 lock-time seams (`benchmark_bridge`, `transfer_eval`, `conformance`, `webui_writeback`). Keep both in sync when porting upstream ideas.
 
 - `trainer_loop`: upstream rollout/reflection/update/evaluate loop is adapted as `SixStageSkillOptTrainer` rollout → reflect → aggregate → select → update → evaluate with six stage artifacts and staged-only writes.
 - `reflection_prompts`: upstream reflection prompting is adapted as redacted `OptimizerBackend.reflect` prompts with rejected-history context and prompt SHA-256 provenance.
@@ -66,7 +66,7 @@ The current adapter’s production adoption gates depend on local curated eval f
 
 Hermes conformance is defined by local tests and the staged artifact contract, not by blindly matching upstream implementation details:
 
-- **Strict validation improvement:** generic validation adoption requires deterministic metric improvement. `soft` gates compare weighted aggregate scores; `hard`/`strict` also require per-task pass/non-regression semantics; `mixed` combines the stricter production preference with generic improvement. LLM/judge text is evidence only.
+- **Strict validation improvement:** generic validation adoption requires deterministic metric improvement. `soft` gates compare weighted aggregate scores; `hard` requires hard pass-rate improvement; `mixed` requires soft improvement with hard non-regression; `strict` requires soft improvement plus hard weighted pass-rate non-regression and per-task pass non-regression unless `hard_regression_allowed` is explicitly set. LLM/judge text is evidence only.
 - **Bounded edits:** optimizers may emit only bounded `append`/`replace`/`delete`/`insert_after` edits validated against the current skill text. Rejected and non-selected edits are preserved in `rejected_edits.jsonl` for reflection/history, not silently applied.
 - **Train/val/test isolation:** train evidence informs reflection, validation selects candidates, and held-out test evidence is evaluated after selection. Only explicit curated validation/test tasks can make production adoption eligible.
 - **Rejected buffer:** invalid, non-improving, or non-selected candidates remain staged in summaries/rejected buffers for audit and later reflection; they cannot become live writes without a new passing run.

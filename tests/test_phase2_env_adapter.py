@@ -147,6 +147,68 @@ def test_sandbox_rejects_task_command_before_command_runner_is_called():
     assert result["metadata"]["trajectory"]["tool_calls"][0]["blocked_reason"] == "arbitrary_command_execution_disabled"
 
 
+def test_frozen_target_config_provenance_freezes_model_profile_and_tool_policy():
+    task = EvalTask("freeze", "verify", split="val", expected_terms=("verify",), metadata={"task_origin": "synthetic", "scorecard_explicit": True})
+
+    out = TargetExecutor(runner=HermesRolloutRunner(), requested_executor="replay").evaluate("verify", [task])
+    config = out["target_backend_config"]
+
+    assert config["schema_version"] == "skillopt-target-backend-config-v2"
+    assert config["executor"] == "hermes_trace_replay_runner_v1"
+    assert config["requested_executor"] == "replay"
+    assert config["model_id"] == "no-live-model-deterministic-target-v1"
+    assert config["profile_policy"] == "isolated-or-readonly-profile-no-live-profile-writes"
+    assert config["tool_policy"].startswith("task-commands-never-executed")
+    assert config["live_tool_execution_allowed"] is False
+    assert config["task_provided_commands_allowed"] is False
+    assert config["parameters"]["backend_kind"] == "deterministic_trace_replay"
+    assert config["parameters"]["review_only_unless_curated_pack"] is True
+    assert out["target_fingerprint_sha256"] == config["fingerprint_sha256"]
+    assert len(out["target_fingerprint_sha256"]) == 64
+
+
+def test_rollout_output_preserves_trajectory_and_hard_soft_scores_for_gate_reflection():
+    tasks = [
+        EvalTask("pass", "prompt", split="train", expected_terms=("verify",), weight=2.0, fixtures={"observations": ["obs"]}, metadata={"task_origin": "synthetic", "scorecard_explicit": True}),
+        EvalTask("fail", "prompt", split="train", expected_terms=("missing",), weight=1.0, metadata={"task_origin": "synthetic", "scorecard_explicit": True}),
+    ]
+
+    out = TargetExecutor(runner=HermesRolloutRunner()).evaluate("verify", tasks, label="current_train")
+
+    assert out["soft_score"] == out["score"]
+    assert out["hard_score"] == out["hard_pass_rate"] == 0.666667
+    assert out["evaluation_scope"] == "review_only_deterministic_fallback"
+    assert out["production_gate_eligible"] is False
+    assert out["trajectory_index"]["schema_version"] == "hermes-target-trace-v1"
+    assert len(out["trajectory_index"]["items"]) == 2
+    assert all(item["has_trajectory"] for item in out["trajectory_index"]["items"])
+    assert out["result_summary"][0]["soft_score"] == out["results"][0]["score"]
+    assert out["results"][0]["metadata"]["trajectory"]["observations"]
+    assert len(out["trajectory_fingerprint_sha256"]) == 64
+
+
+def test_task_command_injection_is_refused_and_never_executed_by_replay(tmp_path):
+    marker = tmp_path / "should_not_exist"
+    task = EvalTask(
+        "inject",
+        "do not execute command",
+        expected_terms=("verify",),
+        fixtures={"command": f"touch {marker}"},
+        metadata={"command": f"touch {marker}", "task_origin": "synthetic", "scorecard_explicit": True},
+    )
+
+    out = TargetExecutor(runner=HermesRolloutRunner()).evaluate("verify", [task])
+    result = out["results"][0]
+    calls = result["metadata"]["trajectory"]["tool_calls"]
+
+    assert marker.exists() is False
+    assert result["passed"] is False
+    assert result["metadata"]["task_commands_executed"] is False
+    assert result["metadata"]["sandbox_command_blocked"] is True
+    assert "task_provided_command_blocked" in result["metadata"]["failure_tags"]
+    assert any(call["name"] == "task_provided_command" and call["executed"] is False and call["blocked_reason"] == "arbitrary_command_execution_disabled" for call in calls)
+
+
 def _write_pack(path: Path, *, sample: bool = False, duplicate_test_id: bool = False) -> Path:
     payload = {
         "schema_version": "hermes-curated-eval-pack-v1",
@@ -154,6 +216,7 @@ def _write_pack(path: Path, *, sample: bool = False, duplicate_test_id: bool = F
         "version": "2026.06",
         "sample_pack": sample,
         "require_complete_splits": True,
+        "production_policy": {"allow_production_adoption": not sample, "reviewed_by": "unit-test"},
         "tasks": [
             {"id": "train-tool", "split": "train", "prompt": "Train on tool use verification.", "expected_keywords": ["tool", "verify"], "production_gate_eligible": False},
             {"id": "val-edit", "split": "validation", "prompt": "Validate bounded file editing safety.", "expected_keywords": ["bounded", "guard"], "production_gate_eligible": True},

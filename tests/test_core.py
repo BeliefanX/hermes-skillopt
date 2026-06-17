@@ -243,7 +243,22 @@ def test_upstream_status_no_network(tmp_path):
     assert out["current_lock_pin"] == lock_data["pinned_commit"]
     assert out["last_reviewed_upstream_commit"] == lock_data["last_reviewed_upstream_commit"]
     seams = {row["seam"] for row in out["feature_matrix"]}
-    assert {"trainer_loop", "reflection_prompts", "skill_aware_reflection", "aggregate_clip", "gate", "artifact_resume", "benchmarks_tests"} <= seams
+    assert {
+        "trainer_loop",
+        "reflection_prompts",
+        "skill_aware_reflection",
+        "aggregate_clip",
+        "gate",
+        "artifact_resume",
+        "benchmarks_tests",
+        "benchmark_bridge",
+        "transfer_eval",
+        "conformance",
+    } <= seams
+    p3 = {row["seam"]: row for row in out["feature_matrix"] if row["seam"] in {"benchmark_bridge", "transfer_eval", "conformance"}}
+    assert p3["benchmark_bridge"]["status"] == "p3_local_adapter"
+    assert p3["transfer_eval"]["status"] == "p3_report_only"
+    assert p3["conformance"]["status"] == "p3_local_contract"
     assert out["delta_checklist"] == out["feature_matrix"]
 
 
@@ -416,10 +431,19 @@ def test_rejected_gate_writes_rejected_buffer(tmp_path):
     finally:
         core.LLMBackend = old  # type: ignore[assignment]
     assert out["status"] == "rejected"
-    rej = Path(out["run_dir"]) / "rejected_edits.jsonl"
+    run_dir = Path(out["run_dir"])
+    rej = run_dir / "rejected_edits.jsonl"
     assert rej.exists() and rej.read_text(encoding="utf-8").strip()
-    assert not (Path(out["run_dir"]) / "best_skill.md").exists()
-    assert (Path(out["run_dir"]) / "diff.patch").read_text(encoding="utf-8") == ""
+    assert json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["files"]["rejected_edits"] == "rejected_edits.jsonl"
+    slow_meta = json.loads((run_dir / "slow_meta.json").read_text(encoding="utf-8"))
+    assert slow_meta["artifact_role"] == "optimizer_memory_only_not_deployable_skill"
+    assert slow_meta["deployed_skill_boundary"]["live_skill_content_included"] is False
+    assert slow_meta["deployed_skill_boundary"]["optimizer_memory_must_not_be_deployed_as_skill"] is True
+    assert slow_meta["epoch_stability_signals"]["rejected_candidate_count"] >= 1
+    assert slow_meta["epoch_stability_signals"]["epochs"]
+    assert (run_dir / "proposed_SKILL.md").read_text(encoding="utf-8") == (run_dir / "original_SKILL.md").read_text(encoding="utf-8")
+    assert not (run_dir / "best_skill.md").exists()
+    assert (run_dir / "diff.patch").read_text(encoding="utf-8") == ""
 
 
 def test_full_run_resume_reuses_completed_checkpoint_and_refuses_mismatch(tmp_path):
@@ -464,6 +488,29 @@ def test_resume_checkpoint_relative_eval_file_hashes_profile_local_file(tmp_path
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
         core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=eval_rel, backend="mock", allow_mock=True, resume_run_id=out["run_id"])
+
+
+def test_resume_checkpoint_default_eval_file_refuses_stale_actual_input(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "v1", "prompt": "default validation replay", "expected_keywords": ["verify"], "split": "validation"},
+        {"id": "tr1", "prompt": "default train replay", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "te1", "prompt": "default test replay", "expected_keywords": ["rollback"], "split": "test"},
+    ])
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    checkpoint = json.loads((Path(out["run_dir"]) / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["input"]["eval_file"] == str(eval_path.resolve())
+    original_sha = checkpoint["input"]["eval_file_sha256"]
+
+    write_eval_file(tmp_path, rows=[
+        {"id": "v2", "prompt": "changed held-out validation replay", "expected_keywords": ["changed"], "split": "validation"},
+        {"id": "tr2", "prompt": "changed train replay", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "te2", "prompt": "changed test replay", "expected_keywords": ["rollback"], "split": "test"},
+    ])
+    assert core.sha256_file(eval_path) != original_sha
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, resume_run_id=out["run_id"])
 
 
 def test_resume_inspection_refuses_incomplete_or_unfingerprinted_stage(tmp_path):
@@ -640,15 +687,73 @@ def test_plugin_yaml_provides_tools_matches_registered_tools():
 
 
 def write_eval_file(home: Path, name: str = "demo", rows: list[dict] | None = None) -> Path:
-    p = home / "skillopt" / "evals" / f"{name}.jsonl"
-    p.parent.mkdir(parents=True, exist_ok=True)
     rows = rows or [
-        {"id": "v1", "prompt": "held-out validation replay", "expected_keywords": ["verify", "blocker"], "forbidden_keywords": ["fabricate"], "split": "validation", "weight": 2},
+        {"id": "v1", "prompt": "held-out validation replay", "expected_keywords": ["verify", "blocker"], "forbidden_keywords": ["fabricate"], "split": "validation", "weight": 2, "production_gate_eligible": True},
         {"id": "tr1", "prompt": "train replay", "expected_keywords": ["tool"], "split": "train"},
-        {"id": "te1", "prompt": "test replay", "success_criteria": ["rollback"], "expected_keywords": ["rollback"], "split": "test"},
+        {"id": "te1", "prompt": "test replay", "success_criteria": ["rollback"], "expected_keywords": ["rollback"], "split": "test", "production_gate_eligible": True},
     ]
-    p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    needs_production_pack = any(bool(r.get("production_gate_eligible")) for r in rows)
+    suffix = ".json" if needs_production_pack else ".jsonl"
+    p = home / "skillopt" / "evals" / f"{name}{suffix}"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if needs_production_pack:
+        split_alias = {"validation": "val", "val": "val", "train": "train", "test": "test"}
+        present = {split_alias.get(str(r.get("split", "validation")).lower(), "val") for r in rows}
+        supplement = []
+        if "train" not in present:
+            supplement.append({"id": "auto-train", "prompt": "auto train support", "expected_keywords": ["tool"], "split": "train"})
+        if "val" not in present:
+            supplement.append({"id": "auto-val", "prompt": "auto validation support", "expected_keywords": ["verify"], "split": "validation", "production_gate_eligible": True})
+        if "test" not in present:
+            supplement.append({"id": "auto-test", "prompt": "auto held-out test support", "expected_keywords": ["rollback"], "split": "test", "production_gate_eligible": True})
+        payload = {
+            "schema_version": "hermes-curated-eval-pack-v1",
+            "pack_id": f"{name}-test-pack",
+            "version": "test",
+            "require_complete_splits": True,
+            "production_policy": {"allow_production_adoption": True, "reviewed_by": "unit-test"},
+            "tasks": rows + supplement,
+        }
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     return p
+
+
+def test_eval_only_smoke_writes_report_without_training_or_adoption_side_effects(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely. verify blocker rollback tool")
+    eval_path = write_eval_file(tmp_path)
+
+    out = core.eval_only(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), target_executor="scorecard")
+
+    assert out["success"] is True
+    assert out["status"] == "eval_only_complete"
+    assert out["adoptable"] is False
+    run_dir = Path(out["run_dir"])
+    assert (run_dir / "eval_report.json").exists()
+    assert (run_dir / "evaluated_SKILL.md").exists()
+    assert not (run_dir / "proposed_SKILL.md").exists()
+    assert not (run_dir / "best_skill.md").exists()
+    report = json.loads((run_dir / "eval_report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert report["mode"] == "eval_only_no_training_no_adoption"
+    assert report["eval_file"] == str(eval_path.resolve())
+    assert report["task_counts"] == {"train": 1, "val": 1, "test": 1}
+    assert "split_results" in report
+    assert manifest["files"]["eval_report"] == "eval_report.json"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "hermes_skillopt.cli", "--home", str(tmp_path), "eval-only", "--skill", "demo", "--eval-file", str(eval_path), "--target-executor", "scorecard"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stdout
+    cli_out = json.loads(proc.stdout)
+    assert cli_out["status"] == "eval_only_complete"
+    assert cli_out["adoptable"] is False
 
 
 def test_curated_eval_file_loaded_and_candidate_improvement_stages_best(tmp_path):
@@ -951,8 +1056,7 @@ def test_mixed_validation_nonproduction_improvement_cannot_make_adoptable(monkey
     assert manifest["adoptable"] is False
     assert manifest["production_gate_eligible"] is False
     assert gate_data["best_gate"]["accepted"] is True
-    assert gate_data["production_best_gate"]["accepted"] is False
-    assert gate_data["production_best_gate"]["current_score"] == gate_data["production_best_gate"]["candidate_score"]
+    assert gate_data["production_best_gate"] is None
     with pytest.raises(ValueError, match="Only adoptable"):
         core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
 
@@ -1110,6 +1214,67 @@ def test_validation_gate_hard_mixed_report_and_block_per_task_regression():
     assert hard.metric_summary["per_task_regressions"][0]["task_id"] == "keep"
     assert "previously passing task regressed" in hard.rationale
     assert "hard pass-rate regressed" in mixed.rationale
+
+
+def test_validation_gate_strict_rejects_soft_improved_hard_or_per_task_regression():
+    from hermes_skillopt.gate import ValidationGate
+
+    current = {"score": 0.5, "results": [
+        {"task_id": "keep", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+        {"task_id": "miss", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+    ]}
+    hard_regressed = {"score": 0.7, "results": [
+        {"task_id": "keep", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+        {"task_id": "miss", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+    ]}
+    per_task_regressed = {"score": 0.8, "results": [
+        {"task_id": "keep", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+        {"task_id": "miss", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+    ]}
+
+    hard_decision = ValidationGate(gate_mode="strict").decide(1, current, hard_regressed, "a", "b")
+    per_task_decision = ValidationGate(gate_mode="strict").decide(1, current, per_task_regressed, "a", "b")
+
+    assert hard_decision.accepted is False
+    assert "hard weighted pass-rate regressed" in hard_decision.rationale
+    assert per_task_decision.accepted is False
+    assert per_task_decision.metric_summary is not None
+    assert per_task_decision.metric_summary["hard_delta"] == 0.0
+    assert per_task_decision.metric_summary["per_task_regressions"][0]["task_id"] == "keep"
+    assert "previously passing task regressed" in per_task_decision.rationale
+    assert per_task_decision.as_dict()["metric_policy"]["mode"] == "strict"
+    assert "soft" not in per_task_decision.as_dict()["acceptance_rule"].split("deterministic ", 1)[1].split(" metric", 1)[0]
+
+
+def test_validation_gate_strict_accepts_soft_improvement_with_hard_nonregression():
+    from hermes_skillopt.gate import ValidationGate
+
+    current = {"score": 0.5, "results": [
+        {"task_id": "keep", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+        {"task_id": "miss", "score": 0.0, "passed": False, "metadata": {"weight": 1}},
+    ]}
+    candidate = {"score": 0.6, "results": [
+        {"task_id": "keep", "score": 1.0, "passed": True, "metadata": {"weight": 1}},
+        {"task_id": "miss", "score": 0.2, "passed": False, "metadata": {"weight": 1}},
+    ]}
+
+    decision = ValidationGate(gate_mode="strict", min_delta=0.05).decide(1, current, candidate, "a", "b")
+
+    assert decision.accepted is True
+    payload = decision.as_dict()
+    assert payload["metric_policy"]["mode"] == "strict"
+    assert payload["metric_policy"]["requested_mode"] == "strict"
+    assert payload["metric_summary"]["soft_delta"] == 0.1
+    assert payload["metric_summary"]["hard_delta"] == 0.0
+    assert payload["metric_summary"]["strict"]["hard_nonregression"] is True
+    assert "deterministic strict metric gate" in payload["acceptance_rule"]
+
+
+def test_validation_gate_unsupported_modes_still_error():
+    from hermes_skillopt.gate import ValidationGate
+
+    with pytest.raises(ValueError, match="unsupported gate mode"):
+        ValidationGate(gate_mode="lenient").decide(1, {"score": 0.1}, {"score": 0.2}, "a", "b")
 
 
 def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):

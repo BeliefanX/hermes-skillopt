@@ -108,6 +108,26 @@ def _resolve_skill_text(*, home: Path, run_id: str | None, skill_file: str | Non
     return text, {"source": "skill_file", "path": str(path), "sha256": hashlib.sha256(text.encode()).hexdigest()}, None
 
 
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_report_output_path(output_path: str, *, home: Path) -> Path:
+    """Resolve a report output path without allowing live skill writeback targets."""
+
+    out = Path(output_path).expanduser().resolve()
+    skills_dir = (home / "skills").resolve()
+    if out.name == "SKILL.md" or _is_relative_to(out, skills_dir):
+        raise ValueError("transfer_eval output_path is report-only and may not target live skills or HERMES_HOME/skills")
+    if out.exists() and (out.is_symlink() or not out.is_file()):
+        raise ValueError("transfer_eval output_path must be a regular report file")
+    return out
+
+
 def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = None, skill_file: str | None = None, eval_file: str | None = None, targets: Iterable[str] | None = None, profile_homes: Iterable[str] | None = None, output_path: str | None = None, staged_only: bool = True) -> dict[str, Any]:
     """Evaluate staged/proposed skill text across target/profile configs without writing live skills."""
 
@@ -166,7 +186,7 @@ def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = N
     }
     payload["report_fingerprint_sha256"] = _stable_sha(payload)
     if output_path:
-        out = Path(output_path).expanduser().resolve()
+        out = _safe_report_output_path(output_path, home=home)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         payload["output_path"] = str(out)

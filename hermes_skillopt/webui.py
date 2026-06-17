@@ -369,7 +369,7 @@ def upstream_status_markdown(home: str | None = None) -> str:
 
 def upstream_update_markdown(home: str | None = None, fetch_only: bool = False) -> str:
     try:
-        return "```json\n" + _json(core.upstream_update(hermes_home_path=home or None, repo_path=None, fetch_only=bool(fetch_only))) + "\n```"
+        return "```json\n" + _json(core.upstream_update(hermes_home_path=None, repo_path=None, fetch_only=bool(fetch_only))) + "\n```"
     except Exception as exc:
         return f"Upstream update failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}"
 
@@ -439,7 +439,7 @@ def build_app(home_default: str | None = None):
                 rollback_out = gr.Markdown()
 
             with gr.Tab("Upstream"):
-                gr.Markdown("Upstream status/update use the canonical clone under HERMES_HOME only.")
+                gr.Markdown("Upstream update uses the active profile's canonical clone only; the HERMES_HOME override textbox is ignored for update writeback.")
                 fetch_only = gr.Checkbox(value=True, label="Fetch only")
                 upstream_out = gr.Markdown()
                 with gr.Row():

@@ -90,16 +90,19 @@ class BenchmarkDefinition:
 
 @dataclass(frozen=True)
 class EvalPackMetadata:
-    """Identity, split governance, and fingerprint for an explicit eval pack."""
+    """Identity, split governance, policy, and fingerprints for an explicit eval pack."""
 
     pack_id: str
     version: str
     schema_version: str
     path: str | None
     fingerprint_sha256: str
+    eval_file_sha256: str | None
     task_count: int
     split_counts: dict[str, int]
     production_eligible_task_count: int
+    production_policy: dict[str, Any] = field(default_factory=dict)
+    production_policy_fingerprint_sha256: str | None = None
     heldout_policy: str = "validation selects candidates; held-out test is final gate only"
 
     def as_dict(self) -> dict[str, Any]:
@@ -136,17 +139,35 @@ class SessionPipelineRecord:
 
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
 NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark", "sample-eval-pack"}
+PRODUCTION_EVAL_POLICY_VERSION = "production-eval-schema-v1"
 EVAL_PACK_SCHEMA_VERSION = "hermes-curated-eval-pack-v1"
+EXPLICIT_CURATED_EVAL_PACK_CONTRACT = {
+    "schema_version": EVAL_PACK_SCHEMA_VERSION,
+    "required_top_level_fields": ["schema_version", "pack_id", "version", "tasks"],
+    "required_splits": ["train", "val", "test"],
+    "production_policy": "production_policy.allow_production_adoption must be true before any val/test task can gate production",
+    "task_scorecard": "each production task must set production_gate_eligible=true and include deterministic expected terms/assertions/markers/ground_truth",
+    "review_only_origins": sorted(NON_PRODUCTION_ORIGINS),
+}
 
 
 def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
-    """Return production adoption eligibility and human-readable reasons."""
+    """Return production adoption eligibility under the curated eval pack contract."""
     reasons: list[str] = []
     origin = str(task.metadata.get("task_origin") or task.source)
+    schema_version = str(task.metadata.get("eval_pack_schema_version") or "")
     if task.split not in {"val", "test"}:
         reasons.append("split is not val/test")
-    if task.split == "val" and not str(task.source).endswith((".json", ".jsonl")):
-        reasons.append("validation task is not from an explicit curated eval file")
+    if not str(task.source).endswith((".json", ".jsonl")):
+        reasons.append("task is not from an explicit eval file")
+    if schema_version != EVAL_PACK_SCHEMA_VERSION:
+        reasons.append("task is not from hermes-curated-eval-pack-v1")
+    if not bool(task.metadata.get("explicit_curated_eval_pack")):
+        reasons.append("missing explicit curated eval pack provenance")
+    if not bool(task.metadata.get("eval_pack_production_allowed")):
+        reasons.append("eval pack production policy does not allow adoption")
+    if not task.metadata.get("eval_pack_fingerprint_sha256") or not task.metadata.get("eval_pack_policy_fingerprint_sha256"):
+        reasons.append("missing eval pack/policy fingerprint provenance")
     if any(part in NON_PRODUCTION_ORIGINS for part in {task.source, origin}):
         reasons.append("task origin is non-production")
     if origin in {"dream", "synthetic", "session-mined", "session_mined"}:
@@ -301,6 +322,9 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
     pack_meta = pack_meta or {}
     origin = str(record.get("task_origin") or pack_meta.get("task_origin") or "curated")
     sample_pack = origin == "sample-eval-pack" or bool(pack_meta.get("sample_pack"))
+    explicit_curated_pack = bool(pack_meta.get("schema_version") == EVAL_PACK_SCHEMA_VERSION and pack_meta.get("pack_id") and pack_meta.get("version"))
+    pack_production_allowed = bool(pack_meta.get("production_policy", {}).get("allow_production_adoption"))
+    production_flag = bool(production_flag) and explicit_scorecard and explicit_curated_pack and pack_production_allowed and not sample_pack
     return EvalTask(
         id=task_id,
         prompt=prompt,
@@ -321,14 +345,18 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
         metadata={
             **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
-            "production_gate_eligible": bool(production_flag) and explicit_scorecard and not sample_pack,
-            "production_eval_schema_policy": "production-eval-schema-v1",
+            "production_gate_eligible": production_flag,
+            "production_eval_schema_policy": PRODUCTION_EVAL_POLICY_VERSION,
             "task_origin": origin,
             **({
                 "eval_pack_id": pack_meta.get("pack_id"),
                 "eval_pack_version": pack_meta.get("version"),
                 "eval_pack_fingerprint_sha256": pack_meta.get("fingerprint_sha256"),
+                "eval_pack_file_sha256": pack_meta.get("eval_file_sha256"),
                 "eval_pack_schema_version": pack_meta.get("schema_version"),
+                "eval_pack_policy_fingerprint_sha256": pack_meta.get("production_policy_fingerprint_sha256"),
+                "eval_pack_production_allowed": pack_production_allowed,
+                "explicit_curated_eval_pack": explicit_curated_pack,
                 "eval_pack_sample": bool(pack_meta.get("sample_pack")),
             } if pack_meta else {}),
         },
@@ -338,6 +366,70 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
 def _eval_pack_fingerprint(data: dict[str, Any]) -> str:
     comparable = {k: v for k, v in data.items() if k not in {"fingerprint_sha256", "fingerprint"}}
     return hashlib.sha256(json.dumps(comparable, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _stable_json_fingerprint(data: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _production_policy_from_pack(pack_payload: dict[str, Any], schema_version: str) -> dict[str, Any]:
+    """Normalize the pack-level policy that authorizes production-gate use.
+
+    Contract: v1 curated packs are first-class only when they declare pack
+    identity/version, complete train/val/test splits, and explicitly opt in via
+    production_policy.allow_production_adoption=true. Legacy JSON/JSONL,
+    sample packs, synthetic/fallback/session-mined origins remain review-only.
+    """
+
+    raw_policy_candidate = pack_payload.get("production_policy")
+    raw_policy: dict[str, Any] = dict(raw_policy_candidate) if isinstance(raw_policy_candidate, dict) else {}
+    allow = bool(raw_policy.get("allow_production_adoption", pack_payload.get("allow_production_adoption", False)))
+    complete_splits_required = schema_version == EVAL_PACK_SCHEMA_VERSION or bool(pack_payload.get("require_complete_splits"))
+    sample_pack = bool(pack_payload.get("sample_pack"))
+    origin = str(pack_payload.get("task_origin") or ("sample-eval-pack" if sample_pack else "curated"))
+    allowed = bool(
+        schema_version == EVAL_PACK_SCHEMA_VERSION
+        and allow
+        and complete_splits_required
+        and not sample_pack
+        and origin not in NON_PRODUCTION_ORIGINS
+    )
+    policy = {
+        "policy_version": PRODUCTION_EVAL_POLICY_VERSION,
+        "contract": EXPLICIT_CURATED_EVAL_PACK_CONTRACT,
+        "allow_production_adoption": allowed,
+        "declared_allow_production_adoption": allow,
+        "requires_complete_splits": complete_splits_required,
+        "requires_explicit_scorecard": True,
+        "requires_task_production_flag": True,
+        "origin": origin,
+        "sample_pack": sample_pack,
+        "refusal_reasons": [],
+    }
+    if schema_version != EVAL_PACK_SCHEMA_VERSION:
+        policy["refusal_reasons"].append("schema_version is not hermes-curated-eval-pack-v1")
+    if not allow:
+        policy["refusal_reasons"].append("production_policy.allow_production_adoption is not true")
+    if sample_pack or origin in NON_PRODUCTION_ORIGINS:
+        policy["refusal_reasons"].append("pack origin is review-only/non-production")
+    policy.update({k: v for k, v in raw_policy.items() if k not in policy})
+    policy["policy_fingerprint_sha256"] = _stable_json_fingerprint({k: v for k, v in policy.items() if k != "policy_fingerprint_sha256"})
+    return policy
+
+
+def _validate_eval_pack_contract(pack_payload: dict[str, Any], schema_version: str, pack_id: str) -> None:
+    if schema_version != EVAL_PACK_SCHEMA_VERSION:
+        return
+    missing = [field for field in EXPLICIT_CURATED_EVAL_PACK_CONTRACT["required_top_level_fields"] if field not in pack_payload]
+    if missing:
+        raise ValueError(f"eval pack {pack_id} missing required v1 fields: {', '.join(missing)}")
+    tasks = pack_payload.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError(f"eval pack {pack_id} tasks must be a non-empty list")
+
+
+def _eval_file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _validate_eval_pack_tasks(tasks: list[EvalTask], pack_id: str) -> dict[str, int]:
@@ -386,7 +478,10 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
     pack_id = str(pack_payload.get("pack_id") or pack_payload.get("id") or path.stem).strip() or path.stem
     version = str(pack_payload.get("version") or pack_payload.get("pack_version") or "unversioned")
     schema_version = str(pack_payload.get("schema_version") or (EVAL_PACK_SCHEMA_VERSION if pack_payload.get("pack_id") or pack_payload.get("version") or pack_payload.get("pack_version") else "legacy-json-eval-file-v1"))
+    _validate_eval_pack_contract(pack_payload, schema_version, pack_id)
     fingerprint = _eval_pack_fingerprint(pack_payload)
+    file_sha256 = _eval_file_sha256(path)
+    production_policy = _production_policy_from_pack(pack_payload, schema_version)
     declared_fp = pack_payload.get("fingerprint_sha256") or pack_payload.get("fingerprint")
     if declared_fp and str(declared_fp) != fingerprint:
         raise ValueError(f"eval pack {pack_id} fingerprint mismatch")
@@ -395,6 +490,9 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
         "version": version,
         "schema_version": schema_version,
         "fingerprint_sha256": fingerprint,
+        "eval_file_sha256": file_sha256,
+        "production_policy": production_policy,
+        "production_policy_fingerprint_sha256": production_policy.get("policy_fingerprint_sha256"),
         "task_origin": pack_payload.get("task_origin") or ("sample-eval-pack" if pack_payload.get("sample_pack") else "curated"),
         "sample_pack": bool(pack_payload.get("sample_pack")),
     }
@@ -409,9 +507,12 @@ def load_eval_pack(path: Path) -> tuple[list[EvalTask], EvalPackMetadata]:
         schema_version=schema_version,
         path=str(path),
         fingerprint_sha256=fingerprint,
+        eval_file_sha256=file_sha256,
         task_count=len(tasks),
         split_counts=split_counts,
         production_eligible_task_count=sum(1 for t in tasks if production_eligibility_for_task(t).eligible),
+        production_policy=production_policy,
+        production_policy_fingerprint_sha256=production_policy.get("policy_fingerprint_sha256"),
     )
     return tasks, metadata
 

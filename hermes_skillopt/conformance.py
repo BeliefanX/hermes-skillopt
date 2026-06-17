@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 CONFORMANCE_SCHEMA_VERSION = "hermes-skillopt-conformance-v1"
+CONFORMANCE_MODES = ("quick", "full")
+QUICK_PYTEST_ARGS = ["tests/test_phase2_env_adapter.py", "tests/test_p3.py"]
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
@@ -22,11 +24,29 @@ def _run(cmd: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
     }
 
 
-def run_conformance(*, repo_root: str | Path | None = None, output_path: str | Path | None = None, pytest_args: Iterable[str] | None = None, timeout: int = 180) -> dict[str, Any]:
-    """Run compileall plus a deterministic pytest suite and emit a JSON report."""
+def run_conformance(*, repo_root: str | Path | None = None, output_path: str | Path | None = None, pytest_args: Iterable[str] | None = None, timeout: int = 180, mode: str = "quick") -> dict[str, Any]:
+    """Run local conformance and emit a JSON report.
+
+    ``mode='quick'`` is the default deterministic smoke/regression suite and is
+    intentionally not a full repository health check. Use ``mode='full'`` to run
+    all pytest tests after compileall.
+    """
 
     root = Path(repo_root or Path(__file__).resolve().parents[1]).resolve()
-    args = list(pytest_args or ["tests/test_phase2_env_adapter.py", "tests/test_p3.py"])
+    if mode not in CONFORMANCE_MODES:
+        raise ValueError(f"unsupported conformance mode {mode!r}; expected quick|full")
+    if pytest_args is not None:
+        args = list(pytest_args)
+        suite = "custom-pytest-args"
+        scope_note = "Custom pytest args supplied by caller; this is not necessarily a full repository health check."
+    elif mode == "full":
+        args = ["tests"]
+        suite = "full-local-pytest"
+        scope_note = "Full local repository pytest suite plus compileall; still no external services/upstream parity certification."
+    else:
+        args = QUICK_PYTEST_ARGS.copy()
+        suite = "quick-local-deterministic"
+        scope_note = "Quick deterministic conformance smoke suite only; not a full repository health check. Use mode='full' for all tests."
     commands = [
         _run([sys.executable, "-m", "compileall", "-q", "hermes_skillopt", "tests"], root, timeout),
         _run([sys.executable, "-m", "pytest", *args], root, timeout),
@@ -35,7 +55,11 @@ def run_conformance(*, repo_root: str | Path | None = None, output_path: str | P
         "schema_version": CONFORMANCE_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "repo_root": str(root),
-        "suite": "local-deterministic",
+        "mode": mode,
+        "suite": suite,
+        "pytest_args": args,
+        "scope_note": scope_note,
+        "quick_is_full_repo_health": False,
         "external_services_required": False,
         "commands": commands,
         "passed": all(c["passed"] for c in commands),
