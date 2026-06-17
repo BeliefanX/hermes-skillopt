@@ -54,7 +54,7 @@ Toolset: `hermes_skillopt`
 
 Important full-run parameters:
 
-- `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`
+- `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`, `candidate_count`
 - `backend`: `auto|hermes|mock`
 - `allow_mock`: required before `backend=auto` may fall back to mock outside Hermes.
 - `target_executor`: `auto|replay|sandbox|scorecard`
@@ -73,10 +73,10 @@ python3 -m hermes_skillopt.cli full-run --help
 
 1. **Rollout:** evaluate the current skill with a frozen target executor.
 2. **Reflect:** build optimizer reflections from train/eval evidence and rejected-edit history.
-3. **Aggregate:** turn reflections into bounded edit proposals.
-4. **Select:** validate bounded edits and reject invalid/unsafe edits.
-5. **Update:** apply accepted bounded edits to a candidate copy only.
-6. **Evaluate/gate:** evaluate candidate on held-out validation, keep the best strict improvement, then evaluate final best on held-out test.
+3. **Aggregate:** turn reflections into one or more bounded edit proposals (`candidate_count`, default 1).
+4. **Select:** validate bounded edits, evaluate each candidate on the same validation set, rank strict improvements, select the best improvement, and buffer rejected/non-selected candidates.
+5. **Update:** apply the selected bounded edit to a candidate copy only.
+6. **Evaluate/gate:** keep the best strict improvement, then evaluate final best on held-out test.
 
 Core artifacts include:
 
@@ -84,10 +84,10 @@ Core artifacts include:
 - `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, and `best_skill.md` only when a best candidate exists
 - `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`
 - `current_validation_results.json`, `candidate_validation_results.json`, `test_results.json`
-- `reflections.json`, `candidate_edits.json`, `rejected_edits.jsonl`, `gate_results.json`
+- `reflections.json`, `candidate_edits.json`, `candidate_summary.json`, `rejected_edits.jsonl`, `gate_results.json`
 - `stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json`
 
-`manifest.json` records SHA-256 hashes for staged artifacts. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run.
+`manifest.json` records SHA-256 hashes for staged artifacts. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
 
 ## Eval schema and production eligibility
 
@@ -104,13 +104,16 @@ Supported fields include:
 - Required: `prompt`; optional `id`.
 - Splits: `train`, `validation`/`val`, `test`.
 - Scoring/assertion fields: `expected_keywords`/`expected_terms`, `forbidden_keywords`/`failure_terms`, `assertions`, `required_markers`, `forbidden_markers`, `success_criteria`, `expected_behavior`, optional `ground_truth_score` metadata.
-- Metadata/execution fields: `judge`, `allowed_tools`, `timeout`, `fixtures`, `weight`, `executor`.
+- Metadata/execution fields: `judge`, `allowed_tools`, `timeout`, `fixtures`, `weight`, `executor`, `production_gate_eligible`/`production_gate` (set false to opt out of production adopt even when the scorecard is explicit).
+
+Production eval schema policy (`production-eval-schema-v1`) is recorded into `manifest.json` and `report.md` with a provenance fingerprint over eval file SHA, task fingerprint, backend, target executor, and target config. `review` returns that fingerprint plus per-task validation deltas.
 
 Production adoption gates are intentionally narrow:
 
 - Only explicit curated eval-file tasks can satisfy production gates.
 - Production validation requires eligible curated validation tasks and strict candidate improvement.
 - Production test eligibility requires held-out curated test results passing threshold.
+- When multiple candidates are evaluated and production gate tasks exist, selection prefers a candidate with both generic validation strict improvement and production validation strict improvement; generic-only improvements remain staged/reviewable but are not allowed to crowd out an adoptable production candidate.
 - Fallback, synthetic, session-mined, and legacy dry-run evidence is review-only and cannot be production-adopted.
 - LLM/judge text is evidence only; it cannot override validation/test gates.
 
@@ -133,7 +136,7 @@ Sandbox mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SK
 - validation gate accepted
 - `production_gate_eligible == true`
 - `test_gate_eligible == true`
-- staged artifact hashes verify
+- staged artifact hashes verify, and adopt-time cross-checks re-derive gate/test eligibility, production policy, provenance, candidate summary, and proposed skill SHA from those hashed artifacts
 - target path resolves under the active profile `skills/`
 - current live skill SHA matches the staged original SHA unless an explicit force path is used
 - staged proposed skill SHA matches the manifest

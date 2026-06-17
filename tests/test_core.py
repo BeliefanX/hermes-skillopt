@@ -715,6 +715,166 @@ def test_cli_help_commands_smoke():
             assert "--eval-file" in proc.stdout
             assert "--dry-run" not in proc.stdout
             assert "--target-executor" in proc.stdout
+            assert "--candidate-count" in proc.stdout
+
+
+def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
+
+    assert manifest["production_eval_policy"]["policy_version"] == "production-eval-schema-v1"
+    assert manifest["provenance_fingerprint"]["eval_file_sha256"] == core.sha256_file(eval_path)
+    assert manifest["provenance_fingerprint"]["fingerprint_sha256"]
+    assert manifest["per_task_delta"] and manifest["per_task_delta"][0]["task_id"] == "v1"
+    assert review["per_task_delta"] == manifest["per_task_delta"]
+    assert "baseline/current/candidate/best/test" in report
+    assert "not_adoptable_checklist" in report
+    assert "provenance_fingerprint" in report
+
+
+def test_manifest_only_tamper_cannot_make_nonproduction_run_adoptable(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    original = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "v1", "prompt": "validation", "expected_keywords": ["verify", "blocker"], "split": "validation", "production_gate_eligible": False},
+        {"id": "tr1", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "te1", "prompt": "test", "expected_keywords": ["rollback"], "split": "test", "production_gate_eligible": False},
+    ])
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["status"] == "staged_best"
+    assert manifest["adoptable"] is False
+    assert manifest["production_gate_eligible"] is False
+
+    manifest["adoptable"] = True
+    manifest["production_gate_eligible"] = True
+    manifest["test_gate_eligible"] = True
+    manifest["production_gate"] = {
+        "accepted": True,
+        "current_score": 0.0,
+        "candidate_score": 1.0,
+        "rationale": "manifest-only tamper",
+    }
+    manifest["production_eval_policy"] = dict(manifest["production_eval_policy"], production_gate_available=True, test_gate_eligible=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="verified artifacts"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+    assert skill.read_text(encoding="utf-8") == original
+
+
+def test_eval_record_can_opt_out_of_production_adopt(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "v1", "prompt": "validation", "expected_keywords": ["verify", "blocker"], "split": "validation", "production_gate_eligible": False},
+        {"id": "tr1", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "te1", "prompt": "test", "expected_keywords": ["rollback"], "split": "test"},
+    ])
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    assert out["status"] == "staged_best"
+    assert out["adoptable"] is False
+    assert out["production_gate_eligible"] is False
+    with pytest.raises(ValueError, match="Only adoptable"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_multi_candidate_rank_select_buffers_rejected_candidates(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+
+    class MultiBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        def json(self, prompt, schema_hint, repair_path=None):
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": ["need validation"]}
+            if schema_hint["kind"] == "edit":
+                if "CANDIDATE_INDEX=1" in prompt:
+                    return {"edits": [{"op": "append", "text": "\n\n## Weak candidate\n\n- mention tool only.\n"}], "reasoning": "weak"}
+                return {"edits": [{"op": "append", "text": "\n\n## Strong candidate\n\n- verify blockers and rollback with tool checks.\n"}], "reasoning": "strong"}
+            return {"rationale": "aux"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: MultiBackend())
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, candidate_count=2)
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    rejected = (run_dir / "rejected_edits.jsonl").read_text(encoding="utf-8")
+    summary = json.loads((run_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+
+    assert manifest["candidate_count"] == 2
+    assert summary["rounds"][0]["selected_candidate_id"] == "candidate-1-2"
+    assert "candidate-1-1" in rejected and "selection_rejection" in rejected
+    assert "Strong candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
+
+
+def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "prod-val", "prompt": "production validation", "expected_keywords": ["prodgold"], "split": "validation", "production_gate_eligible": True},
+        {"id": "generic-one", "prompt": "generic validation one", "expected_keywords": ["alphaone"], "split": "validation", "production_gate_eligible": False},
+        {"id": "generic-two", "prompt": "generic validation two", "expected_keywords": ["alphatwo"], "split": "validation", "production_gate_eligible": False},
+        {"id": "train", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "prod-test", "prompt": "production test", "expected_keywords": ["prodgold"], "split": "test", "production_gate_eligible": True},
+    ])
+
+    class ProductionAwareBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        def json(self, prompt, schema_hint, repair_path=None):
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": ["choose production-safe edit"]}
+            if schema_hint["kind"] == "edit":
+                if "CANDIDATE_INDEX=1" in prompt:
+                    return {"edits": [{"op": "append", "text": "\n\n## Generic candidate\n\n- alphaone alphatwo validation gate.\n"}], "reasoning": "generic only"}
+                return {"edits": [{"op": "append", "text": "\n\n## Production candidate\n\n- prodgold production gate.\n"}], "reasoning": "production safe"}
+            return {"rationale": "aux"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: ProductionAwareBackend())
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, candidate_count=2)
+    run_dir = Path(out["run_dir"])
+    summary = json.loads((run_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    ranked = summary["rounds"][0]["ranked_candidates"]
+    rejected = (run_dir / "rejected_edits.jsonl").read_text(encoding="utf-8")
+
+    assert summary["rounds"][0]["selected_candidate_id"] == "candidate-1-2"
+    assert ranked[0]["production_accepted"] is False
+    assert ranked[1]["production_accepted"] is True
+    assert ranked[0]["candidate_score"] > ranked[1]["candidate_score"]
+    assert out["adoptable"] is True
+    assert "candidate-1-1" in rejected and "selection_rejection" in rejected
+    assert "Production candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
+
+
+def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    original = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
+    assert review["adoptable"] is True
+    adopt = core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+    assert adopt["status"] == "adopted"
+    assert skill.read_text(encoding="utf-8") != original
+    rollback = core.rollback(out["run_id"], hermes_home_path=str(tmp_path))
+    assert rollback["status"] == "rolled_back"
+    assert skill.read_text(encoding="utf-8") == original
+
+    out2 = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out2["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["production_gate_eligible"] = False
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="production eligible"):
+        core.adopt(out2["run_id"], hermes_home_path=str(tmp_path))
 
 
 def test_heldout_test_results_and_artifact_hashes_are_recorded_and_verified(tmp_path):

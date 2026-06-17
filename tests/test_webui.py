@@ -51,7 +51,7 @@ def test_webui_run_callback_forces_staged_only(monkeypatch, tmp_path):
         return {"success": True, "run_id": "rid", "status": "staged_best"}
 
     monkeypatch.setattr(core, "full_run", fake_full_run)
-    out = webui.run_full_callback("demo", "query", "evals/demo.jsonl", 14, 5, 1, 3, "mock", True, str(tmp_path))
+    out = webui.run_full_callback("demo", "query", "evals/demo.jsonl", 14, 5, 1, 3, 1, "mock", True, str(tmp_path))
     assert calls["eval_file"] == "evals/demo.jsonl"
     assert calls["auto_adopt"] is False
     assert calls["force"] is False

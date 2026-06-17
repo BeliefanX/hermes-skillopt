@@ -56,6 +56,7 @@ def is_production_gate_task(task: EvalTask) -> bool:
         task.split == "val"
         and task.source not in {"synthetic", "curated-fallback", "session-mined"}
         and str(task.source).endswith((".json", ".jsonl"))
+        and bool(task.metadata.get("scorecard_explicit"))
         and bool(task.metadata.get("production_gate_eligible"))
         and (
             bool(task.expected_terms)
@@ -187,7 +188,8 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
     expected = _string_tuple(record.get("expected_keywords") or record.get("expected_terms"))
     required_markers = _string_tuple(record.get("required_markers") or record.get("required_tool_markers") or record.get("required_actions"))
     forbidden_markers = _string_tuple(record.get("forbidden_markers") or record.get("forbidden_tool_markers") or record.get("forbidden_actions"))
-    explicit_scorecard = bool(expected or required_markers or forbidden_markers or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
+    explicit_scorecard = bool(expected or assertions or required_markers or forbidden_markers or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
+    production_flag = record.get("production_gate_eligible", record.get("production_gate", explicit_scorecard))
     if not expected:
         expected = _criteria_to_terms(criteria)
     forbidden = _string_tuple(record.get("forbidden_keywords") or record.get("failure_terms"))
@@ -218,7 +220,8 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
         metadata={
             **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
-            "production_gate_eligible": explicit_scorecard,
+            "production_gate_eligible": bool(production_flag) and explicit_scorecard,
+            "production_eval_schema_policy": "production-eval-schema-v1",
         },
     )
 

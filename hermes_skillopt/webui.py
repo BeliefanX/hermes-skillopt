@@ -120,6 +120,9 @@ def review_payload(run_id: str | None = None, home: str | None = None) -> tuple[
         report = _read_artifact_limited(rd, "report.md")
         diff = _read_artifact_limited(rd, "diff.patch")
         gate = gate_text or _json(gate_data)
+        candidate_summary = _read_artifact_limited(rd, "candidate_summary.json")
+        if candidate_summary:
+            gate = (gate + "\n\n" + candidate_summary) if gate else candidate_summary
         candidate = _read_artifact_limited(rd, "proposed_SKILL.md") or _read_artifact_limited(rd, "best_skill.md")
         rejected = _read_artifact_limited(rd, "rejected_edits.jsonl")
         summary = [
@@ -152,6 +155,7 @@ def run_full_callback(
     limit: int,
     iterations: int,
     edit_budget: int,
+    candidate_count: int,
     backend: str,
     allow_mock: bool,
     home: str | None,
@@ -166,6 +170,7 @@ def run_full_callback(
             limit=int(limit),
             iterations=int(iterations),
             edit_budget=int(edit_budget),
+            candidate_count=int(candidate_count),
             backend=backend or "auto",
             allow_mock=bool(allow_mock),
             auto_adopt=False,
@@ -246,6 +251,7 @@ def build_app(home_default: str | None = None):
                     limit = gr.Slider(1, 200, value=50, step=1, label="Harvest limit")
                     iterations = gr.Slider(1, 8, value=1, step=1, label="Iterations")
                     edit_budget = gr.Slider(0, 16, value=3, step=1, label="Edit budget")
+                    candidate_count = gr.Slider(1, 5, value=1, step=1, label="Candidate count")
                 with gr.Row():
                     backend = gr.Dropdown(["auto", "hermes", "mock"], value="auto", label="Backend")
                     allow_mock = gr.Checkbox(value=False, label="Allow mock fallback (smoke/tests only)")
@@ -288,7 +294,7 @@ def build_app(home_default: str | None = None):
 
         run_btn.click(
             run_full_callback,
-            inputs=[skill, query, eval_file, lookback, limit, iterations, edit_budget, backend, allow_mock, home],
+            inputs=[skill, query, eval_file, lookback, limit, iterations, edit_budget, candidate_count, backend, allow_mock, home],
             outputs=[run_status, review_summary, report, diff, gate, candidate, rejected],
         )
         review_btn.click(review_payload, inputs=[review_run_id, home], outputs=[review_summary, report, diff, gate, candidate, rejected])

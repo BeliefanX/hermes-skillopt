@@ -31,8 +31,8 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 5. Run the six trainer stages:
    - rollout current skill
    - reflect on evidence and rejected edit history
-   - aggregate bounded edit proposals
-   - select valid edits / record rejections
+   - aggregate bounded edit proposals (`candidate_count` conservative multi-candidate support)
+   - select/rank strict-improvement candidates on the same validation set and record rejected/non-selected candidates
    - update a candidate copy
    - evaluate and gate on held-out validation
 6. Evaluate the final best candidate on held-out test.
@@ -43,13 +43,13 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 ## Artifact model
 
-Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, rejected edits, gate results, report, diff, manifest, and per-stage JSON under `stages/`.
+Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, candidate rank/select summary, rejected edits, gate results, report, diff, manifest, and per-stage JSON under `stages/`.
 
-The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best.
+The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, per-task deltas, not-adoptable reasons/checklist, and a provenance fingerprint over eval/task/backend/target config.
 
 ## Eval and adoption gates
 
-Task schema supports `prompt`, split, expected/forbidden keywords, assertions, markers, success criteria, expected behavior, allowed tools, fixtures, timeout, judge, weight, and metadata.
+Task schema supports `prompt`, split, expected/forbidden keywords, assertions, markers, success criteria, expected behavior, allowed tools, fixtures, timeout, judge, weight, executor metadata, and an explicit `production_gate_eligible`/`production_gate` opt-out flag. Production schema policy is recorded as `production-eval-schema-v1` in manifests.
 
 Production adoption is intentionally stricter than generic validation:
 

@@ -65,23 +65,31 @@ class OptimizerBackend:
         return data
 
     def propose(self, reflection: dict[str, Any], current_skill: str, run_dir: Path, iteration: int, rejected_context: list[dict[str, Any]] | None = None) -> CandidateSkill:
+        return self.propose_candidate(reflection, current_skill, run_dir, iteration, 1, rejected_context=rejected_context)
+
+    def propose_candidate(self, reflection: dict[str, Any], current_skill: str, run_dir: Path, iteration: int, candidate_index: int, rejected_context: list[dict[str, Any]] | None = None) -> CandidateSkill:
         prompt = (
             "Generate bounded edits for Hermes SKILL.md trainable state. "
             f"Allowed ops: append, replace, delete, insert_after. Max edits: {self.edit_budget}. "
             "Do not edit YAML frontmatter, use unique anchors, do not repeat rejected edits, and do not write files directly.\n"
+            f"CANDIDATE_INDEX={candidate_index}; generate a conservative distinct candidate for this index.\n"
             "REFLECTION=" + json.dumps(reflection, ensure_ascii=False)[:10000] + "\n"
             "REJECTED_EDIT_HISTORY=" + json.dumps(rejected_context or [], ensure_ascii=False)[:6000] + "\n"
             "SKILL=" + current_skill[:12000]
         )
-        data = self.backend.json(prompt, {"kind": "edit"}, run_dir / f"llm_edit_repair_{iteration}.json")
+        suffix = f"{iteration}_{candidate_index}"
+        data = self.backend.json(prompt, {"kind": "edit"}, run_dir / f"llm_edit_repair_{suffix}.json")
         edits = data.get("edits") if isinstance(data, dict) else []
         if not isinstance(edits, list):
             edits = []
         edits = edits[: self.edit_budget]
         validation = validate_bounded_edits(current_skill, edits)
         if not validation.ok:
-            reject_path = run_dir / f"candidate_{iteration}_edit_validation_rejected.json"
-            reject_path.write_text(json.dumps({"iteration": iteration, "errors": validation.errors, "rejected_edits": validation.rejected_edits, "edits": edits}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            payload = {"iteration": iteration, "candidate_index": candidate_index, "errors": validation.errors, "rejected_edits": validation.rejected_edits, "edits": edits}
+            reject_path = run_dir / f"candidate_{suffix}_edit_validation_rejected.json"
+            reject_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            if candidate_index == 1:
+                (run_dir / f"candidate_{iteration}_edit_validation_rejected.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             candidate_text = current_skill
         else:
             candidate_text = apply_bounded_edits(current_skill, edits, strict=True)
@@ -92,4 +100,5 @@ class OptimizerBackend:
             reflection=reflection,
             reasoning=str(data.get("reasoning", "")) if isinstance(data, dict) else None,
             validation={"ok": validation.ok, "errors": validation.errors, "rejected_edits": validation.rejected_edits, "diff_chars": validation.diff_chars},
+            candidate_id=f"candidate-{iteration}-{candidate_index}",
         )

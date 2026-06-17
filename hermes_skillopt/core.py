@@ -192,6 +192,109 @@ def verify_artifact_hashes(run_dir: Path, manifest: dict[str, Any]) -> None:
             raise ValueError(f"Artifact hash mismatch for {key}")
 
 
+def _artifact_path(run_dir: Path, manifest: dict[str, Any], key: str) -> Path:
+    files = manifest.get("files") or {}
+    hashes = manifest.get("artifact_sha256") or {}
+    rel = files.get(key)
+    if not isinstance(rel, str) or key not in hashes:
+        raise ValueError(f"Manifest missing required hashed artifact: {key}")
+    p = (run_dir / rel).resolve()
+    if not _is_relative_to(p, run_dir.resolve()) or p.is_symlink() or not p.is_file():
+        raise ValueError(f"Artifact {key} is missing or unsafe")
+    return p
+
+
+def _read_hashed_json(run_dir: Path, manifest: dict[str, Any], key: str) -> Any:
+    return json.loads(read_text(_artifact_path(run_dir, manifest, key)))
+
+
+def _read_hashed_jsonl(run_dir: Path, manifest: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in read_text(_artifact_path(run_dir, manifest, key)).splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _manifest_equal(actual: Any, expected: Any, field: str) -> None:
+    if actual != expected:
+        label = "production eligible" if field == "production_gate_eligible" else field
+        raise ValueError(f"Manifest {label} does not match verified artifacts; refusing to adopt")
+
+
+def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> None:
+    """Re-derive adopt eligibility from hashed artifacts, not mutable manifest fields."""
+
+    required = ("gate_results", "test_results", "val", "test", "candidate_summary", "evidence", "proposed")
+    for key in required:
+        _artifact_path(run_dir, manifest, key)
+
+    gate_results = _read_hashed_json(run_dir, manifest, "gate_results")
+    test_results = _read_hashed_json(run_dir, manifest, "test_results")
+    val_items = _read_hashed_jsonl(run_dir, manifest, "val")
+    test_items = _read_hashed_jsonl(run_dir, manifest, "test")
+    candidate_summary_artifact = _read_hashed_json(run_dir, manifest, "candidate_summary")
+    evidence = _read_hashed_json(run_dir, manifest, "evidence")
+
+    best_gate = gate_results.get("best_gate") if isinstance(gate_results, dict) else None
+    production_best_gate = gate_results.get("production_best_gate") if isinstance(gate_results, dict) else None
+    _manifest_equal(best_gate, manifest.get("gate"), "gate")
+    _manifest_equal(production_best_gate, manifest.get("production_gate"), "production_gate")
+    _manifest_equal(test_results, manifest.get("test_results"), "test_results")
+    _manifest_equal(candidate_summary_artifact.get("rounds") if isinstance(candidate_summary_artifact, dict) else None, manifest.get("candidate_summary"), "candidate_summary")
+
+    from hermes_skillopt.env import EvalTask, is_production_gate_task
+
+    def task_from_row(row: dict[str, Any]) -> EvalTask:
+        return EvalTask(
+            id=str(row.get("id", "")),
+            prompt=str(row.get("prompt", "")),
+            source=str(row.get("source", "")),
+            expected_behavior=str(row.get("expected_behavior", "")),
+            assertions=tuple(row.get("assertions") or ()),
+            judge=str(row.get("judge", "keyword_scorecard")),
+            allowed_tools=tuple(row.get("allowed_tools") or ()),
+            timeout=float(row.get("timeout", 30.0)),
+            fixtures=dict(row.get("fixtures") or {}),
+            expected_terms=tuple(row.get("expected_terms") or ()),
+            failure_terms=tuple(row.get("failure_terms") or ()),
+            required_markers=tuple(row.get("required_markers") or ()),
+            forbidden_markers=tuple(row.get("forbidden_markers") or ()),
+            split=str(row.get("split", "validation")),
+            weight=float(row.get("weight", 1.0)),
+            success_criteria=tuple(row.get("success_criteria") or ()),
+            metadata=dict(row.get("metadata") or {}),
+        )
+
+    task_rows = {
+        "train": _read_hashed_jsonl(run_dir, manifest, "train") if "train" in (manifest.get("artifact_sha256") or {}) else [],
+        "val": val_items,
+        "test": test_items,
+    }
+    eval_tasks = {split: [task_from_row(r) for r in rows] for split, rows in task_rows.items()}
+    production_val_tasks = [t for t in eval_tasks["val"] if is_production_gate_task(t)]
+    production_gate_available = bool(production_val_tasks) and bool(evidence.get("production_gate_eligible"))
+    recomputed_production_gate_eligible = production_gate_available and bool(production_best_gate and production_best_gate.get("accepted") is True)
+    production_test_results = [r for r in (test_results.get("results") or []) if isinstance(r, dict) and isinstance(r.get("metadata"), dict) and r["metadata"].get("production_gate_eligible")]
+    recomputed_test_gate_eligible = bool(production_test_results) and all(float(r.get("score", 0.0)) >= 0.55 and bool(r.get("passed")) for r in production_test_results)
+    recomputed_policy = _production_eval_policy(evidence, production_gate_available, recomputed_test_gate_eligible)
+    recomputed_provenance = _provenance_fingerprint(
+        eval_file_used=evidence.get("eval_file"),
+        tasks=eval_tasks,
+        backend_mode=str(manifest.get("backend")),
+        target_executor_mode=str(manifest.get("target_executor")),
+        target_config_id=str(manifest.get("target_config_id")),
+        production_gate_available=production_gate_available,
+    )
+
+    _manifest_equal(recomputed_production_gate_eligible, manifest.get("production_gate_eligible"), "production_gate_eligible")
+    _manifest_equal(recomputed_test_gate_eligible, manifest.get("test_gate_eligible"), "test_gate_eligible")
+    _manifest_equal(recomputed_policy, manifest.get("production_eval_policy"), "production_eval_policy")
+    _manifest_equal(recomputed_provenance, manifest.get("provenance_fingerprint"), "provenance_fingerprint")
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -540,7 +643,80 @@ def bounded_edits(backend: LLMBackend, reflections: dict[str, Any], current_skil
     return data
 
 
-def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, backend: str = "auto", allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto") -> dict[str, Any]:
+def _stable_json_sha(data: Any) -> str:
+    return sha256_text(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _task_fingerprint(tasks: dict[str, list[Any]]) -> dict[str, Any]:
+    rows = []
+    for split, split_tasks in sorted(tasks.items()):
+        for task in split_tasks:
+            rows.append({
+                "id": getattr(task, "id", None),
+                "split": split,
+                "source": getattr(task, "source", None),
+                "expected_terms": list(getattr(task, "expected_terms", ())),
+                "assertions": list(getattr(task, "assertions", ())),
+                "required_markers": list(getattr(task, "required_markers", ())),
+                "forbidden_markers": list(getattr(task, "forbidden_markers", ())),
+                "weight": getattr(task, "weight", None),
+                "production_gate_eligible": bool(getattr(task, "metadata", {}).get("production_gate_eligible")),
+            })
+    return {"sha256": _stable_json_sha(rows), "task_ids": [r["id"] for r in rows], "task_count": len(rows)}
+
+
+def _provenance_fingerprint(*, eval_file_used: str | None, tasks: dict[str, list[Any]], backend_mode: str, target_executor_mode: str, target_config_id: str, production_gate_available: bool) -> dict[str, Any]:
+    eval_sha = sha256_file(Path(eval_file_used)) if eval_file_used and Path(eval_file_used).is_file() else None
+    task_fp = _task_fingerprint(tasks)
+    payload = {
+        "eval_file": eval_file_used,
+        "eval_file_sha256": eval_sha,
+        "task_sha256": task_fp["sha256"],
+        "backend": backend_mode,
+        "target_executor": target_executor_mode,
+        "target_config_id": target_config_id,
+        "production_gate_available": production_gate_available,
+    }
+    return {**payload, "fingerprint_sha256": _stable_json_sha(payload), "task_ids": task_fp["task_ids"], "task_count": task_fp["task_count"]}
+
+
+def _per_task_delta(current_eval: dict[str, Any] | None, candidate_eval: dict[str, Any] | None) -> list[dict[str, Any]]:
+    current_rows = {r.get("task_id"): r for r in ((current_eval or {}).get("results") or []) if isinstance(r, dict)}
+    out = []
+    for cand in ((candidate_eval or {}).get("results") or []):
+        if not isinstance(cand, dict):
+            continue
+        cur = current_rows.get(cand.get("task_id"), {})
+        out.append({
+            "task_id": cand.get("task_id"),
+            "current_score": cur.get("score"),
+            "candidate_score": cand.get("score"),
+            "delta": round(float(cand.get("score", 0.0)) - float(cur.get("score", 0.0)), 6),
+            "current_passed": cur.get("passed"),
+            "candidate_passed": cand.get("passed"),
+            "production_gate_eligible": bool((cand.get("metadata") or {}).get("production_gate_eligible")),
+        })
+    return out
+
+
+def _production_eval_policy(evidence: dict[str, Any], production_gate_available: bool, test_gate_eligible: bool) -> dict[str, Any]:
+    return {
+        "policy_version": "production-eval-schema-v1",
+        "adopt_requires": [
+            "eval_file under active HERMES_HOME with hash/path guard",
+            "explicit curated validation task with concrete scorecard/assertions",
+            "strict candidate improvement on frozen target executor",
+            "held-out production-eligible test split passes threshold",
+            "fallback/session/synthetic tasks are review-only and cannot authorize adopt",
+        ],
+        "eval_file": evidence.get("eval_file"),
+        "curated_task_count": evidence.get("curated_task_count", 0),
+        "production_gate_available": production_gate_available,
+        "test_gate_eligible": test_gate_eligible,
+    }
+
+
+def full_run(skill: str | None = None, query: str | None = None, lookback_days: int = 14, limit: int = 50, iterations: int = 1, edit_budget: int = 3, candidate_count: int = 1, backend: str = "auto", allow_mock: bool = False, auto_adopt: bool = False, force: bool = False, hermes_home_path: str | None = None, ctx: Any = None, dry_run: bool = False, eval_file: str | None = None, target_executor: str = "auto") -> dict[str, Any]:
     """Run the Hermes adapter of the SkillOpt core abstraction.
 
     Pipeline: load trainable SkillState -> build benchmark tasks -> evaluate
@@ -598,7 +774,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     _jsonl_write(artifacts.val, [t.__dict__ for t in tasks["val"]])
     _jsonl_write(artifacts.test, [t.__dict__ for t in tasks["test"]])
 
-    trainer_result = trainer.run(original, tasks, iterations, production_val_tasks=production_val_tasks if production_gate_available else [], rejected_history=rejected_history)
+    trainer_result = trainer.run(original, tasks, iterations, production_val_tasks=production_val_tasks if production_gate_available else [], rejected_history=rejected_history, candidate_count=candidate_count)
     current = trainer_result.current
     best = trainer_result.best
     best_gate = trainer_result.best_gate
@@ -606,6 +782,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     all_edits = trainer_result.all_edits
     all_gates = trainer_result.all_gates
     all_production_gates = trainer_result.all_production_gates
+    candidate_summary = trainer_result.candidate_summary
     rejected = trainer_result.rejected
 
     final_status = "staged_best" if best != original else "rejected"
@@ -642,7 +819,11 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     production_current_score = production_validation_summary.get("current_score") if production_validation_summary else None
     production_candidate_score = production_validation_summary.get("candidate_score") if production_validation_summary else None
     gate_reason = validation_summary.get("rationale") if validation_summary else "none"
-    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- target_executor: {executor.mode}\n- target_config_id: {executor.target_config_id}\n- eval_file: {eval_file_used or 'none'}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- production_gate_task_count: {len(production_val_tasks)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- iterations: {max(1, int(iterations))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- production_validation_scores: current={production_current_score}, candidate={production_candidate_score}\n- heldout_test_score: {test_results.get('score')}\n- test_gate_eligible: {test_gate_eligible}\n- not_adoptable_reasons: {', '.join(adoptability_reasons) or 'none'}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate production curated validation score must strictly improve for adoptable; session/fallback/synthetic validation is review-only evidence\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- production_best_gate: {json.dumps(production_validation_summary, ensure_ascii=False) if production_validation_summary else 'none'}\n- changed: {bool(diff)}\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    per_task_delta = _per_task_delta((best_gate or {}).get("current_eval") if isinstance(best_gate, dict) else None, (best_gate or {}).get("candidate_eval") if isinstance(best_gate, dict) else None)
+    provenance = _provenance_fingerprint(eval_file_used=eval_file_used, tasks=tasks, backend_mode=llm.mode, target_executor_mode=executor.mode, target_config_id=executor.target_config_id, production_gate_available=production_gate_available)
+    production_eval_policy = _production_eval_policy(evidence, production_gate_available, test_gate_eligible)
+    write_text(artifacts.candidate_summary, json.dumps({"candidate_count": max(1, int(candidate_count)), "rounds": candidate_summary, "per_task_delta": per_task_delta, "selection_policy": "rank candidates on same validation set; when production gates exist, prefer candidates with both generic and production strict improvement"}, ensure_ascii=False, indent=2) + "\n")
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- target_executor: {executor.mode}\n- target_config_id: {executor.target_config_id}\n- eval_file: {eval_file_used or 'none'}\n- provenance_fingerprint: {provenance['fingerprint_sha256']}\n- eval_fingerprint: {provenance.get('eval_file_sha256') or 'none'}\n- task_fingerprint: {provenance['task_sha256']}\n- production_eval_policy: {production_eval_policy['policy_version']}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- production_gate_task_count: {len(production_val_tasks)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- baseline/current/candidate/best/test: original_sha={sha256_text(original)[:12]}, current_sha={sha256_text(current)[:12]}, candidate_sha={sha256_text(proposed)[:12]}, best_sha={sha256_text(best)[:12]}, test_score={test_results.get('score')}\n- iterations: {max(1, int(iterations))}\n- candidate_count_per_iteration: {max(1, int(candidate_count))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- production_validation_scores: current={production_current_score}, candidate={production_candidate_score}\n- heldout_test_score: {test_results.get('score')}\n- test_gate_eligible: {test_gate_eligible}\n- not_adoptable_reasons: {', '.join(adoptability_reasons) or 'none'}\n- not_adoptable_checklist: production_validation={production_gate_eligible}; heldout_test={test_gate_eligible}; staged_best={final_status == 'staged_best'}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate production curated validation score must strictly improve for adoptable; session/fallback/synthetic validation is review-only evidence\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- production_best_gate: {json.dumps(production_validation_summary, ensure_ascii=False) if production_validation_summary else 'none'}\n- per_task_delta: {json.dumps(per_task_delta, ensure_ascii=False)}\n- changed: {bool(diff)}\n\n## Multi-candidate rank/select\n\n```json\n{json.dumps(candidate_summary, ensure_ascii=False, indent=2)[:4000]}\n```\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
     write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
@@ -659,8 +840,13 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "backend": llm.mode,
         "target_executor": executor.mode,
         "target_config_id": executor.target_config_id,
+        "candidate_count": max(1, int(candidate_count)),
         "rejected_history_count": len(rejected_history),
         "eval_file": eval_file_used,
+        "provenance_fingerprint": provenance,
+        "production_eval_policy": production_eval_policy,
+        "per_task_delta": per_task_delta,
+        "candidate_summary": candidate_summary,
         "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}),
         "curated_task_count": evidence.get("curated_task_count", 0),
         "validation_current_score": current_score,
@@ -688,7 +874,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     }
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "per_task_delta": per_task_delta, "candidate_summary": candidate_summary, "provenance_fingerprint": provenance, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason}
     return result
 
 
@@ -750,7 +936,7 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
     diff = read_text(run_dir / "diff.patch") if (run_dir / "diff.patch").exists() else ""
     report = read_text(run_dir / "report.md") if (run_dir / "report.md").exists() else ""
     gate = m.get("gate") or (json.loads(read_text(run_dir / "gate_results.json")).get("best_gate") if (run_dir / "gate_results.json").exists() else None)
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "per_task_delta": m.get("per_task_delta") or [], "candidate_summary": m.get("candidate_summary") or [], "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
 
 
 def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
@@ -760,15 +946,22 @@ def adopt(run_id: str, hermes_home_path: str | None = None, force: bool = False,
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
     verify_artifact_hashes(run_dir, m)
-    gate = m.get("gate")
     if m.get("status") != "staged_best" or m.get("adoptable") is not True:
         raise ValueError("Only adoptable full-run staged_best manifests may be adopted; legacy/fallback/dry-run proposals are review-only")
+    _adopt_time_artifact_crosscheck(run_dir, m)
+    gate = m.get("gate")
     if not isinstance(gate, dict) or gate.get("accepted") is not True:
         raise ValueError("Manifest missing accepted validation gate; refusing to adopt")
     if m.get("production_gate_eligible") is not True:
         raise ValueError("Manifest validation gate is not production eligible; refusing to adopt")
     if m.get("test_gate_eligible") is not True:
         raise ValueError("Manifest held-out test gate is not production eligible; refusing to adopt")
+    policy = m.get("production_eval_policy")
+    provenance = m.get("provenance_fingerprint")
+    if not isinstance(policy, dict) or policy.get("policy_version") != "production-eval-schema-v1":
+        raise ValueError("Manifest missing production eval schema policy; refusing to adopt")
+    if not isinstance(provenance, dict) or not provenance.get("fingerprint_sha256"):
+        raise ValueError("Manifest missing provenance fingerprint; refusing to adopt")
     target = manifest_skill_path(home, m)
     guard_manifest_skill_path(home, m, target)
     if not target.exists():

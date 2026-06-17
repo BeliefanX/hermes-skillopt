@@ -36,6 +36,7 @@ class TrainerResult:
     all_edits: list[dict[str, Any]]
     all_gates: list[dict[str, Any]]
     all_production_gates: list[dict[str, Any]]
+    candidate_summary: list[dict[str, Any]]
     rejected: list[dict[str, Any]]
     stage_records: list[StageRecord]
 
@@ -60,16 +61,16 @@ class StageRecorder:
         self._record(iteration, "reflect", {"keys": sorted(reflection.keys()), "rejected_context_count": rejected_context_count})
 
     def aggregate(self, iteration: int, reflection: dict[str, Any], edit_budget: int) -> None:
-        self._record(iteration, "aggregate", {"strategy": "single_reflection_minimal", "reflection_keys": sorted(reflection.keys()), "edit_budget": edit_budget})
+        self._record(iteration, "aggregate", {"strategy": "multi_candidate_conservative_rank_select", "reflection_keys": sorted(reflection.keys()), "edit_budget": edit_budget})
 
     def select(self, iteration: int, edit_plan: dict[str, Any]) -> None:
-        self._record(iteration, "select", {"selected_edits": len(edit_plan.get("edits") or []), "bounded": bool(edit_plan.get("bounded")), "validation": edit_plan.get("validation")})
+        self._record(iteration, "select", {"selected_candidate_id": edit_plan.get("candidate_id"), "selected_edits": len(edit_plan.get("edits") or []), "bounded": bool(edit_plan.get("bounded")), "validation": edit_plan.get("validation"), "ranked_candidates": edit_plan.get("ranked_candidates", [])})
 
     def update(self, iteration: int, candidate_sha256: str, changed: bool) -> None:
         self._record(iteration, "update", {"candidate_sha256": candidate_sha256, "candidate_changed": changed})
 
     def evaluate(self, iteration: int, current_val: dict[str, Any], candidate_val: dict[str, Any], gate: dict[str, Any]) -> None:
-        self._record(iteration, "evaluate", {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted")})
+        self._record(iteration, "evaluate", {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted"), "candidate_id": gate.get("candidate_id")})
 
 
 class SixStageSkillOptTrainer:
@@ -93,10 +94,12 @@ class SixStageSkillOptTrainer:
         *,
         production_val_tasks: list[EvalTask] | None = None,
         rejected_history: list[dict[str, Any]] | None = None,
+        candidate_count: int = 1,
     ) -> TrainerResult:
         from hermes_skillopt.core import write_text, _jsonl_write, sha256_text  # lazy import avoids module cycle
 
         total_iterations = max(1, int(iterations))
+        per_round_candidates = max(1, int(candidate_count))
         production_val_tasks = production_val_tasks or []
         current = original
         best = original
@@ -105,6 +108,7 @@ class SixStageSkillOptTrainer:
         all_edits: list[dict[str, Any]] = []
         all_gates: list[dict[str, Any]] = []
         all_production_gates: list[dict[str, Any]] = []
+        candidate_summary: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         rejected_history = rejected_history or []
 
@@ -119,38 +123,77 @@ class SixStageSkillOptTrainer:
             self.stage_records.append(StageRecord("reflect", it, {"rejected_context_count": len(rejected_context)}))
 
             self.stages.aggregate(it, reflection, self.optimizer.edit_budget)
-            self.stage_records.append(StageRecord("aggregate", it, {"edit_budget": self.optimizer.edit_budget}))
-            candidate = self.optimizer.propose(reflection, current, self.run_dir, it, rejected_context=rejected_context)
-            edit_plan = {"iteration": it, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True, "validation": candidate.validation}
+            self.stage_records.append(StageRecord("aggregate", it, {"edit_budget": self.optimizer.edit_budget, "candidate_count": per_round_candidates}))
+
+            current_val = self.executor.evaluate(current, tasks["val"], label=f"current_val_{it}")
+            production_current_val = self.executor.evaluate(current, production_val_tasks, label=f"production_current_val_{it}") if production_val_tasks else None
+            candidates = [self.optimizer.propose_candidate(reflection, current, self.run_dir, it, ci, rejected_context=rejected_context) for ci in range(1, per_round_candidates + 1)]
+
+            ranked: list[dict[str, Any]] = []
+            candidate_evals: list[tuple[CandidateSkill, dict[str, Any], dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = []
+            for ci, cand in enumerate(candidates, 1):
+                candidate_val = self.executor.evaluate(cand.text, tasks["val"], label=f"candidate_val_{it}_{ci}")
+                judge = self._judge(current_val, candidate_val, it, ci)
+                gate = self.gatekeeper.decide(it, current_val, candidate_val, current, cand.text, judge=judge).as_dict()
+                gate["candidate_id"] = cand.candidate_id
+                invalid_edit = not bool(cand.validation.get("ok", True))
+                production_candidate_val = None
+                production_gate: dict[str, Any] | None = None
+                if production_val_tasks and production_current_val is not None:
+                    production_candidate_val = self.executor.evaluate(cand.text, production_val_tasks, label=f"production_candidate_val_{it}_{ci}")
+                    production_gate = self.gatekeeper.decide(it, production_current_val, production_candidate_val, current, cand.text, judge={"note": "production/adopt gate uses only explicit curated validation tasks"}).as_dict()
+                    assert production_gate is not None
+                    production_gate["gate_scope"] = "production_curated_validation_only"
+                    production_gate["task_ids"] = [t.id for t in production_val_tasks]
+                    production_gate["candidate_id"] = cand.candidate_id
+                production_delta = None
+                if production_gate is not None:
+                    production_delta = round(float(production_gate.get("candidate_score", 0.0)) - float(production_gate.get("current_score", 0.0)), 6)
+                row = {
+                    "candidate_id": cand.candidate_id,
+                    "iteration": it,
+                    "candidate_index": ci,
+                    "accepted": bool(gate.get("accepted")) and not invalid_edit,
+                    "current_score": gate.get("current_score"),
+                    "candidate_score": gate.get("candidate_score"),
+                    "delta": round(float(gate.get("candidate_score", 0.0)) - float(gate.get("current_score", 0.0)), 6),
+                    "production_gate": production_gate,
+                    "production_delta": production_delta,
+                    "production_accepted": bool(production_gate and production_gate.get("accepted")) and not invalid_edit,
+                    "validation_ok": not invalid_edit,
+                    "edit_count": len(cand.edits),
+                }
+                ranked.append(row)
+                candidate_evals.append((cand, candidate_val, gate, production_candidate_val, production_gate))
+                write_text(self.run_dir / f"candidate_{it}_{ci}_SKILL.md", cand.text)
+                write_text(self.run_dir / f"candidate_{it}_{ci}_edits.json", json.dumps({"iteration": it, "candidate_id": cand.candidate_id, "edits": cand.edits, "reasoning": cand.reasoning, "bounded": True, "validation": cand.validation, "gate": gate, "production_gate": production_gate}, ensure_ascii=False, indent=2) + "\n")
+
+            accepted_rows = [r for r in ranked if r["accepted"]]
+            production_accepted_rows = [r for r in accepted_rows if r.get("production_accepted")]
+            select_pool = production_accepted_rows or accepted_rows or ranked
+            selected_row = max(select_pool, key=lambda r: (float(r.get("production_delta") or 0.0), float(r["candidate_score"] or 0.0), float(r["delta"] or 0.0), -int(r["candidate_index"])))
+            selected_idx = int(selected_row["candidate_index"]) - 1
+            candidate, candidate_val, gate, production_candidate_val, production_gate = candidate_evals[selected_idx]
+
+            edit_plan = {"iteration": it, "candidate_id": candidate.candidate_id, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True, "validation": candidate.validation, "ranked_candidates": ranked, "selection_rule": "prefer candidates with both generic validation strict improvement and production validation strict improvement when production gates exist; non-selected candidates are rejected/buffered"}
             self.stages.select(it, edit_plan)
-            self.stage_records.append(StageRecord("select", it, {"selected_edits": len(candidate.edits), "validation": candidate.validation}))
+            self.stage_records.append(StageRecord("select", it, {"selected_candidate_id": candidate.candidate_id, "selected_edits": len(candidate.edits), "validation": candidate.validation, "ranked_candidates": ranked}))
             write_text(self.run_dir / f"candidate_{it}_SKILL.md", candidate.text)
             write_text(self.run_dir / f"candidate_{it}_edits.json", json.dumps(edit_plan, ensure_ascii=False, indent=2) + "\n")
             self.stages.update(it, sha256_text(candidate.text), candidate.text != current)
             self.stage_records.append(StageRecord("update", it, {"candidate_changed": candidate.text != current}))
 
-            current_val = self.executor.evaluate(current, tasks["val"], label=f"current_val_{it}")
-            candidate_val = self.executor.evaluate(candidate.text, tasks["val"], label=f"candidate_val_{it}")
             write_text(self.artifacts.current_validation_results if it == total_iterations else self.run_dir / f"current_validation_results_{it}.json", json.dumps(current_val, ensure_ascii=False, indent=2) + "\n")
             write_text(self.artifacts.candidate_validation_results if it == total_iterations else self.run_dir / f"candidate_validation_results_{it}.json", json.dumps(candidate_val, ensure_ascii=False, indent=2) + "\n")
             if it != total_iterations:
                 write_text(self.artifacts.current_validation_results, json.dumps(current_val, ensure_ascii=False, indent=2) + "\n")
                 write_text(self.artifacts.candidate_validation_results, json.dumps(candidate_val, ensure_ascii=False, indent=2) + "\n")
-            judge = self._judge(current_val, candidate_val, it)
-            gate = self.gatekeeper.decide(it, current_val, candidate_val, current, candidate.text, judge=judge).as_dict()
-
-            production_gate: dict[str, Any] | None = None
-            if production_val_tasks:
-                production_current_val = self.executor.evaluate(current, production_val_tasks, label=f"production_current_val_{it}")
-                production_candidate_val = self.executor.evaluate(candidate.text, production_val_tasks, label=f"production_candidate_val_{it}")
-                production_gate = self.gatekeeper.decide(it, production_current_val, production_candidate_val, current, candidate.text, judge={"note": "production/adopt gate uses only explicit curated validation tasks"}).as_dict()
-                production_gate["gate_scope"] = "production_curated_validation_only"
-                production_gate["task_ids"] = [t.id for t in production_val_tasks]
+            if production_val_tasks and production_current_val is not None and production_candidate_val is not None:
                 write_text(self.run_dir / f"production_current_validation_results_{it}.json", json.dumps(production_current_val, ensure_ascii=False, indent=2) + "\n")
                 write_text(self.run_dir / f"production_candidate_validation_results_{it}.json", json.dumps(production_candidate_val, ensure_ascii=False, indent=2) + "\n")
 
             self.stages.evaluate(it, current_val, candidate_val, gate)
-            self.stage_records.append(StageRecord("evaluate", it, {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted")}))
+            self.stage_records.append(StageRecord("evaluate", it, {"current_score": current_val.get("score"), "candidate_score": candidate_val.get("score"), "accepted": gate.get("accepted"), "candidate_id": candidate.candidate_id}))
 
             invalid_edit = not bool(candidate.validation.get("ok", True))
             if gate["accepted"] and not invalid_edit:
@@ -160,12 +203,16 @@ class SixStageSkillOptTrainer:
                 status_value = "accepted"
             else:
                 status_value = "rejected"
-                rejected.append({"iteration": it, "gate": gate, "edits": candidate.edits, "reasoning": candidate.reasoning, "validation_errors": candidate.validation.get("errors", []), "rejected_edits": candidate.validation.get("rejected_edits", [])})
+                rejected.append({"iteration": it, "candidate_id": candidate.candidate_id, "gate": gate, "edits": candidate.edits, "reasoning": candidate.reasoning, "validation_errors": candidate.validation.get("errors", []), "rejected_edits": candidate.validation.get("rejected_edits", [])})
+            for cand, _cval, cgate, _pcval, pgate in candidate_evals:
+                if cand.candidate_id != candidate.candidate_id:
+                    rejected.append({"iteration": it, "candidate_id": cand.candidate_id, "gate": cgate, "production_gate": pgate, "edits": cand.edits, "reasoning": cand.reasoning, "validation_errors": cand.validation.get("errors", []), "rejected_edits": cand.validation.get("rejected_edits", []), "selection_rejection": True})
             all_reflections.append(reflection)
             all_edits.append(edit_plan)
             all_gates.append(gate | {"status": status_value})
             if production_gate is not None:
                 all_production_gates.append(production_gate | {"status": status_value})
+            candidate_summary.append({"iteration": it, "selected_candidate_id": candidate.candidate_id, "ranked_candidates": ranked})
             write_text(self.artifacts.current, current)
             _jsonl_write(self.run_dir / "stage_records.jsonl", [r.__dict__ for r in self.stage_records])
 
@@ -175,15 +222,15 @@ class SixStageSkillOptTrainer:
         production_best_gate = next((g for g in reversed(all_production_gates) if g.get("status") == "accepted"), None)
         if production_best_gate is None and all_production_gates:
             production_best_gate = all_production_gates[-1]
-        return TrainerResult(current, best, best_gate, production_best_gate, test_results, all_reflections, all_edits, all_gates, all_production_gates, rejected, self.stage_records)
+        return TrainerResult(current, best, best_gate, production_best_gate, test_results, all_reflections, all_edits, all_gates, all_production_gates, candidate_summary, rejected, self.stage_records)
 
-    def _judge(self, current_val: dict[str, Any], candidate_val: dict[str, Any], iteration: int) -> dict[str, Any]:
+    def _judge(self, current_val: dict[str, Any], candidate_val: dict[str, Any], iteration: int, candidate_index: int = 1) -> dict[str, Any]:
         try:
             return self.llm.json(
                 "Explain current vs candidate on validation. Explanation only; cannot accept.\n"
                 + json.dumps({"current_eval": current_val, "candidate_eval": candidate_val}, ensure_ascii=False)[:10000],
                 {"kind": "gate"},
-                self.run_dir / f"llm_gate_repair_{iteration}.json",
+                self.run_dir / f"llm_gate_repair_{iteration}_{candidate_index}.json",
             )
         except Exception as exc:  # pragma: no cover - defensive repair path
             return {"judge_error": str(exc)}

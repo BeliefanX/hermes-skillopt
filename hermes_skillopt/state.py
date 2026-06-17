@@ -34,6 +34,7 @@ class CandidateSkill:
     reflection: dict[str, Any] = field(default_factory=dict)
     reasoning: str | None = None
     validation: dict[str, Any] = field(default_factory=dict)
+    candidate_id: str = "candidate-1-1"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class SkillOptArtifacts:
     test: Path
     reflections: Path
     candidate_edits: Path
+    candidate_summary: Path
     gate_results: Path
     rejected_edits: Path
     current_validation_results: Path
@@ -78,6 +80,7 @@ class SkillOptArtifacts:
             test=run_dir / "test_items.jsonl",
             reflections=run_dir / "reflections.json",
             candidate_edits=run_dir / "candidate_edits.json",
+            candidate_summary=run_dir / "candidate_summary.json",
             gate_results=run_dir / "gate_results.json",
             rejected_edits=run_dir / "rejected_edits.jsonl",
             current_validation_results=run_dir / "current_validation_results.json",
@@ -99,6 +102,7 @@ class SkillOptArtifacts:
             "test": self.test.name,
             "reflections": self.reflections.name,
             "candidate_edits": self.candidate_edits.name,
+            "candidate_summary": self.candidate_summary.name,
             "gate_results": self.gate_results.name,
             "rejected_edits": self.rejected_edits.name,
             "current_validation_results": self.current_validation_results.name,
