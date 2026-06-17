@@ -59,6 +59,59 @@ def test_skill_discovery_frontmatter(tmp_path):
     assert skills[0].path == p
 
 
+class FakeHermesStructuredResult:
+    def __init__(self, parsed):
+        self.parsed = parsed
+        self.text = json.dumps(parsed)
+
+
+class FakeHermesPluginLlm:
+    def __init__(self):
+        self.calls = []
+
+    def complete_structured(self, *, instructions, input, json_schema=None, json_mode=False, schema_name=None, purpose=None):
+        self.calls.append({
+            "instructions": instructions,
+            "input": input,
+            "json_schema": json_schema,
+            "json_mode": json_mode,
+            "schema_name": schema_name,
+            "purpose": purpose,
+        })
+        return FakeHermesStructuredResult({"edits": [{"op": "append", "text": "\nrule"}], "reasoning": "fake hermes runtime"})
+
+
+def test_llm_backend_accepts_hermes_plugin_ctx_llm_signature():
+    llm = FakeHermesPluginLlm()
+    ctx = type("Ctx", (), {"llm": llm})()
+
+    backend = core.LLMBackend(backend="hermes", allow_mock=False, ctx=ctx)
+    out = backend.json("PROMPT", {"kind": "edit"})
+
+    assert backend.mode == "hermes"
+    assert out["edits"][0]["op"] == "append"
+    assert llm.calls[0]["json_mode"] is True
+    assert llm.calls[0]["purpose"] == "hermes-skillopt.optimizer"
+    assert llm.calls[0]["input"] == [{"type": "text", "text": "PROMPT"}]
+
+
+def test_llm_backend_accepts_direct_ctx_llm_methods():
+    ctx = FakeHermesPluginLlm()
+
+    backend = core.LLMBackend(backend="hermes", allow_mock=False, ctx=ctx)
+    out = backend.json("PROMPT", {"kind": "edit"})
+
+    assert backend.mode == "hermes"
+    assert out["reasoning"] == "fake hermes runtime"
+
+
+def test_llm_backend_fails_safely_without_llm_context():
+    ctx = type("Ctx", (), {})()
+
+    with pytest.raises(RuntimeError, match="Hermes LLM ctx unavailable.*ctx_type=Ctx"):
+        core.LLMBackend(backend="hermes", allow_mock=False, ctx=ctx)
+
+
 def test_dry_run_stages_files_and_diff(tmp_path):
     make_skill(tmp_path, "demo")
     out = core.dry_run(skill="demo", goal="be safer", hermes_home_path=str(tmp_path))

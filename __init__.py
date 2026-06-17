@@ -180,6 +180,14 @@ _TOOLS = (
 )
 
 
+def _bind_plugin_ctx(handler: Callable[..., str], plugin_ctx: Any) -> Callable[..., str]:
+    def _handler(args: dict, **kw) -> str:
+        if kw.get("ctx") is None:
+            kw["ctx"] = plugin_ctx
+        return handler(args, **kw)
+    return _handler
+
+
 def register(ctx) -> None:
     for name, schema, handler, emoji in _TOOLS:
-        ctx.register_tool(name=name, toolset="hermes_skillopt", schema=schema, handler=handler, emoji=emoji)
+        ctx.register_tool(name=name, toolset="hermes_skillopt", schema=schema, handler=_bind_plugin_ctx(handler, ctx), emoji=emoji)

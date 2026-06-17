@@ -689,27 +689,85 @@ class LLMBackend:
         self.ctx = ctx
         self.mode = "mock" if self.backend == "mock" else "hermes"
         if self.backend in ("auto", "hermes"):
-            llm = getattr(ctx, "llm", None) if ctx is not None else None
+            llm = self._resolve_llm(ctx)
             if llm is not None and (getattr(llm, "complete_structured", None) or getattr(llm, "complete", None)):
                 self.llm = llm
                 self.mode = "hermes"
                 return
             if self.backend == "hermes" or not allow_mock:
-                raise RuntimeError("Hermes LLM ctx unavailable. Use backend='mock' explicitly or backend='auto' with allow_mock=true for tests/smoke.")
+                ctx_type = type(ctx).__name__ if ctx is not None else "None"
+                available = sorted(name for name in ("llm", "complete_structured", "complete", "acomplete_structured", "acomplete") if ctx is not None and getattr(ctx, name, None))
+                raise RuntimeError(
+                    "Hermes LLM ctx unavailable. Expected plugin runtime ctx.llm with complete_structured/complete "
+                    f"or a ctx exposing those methods directly; got ctx_type={ctx_type}, available_llm_attrs={available}. "
+                    "Use backend='mock' explicitly or backend='auto' with allow_mock=true for tests/smoke."
+                )
         self.llm = None
         self.mode = "mock"
+
+    def _resolve_llm(self, ctx: Any) -> Any:
+        if ctx is None:
+            return None
+        llm = getattr(ctx, "llm", None)
+        if llm is not None:
+            return llm
+        if getattr(ctx, "complete_structured", None) or getattr(ctx, "complete", None):
+            return ctx
+        return None
+
+    def _structured_result_to_dict(self, res: Any) -> dict[str, Any] | None:
+        if isinstance(res, dict):
+            return res
+        parsed = getattr(res, "parsed", None)
+        if isinstance(parsed, dict):
+            return parsed
+        if hasattr(res, "model_dump"):
+            dumped = res.model_dump()
+            if isinstance(dumped, dict):
+                parsed = dumped.get("parsed")
+                if isinstance(parsed, dict):
+                    return parsed
+                return dumped
+        return None
+
+    def _complete_structured_json(self, prompt: str, schema_hint: dict[str, Any]) -> dict[str, Any] | None:
+        complete_structured = getattr(self.llm, "complete_structured", None)
+        if not complete_structured:
+            return None
+        try:
+            res = complete_structured(prompt=prompt, schema=schema_hint)
+        except TypeError as old_signature_error:
+            try:
+                res = complete_structured(
+                    instructions="Return a single strict JSON object for the requested SkillOpt optimizer step.",
+                    input=[{"type": "text", "text": prompt}],
+                    json_schema=schema_hint,
+                    json_mode=True,
+                    schema_name=f"skillopt_{schema_hint.get('kind') or 'optimizer'}",
+                    purpose="hermes-skillopt.optimizer",
+                )
+            except TypeError:
+                raise old_signature_error
+        return self._structured_result_to_dict(res)
+
+    def _complete_json(self, prompt: str) -> Any:
+        complete = getattr(self.llm, "complete", None)
+        if not complete:
+            raise RuntimeError("Hermes LLM ctx has no complete or compatible complete_structured method")
+        messages = [{"role": "user", "content": prompt + "\nReturn strict JSON only."}]
+        try:
+            return complete(messages, purpose="hermes-skillopt.optimizer")
+        except TypeError:
+            return complete(prompt + "\nReturn strict JSON only.")
 
     def json(self, prompt: str, schema_hint: dict[str, Any], repair_path: Path | None = None) -> dict[str, Any]:
         prompt = redact_secrets(prompt)
         if self.mode == "mock":
             return self._mock(prompt, schema_hint)
-        if getattr(self.llm, "complete_structured", None):
-            res = self.llm.complete_structured(prompt=prompt, schema=schema_hint)
-            if isinstance(res, dict):
-                return res
-            if hasattr(res, "model_dump"):
-                return res.model_dump()
-        raw = self.llm.complete(prompt + "\nReturn strict JSON only.")
+        data = self._complete_structured_json(prompt, schema_hint)
+        if isinstance(data, dict):
+            return data
+        raw = self._complete_json(prompt)
         text = raw if isinstance(raw, str) else getattr(raw, "text", str(raw))
         try:
             return json.loads(text)
