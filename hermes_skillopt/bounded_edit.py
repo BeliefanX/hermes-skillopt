@@ -17,6 +17,10 @@ from typing import Any
 MAX_EDIT_CHARS = 12_000
 MAX_DIFF_CHARS = 24_000
 PROTECTED_HEADINGS = {"system", "developer", "safety", "profile isolation"}
+PROTECTED_REGION_START = "<!-- skillopt:protected:start -->"
+PROTECTED_REGION_END = "<!-- skillopt:protected:end -->"
+ALLOWED_REGION_START = "<!-- skillopt:allowed:start -->"
+ALLOWED_REGION_END = "<!-- skillopt:allowed:end -->"
 ALLOWED_OPS = {"append", "replace", "delete", "insert_after"}
 
 
@@ -39,12 +43,42 @@ def frontmatter_split(text: str) -> tuple[str, str]:
     return "", text
 
 
-def _protected_section_span(body: str, anchor: str) -> tuple[int, int] | None:
+def _marker_spans(body: str, start_marker: str, end_marker: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        s = body.find(start_marker, start)
+        if s < 0:
+            return spans
+        e = body.find(end_marker, s + len(start_marker))
+        if e < 0:
+            spans.append((s, len(body)))
+            return spans
+        spans.append((s, e + len(end_marker)))
+        start = e + len(end_marker)
+
+
+def _overlaps(span: tuple[int, int], other: tuple[int, int]) -> bool:
+    return max(span[0], other[0]) < min(span[1], other[1])
+
+
+def _target_span(body: str, anchor: str) -> tuple[int, int] | None:
     if not anchor:
         return None
     pos = body.find(anchor)
     if pos < 0:
         return None
+    return pos, pos + len(anchor)
+
+
+def _protected_section_span(body: str, anchor: str) -> tuple[int, int] | None:
+    target = _target_span(body, anchor)
+    if target is None:
+        return None
+    for span in _marker_spans(body, PROTECTED_REGION_START, PROTECTED_REGION_END):
+        if _overlaps(target, span):
+            return span
+    pos = target[0]
     heading_start = body.rfind("\n## ", 0, pos)
     if heading_start < 0:
         heading_start = 0 if body.startswith("## ") else -1
@@ -58,8 +92,28 @@ def _protected_section_span(body: str, anchor: str) -> tuple[int, int] | None:
     return heading_start, len(body) if next_heading < 0 else next_heading
 
 
+def _allowed_region_violation(body: str, anchor: str) -> bool:
+    """When explicit allowed-region markers exist, bounded edits must target one."""
+
+    spans = _marker_spans(body, ALLOWED_REGION_START, ALLOWED_REGION_END)
+    if not spans:
+        return False
+    target = _target_span(body, anchor)
+    if target is None:
+        return True
+    return not any(_overlaps(target, span) for span in spans)
+
+
 def _edit_payload_chars(edit: dict[str, Any]) -> int:
     return sum(len(str(edit.get(k, ""))) for k in ("text", "old", "new", "anchor"))
+
+
+def _protected_heading_in_text(text: str) -> str | None:
+    for match in re.finditer(r"^##\s+(.+?)\s*$", text, flags=re.M):
+        heading = match.group(1).strip().lower()
+        if heading in PROTECTED_HEADINGS:
+            return heading
+    return None
 
 
 def _apply_one(body: str, edit: dict[str, Any]) -> str:
@@ -122,9 +176,23 @@ def validate_bounded_edits(
             rejected.append({"index": idx, "reason": "max_chars", "edit": {"op": op}})
             continue
         if op == "append":
-            if not str(edit.get("text") or "").strip():
+            text = str(edit.get("text") or "")
+            if not text.strip():
                 errors.append(f"edit {idx} append text is empty")
                 rejected.append({"index": idx, "reason": "empty_text", "edit": edit})
+                continue
+            protected_heading = _protected_heading_in_text(text)
+            if protected_heading is not None or PROTECTED_REGION_START in text or PROTECTED_REGION_END in text:
+                errors.append(f"edit {idx} append text targets protected heading/region")
+                rejected.append({"index": idx, "reason": "protected_append", "protected_heading": protected_heading, "edit": edit})
+                continue
+            if ALLOWED_REGION_START in text or ALLOWED_REGION_END in text:
+                errors.append(f"edit {idx} append text attempts to create/move allowed-region markers")
+                rejected.append({"index": idx, "reason": "allowed_region_marker_mutation", "edit": edit})
+                continue
+            if _allowed_region_violation(body, ""):
+                errors.append(f"edit {idx} targets outside allowed region")
+                rejected.append({"index": idx, "reason": "outside_allowed_region", "edit": edit})
                 continue
         elif op == "replace":
             old = str(edit.get("old") or "")
@@ -135,6 +203,10 @@ def validate_bounded_edits(
             if body.count(old) != 1:
                 errors.append(f"edit {idx} replace anchor must be unique")
                 rejected.append({"index": idx, "reason": "non_unique_anchor", "edit": {"op": op, "old": old[:200]}})
+                continue
+            if _allowed_region_violation(body, old):
+                errors.append(f"edit {idx} targets outside allowed region")
+                rejected.append({"index": idx, "reason": "outside_allowed_region", "edit": edit})
                 continue
             if _protected_section_span(body, old):
                 errors.append(f"edit {idx} targets protected section")
@@ -150,6 +222,10 @@ def validate_bounded_edits(
                 errors.append(f"edit {idx} delete anchor must be unique")
                 rejected.append({"index": idx, "reason": "non_unique_anchor", "edit": {"op": op, "old": old[:200]}})
                 continue
+            if _allowed_region_violation(body, old):
+                errors.append(f"edit {idx} targets outside allowed region")
+                rejected.append({"index": idx, "reason": "outside_allowed_region", "edit": edit})
+                continue
             if _protected_section_span(body, old):
                 errors.append(f"edit {idx} targets protected section")
                 rejected.append({"index": idx, "reason": "protected_section", "edit": edit})
@@ -163,6 +239,10 @@ def validate_bounded_edits(
             if body.count(anchor) != 1:
                 errors.append(f"edit {idx} insert_after anchor must be unique")
                 rejected.append({"index": idx, "reason": "non_unique_anchor", "edit": {"op": op, "anchor": anchor[:200]}})
+                continue
+            if _allowed_region_violation(body, anchor):
+                errors.append(f"edit {idx} targets outside allowed region")
+                rejected.append({"index": idx, "reason": "outside_allowed_region", "edit": edit})
                 continue
             if _protected_section_span(body, anchor):
                 errors.append(f"edit {idx} targets protected section")

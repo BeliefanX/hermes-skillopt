@@ -127,11 +127,12 @@ class SixStageSkillOptTrainer:
 
             current_val = self.executor.evaluate(current, tasks["val"], label=f"current_val_{it}")
             production_current_val = self.executor.evaluate(current, production_val_tasks, label=f"production_current_val_{it}") if production_val_tasks else None
-            candidates = [self.optimizer.propose_candidate(reflection, current, self.run_dir, it, ci, rejected_context=rejected_context) for ci in range(1, per_round_candidates + 1)]
-
             ranked: list[dict[str, Any]] = []
             candidate_evals: list[tuple[CandidateSkill, dict[str, Any], dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = []
-            for ci, cand in enumerate(candidates, 1):
+            round_rejected_buffer: list[dict[str, Any]] = []
+            for ci in range(1, per_round_candidates + 1):
+                proposal_context = summarize_rejected_edits(rejected_history + rejected + round_rejected_buffer)
+                cand = self.optimizer.propose_candidate(reflection, current, self.run_dir, it, ci, rejected_context=proposal_context)
                 candidate_val = self.executor.evaluate(cand.text, tasks["val"], label=f"candidate_val_{it}_{ci}")
                 judge = self._judge(current_val, candidate_val, it, ci)
                 gate = self.gatekeeper.decide(it, current_val, candidate_val, current, cand.text, judge=judge).as_dict()
@@ -157,6 +158,9 @@ class SixStageSkillOptTrainer:
                     "current_score": gate.get("current_score"),
                     "candidate_score": gate.get("candidate_score"),
                     "delta": round(float(gate.get("candidate_score", 0.0)) - float(gate.get("current_score", 0.0)), 6),
+                    "metric_policy": gate.get("metric_policy"),
+                    "metric_summary": gate.get("metric_summary"),
+                    "rejection_reasons": list(gate.get("rejection_reasons") or []) + (["bounded edit validation failed"] if invalid_edit else []),
                     "production_gate": production_gate,
                     "production_delta": production_delta,
                     "production_accepted": bool(production_gate and production_gate.get("accepted")) and not invalid_edit,
@@ -165,6 +169,8 @@ class SixStageSkillOptTrainer:
                 }
                 ranked.append(row)
                 candidate_evals.append((cand, candidate_val, gate, production_candidate_val, production_gate))
+                if invalid_edit or not bool(gate.get("accepted")) or (production_gate is not None and not bool(production_gate.get("accepted"))):
+                    round_rejected_buffer.append({"iteration": it, "candidate_id": cand.candidate_id, "gate": gate, "production_gate": production_gate, "edits": cand.edits, "reasoning": cand.reasoning, "validation_errors": cand.validation.get("errors", []), "rejected_edits": cand.validation.get("rejected_edits", []), "buffer_scope": "same_run_step_reuse"})
                 write_text(self.run_dir / f"candidate_{it}_{ci}_SKILL.md", cand.text)
                 write_text(self.run_dir / f"candidate_{it}_{ci}_edits.json", json.dumps({"iteration": it, "candidate_id": cand.candidate_id, "edits": cand.edits, "reasoning": cand.reasoning, "bounded": True, "validation": cand.validation, "gate": gate, "production_gate": production_gate}, ensure_ascii=False, indent=2) + "\n")
 
@@ -172,10 +178,20 @@ class SixStageSkillOptTrainer:
             production_accepted_rows = [r for r in accepted_rows if r.get("production_accepted")]
             select_pool = production_accepted_rows or accepted_rows or ranked
             selected_row = max(select_pool, key=lambda r: (float(r.get("production_delta") or 0.0), float(r["candidate_score"] or 0.0), float(r["delta"] or 0.0), -int(r["candidate_index"])))
+            for rank, row in enumerate(sorted(ranked, key=lambda r: (float(r.get("production_delta") or 0.0), float(r.get("candidate_score") or 0.0), float(r.get("delta") or 0.0), -int(r.get("candidate_index") or 0)), reverse=True), 1):
+                row["rank"] = rank
+                row["selected"] = row["candidate_id"] == selected_row["candidate_id"]
             selected_idx = int(selected_row["candidate_index"]) - 1
             candidate, candidate_val, gate, production_candidate_val, production_gate = candidate_evals[selected_idx]
 
-            edit_plan = {"iteration": it, "candidate_id": candidate.candidate_id, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True, "validation": candidate.validation, "ranked_candidates": ranked, "selection_rule": "prefer candidates with both generic validation strict improvement and production validation strict improvement when production gates exist; non-selected candidates are rejected/buffered"}
+            selection_rationale = (
+                "selected production-accepted candidate with strongest production/generic deterministic deltas"
+                if production_accepted_rows and selected_row.get("production_accepted")
+                else "selected generic validation-accepted candidate with strongest deterministic weighted score delta"
+                if accepted_rows and selected_row.get("accepted")
+                else "no candidate accepted; selected highest-ranked rejected candidate only for artifact comparison"
+            )
+            edit_plan = {"iteration": it, "candidate_id": candidate.candidate_id, "edits": candidate.edits, "reasoning": candidate.reasoning, "bounded": True, "validation": candidate.validation, "ranked_candidates": ranked, "selected_candidate_rationale": selection_rationale, "selection_rule": "prefer candidates with both generic validation strict improvement and production validation strict improvement when production gates exist; non-selected candidates are rejected/buffered"}
             self.stages.select(it, edit_plan)
             self.stage_records.append(StageRecord("select", it, {"selected_candidate_id": candidate.candidate_id, "selected_edits": len(candidate.edits), "validation": candidate.validation, "ranked_candidates": ranked}))
             write_text(self.run_dir / f"candidate_{it}_SKILL.md", candidate.text)
@@ -212,7 +228,7 @@ class SixStageSkillOptTrainer:
             all_gates.append(gate | {"status": status_value})
             if production_gate is not None:
                 all_production_gates.append(production_gate | {"status": status_value})
-            candidate_summary.append({"iteration": it, "selected_candidate_id": candidate.candidate_id, "ranked_candidates": ranked})
+            candidate_summary.append({"iteration": it, "selected_candidate_id": candidate.candidate_id, "selected_candidate_rationale": selection_rationale, "ranked_candidates": ranked})
             write_text(self.artifacts.current, current)
             _jsonl_write(self.run_dir / "stage_records.jsonl", [r.__dict__ for r in self.stage_records])
 

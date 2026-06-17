@@ -7,6 +7,33 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class GateMetricPolicy:
+    """Deterministic hard/soft/mixed metric gate policy.
+
+    default ``soft`` preserves Phase0 behavior: candidate weighted validation
+    score must strictly improve and the edit must not be a no-op.
+    """
+
+    mode: str = "soft"  # soft|hard|mixed|strict (strict aliases soft)
+    min_delta: float = 0.0
+    hard_regression_allowed: bool = False
+
+    def normalized_mode(self) -> str:
+        mode = (self.mode or "soft").lower()
+        return "soft" if mode == "strict" else mode
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.normalized_mode(),
+            "requested_mode": self.mode,
+            "min_delta": float(self.min_delta),
+            "hard_regression_allowed": bool(self.hard_regression_allowed),
+            "deterministic": True,
+            "llm_override_allowed": False,
+        }
+
+
+@dataclass(frozen=True)
 class GateDecision:
     iteration: int
     current_score: float
@@ -16,8 +43,13 @@ class GateDecision:
     current_eval: dict[str, Any]
     candidate_eval: dict[str, Any]
     judge: dict[str, Any] | None = None
+    policy: GateMetricPolicy = GateMetricPolicy()
+    metric_summary: dict[str, Any] | None = None
+    rejection_reasons: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
+        policy = self.policy.as_dict()
+        mode = policy["mode"]
         return {
             "iteration": self.iteration,
             "current_score": self.current_score,
@@ -27,12 +59,25 @@ class GateDecision:
             "current_eval": self.current_eval,
             "candidate_eval": self.candidate_eval,
             "judge": self.judge,
-            "acceptance_rule": "candidate_score > current_score from frozen-target held-out validation",
+            "metric_policy": policy,
+            "metric_summary": self.metric_summary or {},
+            "rejection_reasons": self.rejection_reasons or [],
+            "acceptance_rule": f"deterministic {mode} metric gate from frozen-target held-out validation; LLM judge is explanation-only",
         }
 
 
 class ValidationGate:
-    """The only inner acceptance gate: validation candidate_score > current_score."""
+    """The only inner acceptance gate.
+
+    Supports soft, hard, and mixed metric policies while preserving default
+    strict weighted score improvement behavior. LLM judge output is recorded as
+    auxiliary evidence and cannot override deterministic metric decisions.
+    """
+
+    def __init__(self, policy: GateMetricPolicy | None = None, *, gate_mode: str | None = None, min_delta: float = 0.0, hard_regression_allowed: bool = False):
+        if policy is None:
+            policy = GateMetricPolicy(mode=gate_mode or "soft", min_delta=min_delta, hard_regression_allowed=hard_regression_allowed)
+        self.policy = policy
 
     def decide(
         self,
@@ -45,11 +90,40 @@ class ValidationGate:
     ) -> GateDecision:
         current_score = float(current_eval.get("score", 0.0))
         candidate_score = float(candidate_eval.get("score", 0.0))
-        accepted = bool(candidate_text != current_text and candidate_score > current_score)
+        metrics = self._metric_summary(current_eval, candidate_eval)
+        mode = self.policy.normalized_mode()
+        min_delta = float(self.policy.min_delta)
+        no_op = candidate_text == current_text
+        rejection_reasons: list[str] = []
+        if no_op:
+            rejection_reasons.append("candidate edit was a no-op")
+
+        soft_ok = metrics["soft_delta"] > min_delta
+        hard_improved = metrics["hard_delta"] > 0.0
+        hard_nonregress = metrics["hard_delta"] >= 0.0 or bool(self.policy.hard_regression_allowed)
+
+        if mode == "soft":
+            metric_ok = soft_ok
+            if not soft_ok:
+                rejection_reasons.append("soft weighted score did not strictly improve")
+        elif mode == "hard":
+            metric_ok = hard_improved
+            if not hard_improved:
+                rejection_reasons.append("hard pass-rate metric did not strictly improve")
+        elif mode == "mixed":
+            metric_ok = soft_ok and hard_nonregress
+            if not soft_ok:
+                rejection_reasons.append("mixed gate soft weighted score did not strictly improve")
+            if not hard_nonregress:
+                rejection_reasons.append("mixed gate hard pass-rate regressed")
+        else:
+            raise ValueError(f"unsupported gate mode: {self.policy.mode}")
+
+        accepted = bool(not no_op and metric_ok)
         rationale = (
-            "accepted: candidate validation score strictly improved"
+            f"accepted: candidate satisfied deterministic {mode} validation gate"
             if accepted
-            else "rejected: validation score did not strictly improve or edit was a no-op"
+            else "rejected: " + "; ".join(rejection_reasons or ["validation metrics did not improve"])
         )
         if judge:
             rationale += "; LLM judge recorded as auxiliary explanation only"
@@ -62,4 +136,38 @@ class ValidationGate:
             current_eval=current_eval,
             candidate_eval=candidate_eval,
             judge=judge,
+            policy=self.policy,
+            metric_summary=metrics,
+            rejection_reasons=rejection_reasons,
         )
+
+    def _metric_summary(self, current_eval: dict[str, Any], candidate_eval: dict[str, Any]) -> dict[str, Any]:
+        current_soft = float(current_eval.get("score", 0.0))
+        candidate_soft = float(candidate_eval.get("score", 0.0))
+        current_hard = self._weighted_pass_rate(current_eval)
+        candidate_hard = self._weighted_pass_rate(candidate_eval)
+        return {
+            "current": {"soft_score": current_soft, "hard_pass_rate": current_hard},
+            "candidate": {"soft_score": candidate_soft, "hard_pass_rate": candidate_hard},
+            "soft_delta": round(candidate_soft - current_soft, 6),
+            "hard_delta": round(candidate_hard - current_hard, 6),
+            "mixed": {
+                "soft_improved": candidate_soft > current_soft + float(self.policy.min_delta),
+                "hard_nonregression": candidate_hard >= current_hard or bool(self.policy.hard_regression_allowed),
+            },
+        }
+
+    def _weighted_pass_rate(self, eval_result: dict[str, Any]) -> float:
+        rows = [r for r in (eval_result.get("results") or []) if isinstance(r, dict)]
+        if not rows:
+            return 0.0
+        weights = []
+        for row in rows:
+            raw_meta = row.get("metadata")
+            meta = raw_meta if isinstance(raw_meta, dict) else {}
+            weights.append(max(0.0, float(meta.get("weight", 1.0) or 1.0)))
+        total = sum(weights)
+        if total <= 0:
+            return 0.0
+        passed = sum(w for w, row in zip(weights, rows) if bool(row.get("passed")))
+        return round(passed / total, 6)

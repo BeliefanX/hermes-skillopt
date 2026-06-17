@@ -173,6 +173,74 @@ def test_webui_review_rejects_symlink_artifact_escape(tmp_path):
     assert "outside secret" not in "\n".join([summary, report, diff, gate, candidate, rejected])
 
 
+def test_webui_artifact_path_guard_uses_allowlist(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (run_dir / "secret.txt").write_text("do not expose", encoding="utf-8")
+    assert webui._read_artifact_limited(run_dir, "manifest.json") == "{}"
+    assert webui._safe_artifact_path(run_dir, "secret.txt") is None
+    assert webui._read_artifact_limited(run_dir, "secret.txt") == ""
+
+
+def test_webui_report_summary_observability_fields(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "checkpoint.json").write_text('{"status":"complete","completed_stages":["rollout","reflect","evaluate"]}', encoding="utf-8")
+    (run_dir / "rejected_edits.jsonl").write_text('{"iteration":1,"candidate":2,"reason":"regression","task_id":"t1","score_delta":-0.1,"edit":"remove guard"}\n', encoding="utf-8")
+    manifest = {
+        "run_id": "rid",
+        "status": "rejected",
+        "skill_name": "demo",
+        "adoptable": False,
+        "production_gate_eligible": False,
+        "test_gate_eligible": True,
+        "production_eligibility_reasons": ["missing accepted explicit curated production validation gate"],
+        "split_scores": {"validation": {"current": 0.5, "candidate": 0.6}, "heldout_test": {"best": 0.7}},
+        "candidate_comparison": [{"rank": 1, "accepted": False}],
+        "regression_cases": ["t1"],
+        "provenance_fingerprint": {"fingerprint_sha256": "abc"},
+        "production_eval_policy": {"policy_version": "production-eval-schema-v1"},
+        "artifact_sha256": {"manifest": "sha"},
+        "optimizer_backend": "mock",
+        "target_executor": "hermes_replay_runner_mvp",
+        "gate_policy": {"mode": "strict"},
+    }
+    data = webui.report_summary_data(manifest, run_dir)
+    md = webui.report_summary_markdown(data)
+    assert data["timeline"]["completed_stages"] == ["rollout", "reflect", "evaluate"]
+    assert data["eligibility"]["adoptable"] is False
+    assert data["provenance_security"]["production_eval_policy"] == "production-eval-schema-v1"
+    assert data["rejected_edits"]["preview"][0]["reason"] == "regression"
+    assert "split_scores" in md
+    assert "candidate_comparison_count: 1" in md
+    assert "missing accepted explicit curated production validation gate" in md
+
+
+def test_webui_review_surfaces_observability_json_and_rejected_preview(tmp_path):
+    make_skill(tmp_path, "demo")
+    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    rid = run["run_id"]
+    run_dir = tmp_path / "skillopt" / "staging" / rid
+    manifest = core.load_manifest(run_dir)
+    manifest.update({
+        "split_scores": {"validation": {"current": 0.4, "candidate": 0.5}},
+        "candidate_comparison": [{"rank": 1}],
+        "regression_cases": ["case-a"],
+        "production_eligibility_reasons": ["held-out test split is missing, non-production, or below threshold"],
+    })
+    core.save_manifest(run_dir, manifest)
+    (run_dir / "checkpoint.json").write_text('{"status":"complete","completed_stages":["rollout","evaluate"]}', encoding="utf-8")
+    (run_dir / "rejected_edits.jsonl").write_text('{"reason":"bad edit","edit":"leak SECRET_TOKEN=abc"}\n', encoding="utf-8")
+    summary, report, diff, gate, candidate, rejected = webui.review_payload(rid, str(tmp_path))
+    assert "Observability report summary" in summary
+    assert "completed_stages: rollout, evaluate" in summary
+    assert "Exportable observability JSON" in gate
+    assert "candidate_comparison" in gate
+    assert "Rejected edit explorer preview" in rejected
+    assert "abc" not in rejected
+
+
 @pytest.mark.parametrize("bad_run_id", ["../evil", "nested/evil", "/tmp/evil"])
 def test_webui_review_invalid_run_id_is_reported_not_resolved(tmp_path, bad_run_id):
     summary, report, diff, gate, candidate, rejected = webui.review_payload(bad_run_id, str(tmp_path))

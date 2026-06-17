@@ -61,7 +61,10 @@ class SkillOptArtifacts:
     current_validation_results: Path
     candidate_validation_results: Path
     test_results: Path
+    slow_meta: Path
     best: Path
+    target_binding: Path
+    provenance_binding: Path
 
     @classmethod
     def for_run(cls, run_id: str, run_dir: Path) -> "SkillOptArtifacts":
@@ -86,7 +89,10 @@ class SkillOptArtifacts:
             current_validation_results=run_dir / "current_validation_results.json",
             candidate_validation_results=run_dir / "candidate_validation_results.json",
             test_results=run_dir / "test_results.json",
+            slow_meta=run_dir / "slow_meta.json",
             best=run_dir / "best_skill.md",
+            target_binding=run_dir / "target_binding.json",
+            provenance_binding=run_dir / "provenance_binding.json",
         )
 
     def manifest_files(self, include_best: bool) -> dict[str, str]:
@@ -108,6 +114,9 @@ class SkillOptArtifacts:
             "current_validation_results": self.current_validation_results.name,
             "candidate_validation_results": self.candidate_validation_results.name,
             "test_results": self.test_results.name,
+            "slow_meta": self.slow_meta.name,
+            "target_binding": self.target_binding.name,
+            "provenance_binding": self.provenance_binding.name,
         }
         if include_best:
             files["best"] = self.best.name

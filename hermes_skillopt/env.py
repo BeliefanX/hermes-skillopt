@@ -8,11 +8,12 @@ session evidence. Curated replay tasks are the preferred held-out benchmark
 because they are frozen and reused for current/candidate comparisons.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
 from hermes_skillopt.state import SkillState
 
@@ -47,25 +48,103 @@ class EvalResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SplitPolicy:
+    """Hermes-native split policy metadata carried with env artifacts."""
+
+    name: str = "hermes-skillopt-train-val-test-v1"
+    train_ratio: float = 0.60
+    val_ratio: float = 0.20
+    test_ratio: float = 0.20
+    deterministic_key: str = "sha256(id+evidence)"
+    production_rule: str = "only explicit curated val/test scorecards may gate production adoption"
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
+@dataclass(frozen=True)
+class ProductionEligibility:
+    """Decision plus reasons for whether a task may affect production adoption."""
+
+    eligible: bool
+    reasons: tuple[str, ...]
+    policy_version: str = "production-eval-schema-v1"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"eligible": self.eligible, "reasons": self.reasons, "policy_version": self.policy_version}
+
+
+@dataclass(frozen=True)
+class BenchmarkDefinition:
+    """Small deterministic benchmark seed bundled with the adapter."""
+
+    id: str
+    name: str
+    description: str
+    tasks: tuple[EvalTask, ...]
+    split_policy: SplitPolicy = field(default_factory=SplitPolicy)
+    production_eligible: bool = False
+    origin: str = "builtin-benchmark"
+
+
+class EnvAdapter(Protocol):
+    """Hermes EnvAdapter contract for loaders, rollout metadata, scoring and policy."""
+
+    split_policy: SplitPolicy
+
+    def load_tasks(self) -> tuple[dict[str, list[EvalTask]], dict[str, Any]]: ...
+
+    def rollout_metadata(self) -> dict[str, Any]: ...
+
+    def scorer_metadata(self) -> dict[str, Any]: ...
+
+    def production_eligibility(self, task: EvalTask) -> ProductionEligibility: ...
+
+
+@dataclass(frozen=True)
+class SessionPipelineRecord:
+    """Foundation record for harvest -> mine -> replay -> consolidate -> stage."""
+
+    stage: str
+    task_origin: str
+    count: int
+    production_eligible: bool
+    notes: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
+NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark"}
+
+
+def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
+    """Return production adoption eligibility and human-readable reasons."""
+    reasons: list[str] = []
+    origin = str(task.metadata.get("task_origin") or task.source)
+    if task.split not in {"val", "test"}:
+        reasons.append("split is not val/test")
+    if task.split == "val" and not str(task.source).endswith((".json", ".jsonl")):
+        reasons.append("validation task is not from an explicit curated eval file")
+    if any(part in NON_PRODUCTION_ORIGINS for part in {task.source, origin}):
+        reasons.append("task origin is non-production")
+    if origin in {"dream", "synthetic", "session-mined", "session_mined"}:
+        reasons.append("dream/synthetic/session-mined tasks are review-only")
+    if not bool(task.metadata.get("scorecard_explicit")):
+        reasons.append("missing explicit deterministic scorecard")
+    if not bool(task.metadata.get("production_gate_eligible")):
+        reasons.append("production_gate_eligible flag is false")
+    if not (task.expected_terms or task.assertions or task.expected_behavior or task.failure_terms or task.metadata.get("ground_truth_score") is not None):
+        reasons.append("missing objective expected behavior/assertions")
+    eligible = not reasons
+    return ProductionEligibility(eligible=eligible, reasons=tuple(reasons or ("eligible explicit curated production scorecard",)))
 
 
 def is_production_gate_task(task: EvalTask) -> bool:
     """Return True only for explicit curated validation tasks allowed to gate adoption."""
-    return (
-        task.split == "val"
-        and task.source not in {"synthetic", "curated-fallback", "session-mined"}
-        and str(task.source).endswith((".json", ".jsonl"))
-        and bool(task.metadata.get("scorecard_explicit"))
-        and bool(task.metadata.get("production_gate_eligible"))
-        and (
-            bool(task.expected_terms)
-            or bool(task.assertions)
-            or bool(task.expected_behavior)
-            or bool(task.failure_terms)
-            or task.metadata.get("ground_truth_score") is not None
-        )
-    )
+    return task.split == "val" and production_eligibility_for_task(task).eligible
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -222,6 +301,7 @@ def _task_from_record(record: dict[str, Any], source: str, index: int) -> EvalTa
             "scorecard_explicit": explicit_scorecard,
             "production_gate_eligible": bool(production_flag) and explicit_scorecard,
             "production_eval_schema_policy": "production-eval-schema-v1",
+            "task_origin": "curated",
         },
     )
 
@@ -244,6 +324,109 @@ def load_eval_tasks(path: Path) -> list[EvalTask]:
         else:
             raise ValueError("eval JSON must be a list or {'tasks': [...]} object")
     return [_task_from_record(r, str(path), i) for i, r in enumerate(records, 1)]
+
+
+def _builtin_task(benchmark_id: str, split: str, prompt: str, expected_terms: tuple[str, ...], *, suffix: str | None = None) -> EvalTask:
+    task_id = f"{benchmark_id}-{suffix or split}"
+    return EvalTask(
+        id=task_id,
+        prompt=prompt,
+        source="builtin-benchmark",
+        expected_behavior="Deterministic review-only seed used to smoke train/val/test reporting.",
+        expected_terms=expected_terms,
+        failure_terms=("auto adopt without review", "fabricate", "skip validation"),
+        split=split,
+        success_criteria=expected_terms,
+        metadata={
+            "benchmark_id": benchmark_id,
+            "task_origin": "builtin-benchmark",
+            "scorecard_explicit": True,
+            "production_gate_eligible": False,
+            "production_eval_schema_policy": "production-eval-schema-v1",
+        },
+    )
+
+
+def built_in_benchmarks() -> dict[str, BenchmarkDefinition]:
+    """Return explicit bundled benchmark seeds; all are non-production by default."""
+    definitions = [
+        BenchmarkDefinition(
+            id="delegation-handoff",
+            name="Delegation handoff",
+            description="Checks that a skill summarizes scope, artifacts, verification, and next-owner handoff.",
+            tasks=(
+                _builtin_task("delegation-handoff", "train", "Plan a bounded worker handoff for a coding phase.", ("scope", "verify", "artifact")),
+                _builtin_task("delegation-handoff", "val", "Report a delegated result with blockers and evidence.", ("evidence", "blocker", "verify")),
+                _builtin_task("delegation-handoff", "test", "Prepare parent-facing concise handoff summary.", ("summary", "test", "staged")),
+            ),
+        ),
+        BenchmarkDefinition(
+            id="tool-use-replay",
+            name="Tool-use replay",
+            description="Checks safe tool execution, real output grounding, and error handling.",
+            tasks=(
+                _builtin_task("tool-use-replay", "train", "Use tools to inspect files before editing.", ("tool", "inspect", "verify")),
+                _builtin_task("tool-use-replay", "val", "Handle a failed command without inventing output.", ("error", "blocker", "verify")),
+                _builtin_task("tool-use-replay", "test", "Replay a tool trace and cite actual results.", ("tool", "evidence", "test")),
+            ),
+        ),
+        BenchmarkDefinition(
+            id="skill-authoring-review",
+            name="Skill authoring/review",
+            description="Checks safe skill edits, review-only staging, and rollback awareness.",
+            tasks=(
+                _builtin_task("skill-authoring-review", "train", "Draft a skill update with bounded edits.", ("bounded", "edit", "skill")),
+                _builtin_task("skill-authoring-review", "val", "Review a skill candidate before adoption.", ("review", "validation", "gate")),
+                _builtin_task("skill-authoring-review", "test", "Explain rollback and staged-only adoption guards.", ("rollback", "guard", "staged")),
+            ),
+        ),
+    ]
+    return {d.id: d for d in definitions}
+
+
+def benchmark_task_splits(benchmarks: Iterable[BenchmarkDefinition] | None = None) -> dict[str, list[EvalTask]]:
+    tasks: dict[str, list[EvalTask]] = {"train": [], "val": [], "test": []}
+    for benchmark in benchmarks or built_in_benchmarks().values():
+        for task in benchmark.tasks:
+            tasks[_SPLIT_ALIASES.get(task.split, task.split)].append(task)
+    return tasks
+
+
+def session_sleep_pipeline_records(snippets: list[dict[str, Any]], items: list[dict[str, Any]], tasks: dict[str, list[EvalTask]]) -> list[dict[str, Any]]:
+    """Foundation lineage for harvest -> mine -> replay -> consolidate -> stage."""
+    session_task_count = sum(1 for split_tasks in tasks.values() for task in split_tasks if task.metadata.get("task_origin") == "session-mined")
+    records = [
+        SessionPipelineRecord("harvest", "real-session", len(snippets), False, "redacted Hermes session fragments").as_dict(),
+        SessionPipelineRecord("mine", "session-mined", len(items), False, "mined items are review/train evidence only").as_dict(),
+        SessionPipelineRecord("replay", "session-mined", session_task_count, False, "session-mined replay tasks are excluded from production gates").as_dict(),
+        SessionPipelineRecord("consolidate", "mixed-review", sum(len(v) for v in tasks.values()), False, "combine curated, builtin, fallback, and mined tasks by split").as_dict(),
+        SessionPipelineRecord("stage", "staged-artifacts", sum(len(v) for v in tasks.values()), False, "stage artifacts only; adoption requires curated production gates").as_dict(),
+    ]
+    return records
+
+
+class HermesEnvAdapter:
+    """Concrete EnvAdapter wrapping the existing HermesSkillEnv task builder."""
+
+    split_policy = SplitPolicy()
+
+    def __init__(self, env: "HermesSkillEnv"):
+        self.env = env
+        self._last_evidence: dict[str, Any] = {}
+
+    def load_tasks(self) -> tuple[dict[str, list[EvalTask]], dict[str, Any]]:
+        tasks, evidence = self.env.build_tasks()
+        self._last_evidence = evidence
+        return tasks, evidence
+
+    def rollout_metadata(self) -> dict[str, Any]:
+        return {"adapter": "HermesEnvAdapter", "split_policy": self.split_policy.as_dict(), "pipeline": self._last_evidence.get("session_sleep_pipeline", [])}
+
+    def scorer_metadata(self) -> dict[str, Any]:
+        return {"default_judge": "keyword_scorecard", "llm_judge_can_accept": False, "scoring": "deterministic target executor results only"}
+
+    def production_eligibility(self, task: EvalTask) -> ProductionEligibility:
+        return production_eligibility_for_task(task)
 
 
 class HermesSkillEnv:
@@ -284,15 +467,35 @@ class HermesSkillEnv:
         self._ensure_minimum_tasks(tasks)
         curated_val_tasks = [t for t in tasks["val"] if is_production_gate_task(t)]
         production_gate_eligible = bool(curated_val_tasks)
+        benchmark_catalog = built_in_benchmarks()
+        benchmark_catalog_payload = {
+            bid: {
+                "name": b.name,
+                "description": b.description,
+                "splits": {s: sum(1 for t in b.tasks if t.split == s) for s in ("train", "val", "test")},
+                "production_eligible": b.production_eligible,
+                "origin": b.origin,
+            }
+            for bid, b in benchmark_catalog.items()
+        }
+        session_pipeline = session_sleep_pipeline_records(snippets, items, tasks)
         evidence = {
             "snippets": snippets,
             "items": items,
             "abstraction": "environment/benchmark",
+            "env_adapter_contract": "HermesEnvAdapter-v1",
+            "split_policy": SplitPolicy().as_dict(),
+            "scorer_judge_metadata": {"default_judge": "keyword_scorecard", "llm_judge_can_accept": False},
             "eval_file": str(eval_path) if eval_path else None,
             "curated_task_count": len(curated_tasks),
             "task_counts": {k: len(v) for k, v in tasks.items()},
             "production_gate_task_count": len(curated_val_tasks),
             "production_gate_eligible": production_gate_eligible,
+            "production_eligibility_by_split": {k: [production_eligibility_for_task(t).as_dict() for t in v] for k, v in tasks.items()},
+            "builtin_benchmarks": benchmark_catalog_payload,
+            "builtin_benchmark_count": len(benchmark_catalog_payload),
+            "builtin_benchmark_fingerprint": hashlib.sha256(json.dumps(benchmark_catalog_payload, sort_keys=True).encode()).hexdigest(),
+            "session_sleep_pipeline": session_pipeline,
         }
         return tasks, evidence
 
@@ -308,11 +511,18 @@ class HermesSkillEnv:
         return EvalTask(
             id=f"{split}-{item.get('id', 'item')}",
             prompt=prompt,
-            source=str(item.get("source_id") or "session-mined"),
+            source="session-mined",
             expected_terms=tuple(dict.fromkeys(expected)),
             failure_terms=("ignore safety", "skip validation", "auto adopt without review"),
             split=split,
-            metadata=item,
+            metadata={
+                **item,
+                "source_id": item.get("source_id"),
+                "task_origin": "session-mined",
+                "scorecard_explicit": True,
+                "production_gate_eligible": False,
+                "production_eval_schema_policy": "production-eval-schema-v1",
+            },
         )
 
     def _ensure_minimum_tasks(self, tasks: dict[str, list[EvalTask]]) -> None:
@@ -324,6 +534,7 @@ class HermesSkillEnv:
                 expected_terms=("verify", "test", "guard", "safety", "staged"),
                 failure_terms=("auto adopt without review", "skip validation"),
                 split="train",
+                metadata={"task_origin": "curated-fallback", "scorecard_explicit": True, "production_gate_eligible": False},
             ),
             EvalTask(
                 id="curated-tool-error",
@@ -332,6 +543,7 @@ class HermesSkillEnv:
                 expected_terms=("tool", "error", "verify", "blocker"),
                 failure_terms=("pretend", "fabricate"),
                 split="val",
+                metadata={"task_origin": "curated-fallback", "scorecard_explicit": True, "production_gate_eligible": False},
             ),
             EvalTask(
                 id="synthetic-rollback",
@@ -340,6 +552,7 @@ class HermesSkillEnv:
                 expected_terms=("rollback", "guard", "sha", "backup"),
                 failure_terms=("irreversible",),
                 split="test",
+                metadata={"task_origin": "synthetic", "scorecard_explicit": True, "production_gate_eligible": False},
             ),
         ]
         for split in ("train", "val", "test"):
@@ -350,5 +563,6 @@ class HermesSkillEnv:
                     source="synthetic",
                     expected_terms=("verify", "bounded", "validation", "staged"),
                     split=split,
+                    metadata={"task_origin": "synthetic", "scorecard_explicit": True, "production_gate_eligible": False},
                 )
                 tasks[split] = [task]

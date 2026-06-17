@@ -17,10 +17,14 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--iterations", type=int, default=1)
     p.add_argument("--edit-budget", type=int, default=3)
     p.add_argument("--candidate-count", type=int, default=1, help="Conservative multi-candidate count per iteration; selects best strict validation improver")
-    p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto")
+    p.add_argument("--backend", choices=["auto", "hermes", "mock"], default="auto", help="Back-compat alias for --optimizer-backend")
+    p.add_argument("--optimizer-backend", choices=["auto", "hermes", "mock"], help="Explicit optimizer backend for reflection/bounded edits")
     p.add_argument("--allow-mock", action="store_true")
     p.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "scorecard"], default="auto", help="Frozen evaluator mode; sandbox uses isolated temp HOME/HERMES_HOME/workspace")
+    p.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "scorecard"], help="Explicit target backend alias for --target-executor")
+    p.add_argument("--gate-mode", choices=["soft", "hard", "mixed", "strict"], default="soft", help="Deterministic metric gate; default soft preserves strict weighted score improvement")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--resume-run-id", help="Opt-in resume/reuse of a prior checkpointed full-run when input/config/provenance fingerprints match")
 
 
 def main() -> int:
@@ -49,7 +53,7 @@ def main() -> int:
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
-        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, candidate_count=getattr(args, "candidate_count", 1), backend=args.backend, allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"))
+        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, candidate_count=getattr(args, "candidate_count", 1), backend=args.backend, optimizer_backend=getattr(args, "optimizer_backend", None), allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"), target_backend=getattr(args, "target_backend", None), gate_mode=getattr(args, "gate_mode", "soft"), resume_run_id=getattr(args, "resume_run_id", None))
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":

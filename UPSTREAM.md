@@ -46,6 +46,33 @@ The current adapter’s production adoption gates depend on local curated eval f
 - Fallback, synthetic, session-mined, and legacy dry-run evidence remains review-only.
 - Sandbox eval is isolated and blocks task-provided commands by default.
 
+## Conformance semantics
+
+Hermes conformance is defined by local tests and the staged artifact contract, not by blindly matching upstream implementation details:
+
+- **Strict validation improvement:** generic validation adoption requires deterministic metric improvement. `soft` gates compare weighted aggregate scores; `hard`/`strict` also require per-task pass/non-regression semantics; `mixed` combines the stricter production preference with generic improvement. LLM/judge text is evidence only.
+- **Bounded edits:** optimizers may emit only bounded `append`/`replace`/`delete`/`insert_after` edits validated against the current skill text. Rejected and non-selected edits are preserved in `rejected_edits.jsonl` for reflection/history, not silently applied.
+- **Train/val/test isolation:** train evidence informs reflection, validation selects candidates, and held-out test evidence is evaluated after selection. Only explicit curated validation/test tasks can make production adoption eligible.
+- **Rejected buffer:** invalid, non-improving, or non-selected candidates remain staged in summaries/rejected buffers for audit and later reflection; they cannot become live writes without a new passing run.
+- **Resume semantics:** `checkpoint.json` records a `skillopt-checkpoint-v1` input hash over profile, skill SHA, eval SHA, backend, gate, and budget settings. `resume_run_id` reuses only completed runs after artifact verification and fingerprint match; safe partial-stage replay is intentionally unavailable.
+- **Provenance v2:** manifests record `skillopt-provenance-v2` with plugin repo/commit, upstream lock, eval/task SHA, optimizer_backend config, target_backend config, gate policy, profile, skill, and production eval policy fingerprints.
+
+## Intentional divergence from upstream
+
+- Standalone Hermes plugin, not a fork/vendor drop and not Microsoft’s official SkillOpt package.
+- `SKILL.md` is the only trainable state; Hermes core prompts, plugin code, and upstream clones are not rewritten by optimization runs.
+- Optimizer backend and target backend are separated so candidate generation cannot alter the frozen evaluator.
+- Production adoption is narrower than generic optimization: explicit curated validation plus held-out curated test gates are required.
+- Sandbox support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor.
+- Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
+
+## Upstream diff/status workflow
+
+1. Run `python3 -m hermes_skillopt.cli upstream-status` to inspect the current local lock/clone without network fetch.
+2. Run `python3 -m hermes_skillopt.cli upstream-update --fetch-only` (or `bash scripts/update_upstream.sh`) when you explicitly want to refresh the canonical upstream clone/lock.
+3. Review upstream changes outside live profiles, choose a small Hermes-safe idea to port, and implement it in local modules with tests.
+4. Re-run conformance tests. Do not auto-merge upstream files into this plugin and do not treat an upstream pin change as a behavior change by itself.
+
 ## Safe porting policy
 
 When bringing ideas from upstream:

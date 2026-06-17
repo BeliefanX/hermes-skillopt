@@ -3,6 +3,7 @@ from __future__ import annotations
 """Optimizer backends: reflection plus bounded skill edits."""
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -15,6 +16,37 @@ class JsonBackend(Protocol):
     mode: str
 
     def json(self, prompt: str, schema_hint: dict[str, Any], repair_path: Path | None = None) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class OptimizerBackendConfig:
+    """Explicit optimizer backend identity recorded in run artifacts.
+
+    This separates the optimizer (LLM/mock reflection + bounded-edit proposer)
+    from the target backend (frozen evaluator). The optimizer may explain or
+    propose candidates, but it is never part of candidate acceptance.
+    """
+
+    backend: str
+    requested_backend: str = "auto"
+    allow_mock: bool = False
+    edit_budget: int = 3
+    candidate_count: int = 1
+    iterations: int = 1
+    role: str = "reflection_plus_bounded_edit_no_acceptance"
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "requested_backend": self.requested_backend,
+            "allow_mock": self.allow_mock,
+            "edit_budget": max(0, int(self.edit_budget)),
+            "candidate_count": max(1, int(self.candidate_count)),
+            "iterations": max(1, int(self.iterations)),
+            "role": self.role,
+            "parameters": self.parameters,
+        }
 
 
 def summarize_rejected_edits(rejected: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
@@ -43,9 +75,11 @@ class OptimizerBackend:
     it never decides acceptance. ValidationGate is the only accept/reject gate.
     """
 
-    def __init__(self, backend: JsonBackend, edit_budget: int = 3):
+    def __init__(self, backend: JsonBackend, edit_budget: int = 3, config: OptimizerBackendConfig | None = None):
         self.backend = backend
         self.edit_budget = max(0, int(edit_budget))
+        mode = str(getattr(backend, "mode", "unknown"))
+        self.config = config or OptimizerBackendConfig(backend=mode, requested_backend=mode, edit_budget=self.edit_budget)
 
     def reflect(self, train_tasks: list[EvalTask], current_skill: str, current_eval: dict[str, Any], run_dir: Path, iteration: int, rejected_context: list[dict[str, Any]] | None = None, rejected_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         if rejected_context is None and rejected_history is not None:

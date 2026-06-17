@@ -13,11 +13,11 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
-from hermes_skillopt.env import EvalResult, EvalTask
+from hermes_skillopt.env import EvalResult, EvalTask, production_eligibility_for_task
 
 
 class ScorecardRunner(Protocol):
@@ -208,9 +208,30 @@ def _score_checks(checks: list[tuple[str, bool, float]], penalties: list[str]) -
 
 
 @dataclass(frozen=True)
+class TargetBackendConfig:
+    """Explicit frozen target backend identity for provenance/artifacts."""
+
+    executor: str
+    target_config_id: str = "frozen-hermes-replay-mvp-v1"
+    requested_executor: str = "auto"
+    role: str = "frozen_current_candidate_evaluator_no_editing"
+    parameters: dict[str, object] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "executor": self.executor,
+            "target_config_id": self.target_config_id,
+            "requested_executor": self.requested_executor,
+            "role": self.role,
+            "parameters": self.parameters,
+        }
+
+
+@dataclass(frozen=True)
 class TargetExecutor:
     runner: ScorecardRunner | None = None
     target_config_id: str = "frozen-hermes-replay-mvp-v1"
+    requested_executor: str = "auto"
 
     def __post_init__(self) -> None:
         if self.runner is None:
@@ -221,6 +242,10 @@ class TargetExecutor:
         assert self.runner is not None
         return self.runner.mode
 
+    @property
+    def config(self) -> TargetBackendConfig:
+        return TargetBackendConfig(executor=self.mode, target_config_id=self.target_config_id, requested_executor=self.requested_executor)
+
     def evaluate(self, skill_text: str, tasks: list[EvalTask], label: str = "skill") -> dict[str, object]:
         assert self.runner is not None
         results = [self.runner.score(skill_text, task) for task in tasks]
@@ -228,7 +253,24 @@ class TargetExecutor:
         weighted = sum(r.score * max(0.0, float(task.weight)) for r, task in zip(results, tasks))
         mean = round(weighted / total_weight, 3) if results and total_weight > 0 else 0.0
         production_gate_eligible = bool(results) and all(bool(r.metadata.get("production_gate_eligible")) for r in results)
-        return {"label": label, "executor": self.mode, "target_config_id": self.target_config_id, "score": mean, "num_tasks": len(results), "total_weight": round(total_weight, 3), "production_gate_eligible": production_gate_eligible, "results": [r.__dict__ for r in results]}
+        splits = sorted({task.split for task in tasks})
+        eligibility = [production_eligibility_for_task(task).as_dict() for task in tasks]
+        regression_cases = [r.task_id for r in results if not r.passed]
+        return {
+            "label": label,
+            "executor": self.mode,
+            "target_config_id": self.target_config_id,
+            "score": mean,
+            "split_score": mean,
+            "split": splits[0] if len(splits) == 1 else "mixed" if splits else None,
+            "splits": splits,
+            "num_tasks": len(results),
+            "total_weight": round(total_weight, 3),
+            "production_gate_eligible": production_gate_eligible,
+            "production_eligibility_reasons": eligibility,
+            "regression_cases": regression_cases,
+            "results": [r.__dict__ for r in results],
+        }
 
 
 def _result_metadata(task: EvalTask) -> dict[str, object]:
@@ -246,4 +288,6 @@ def _result_metadata(task: EvalTask) -> dict[str, object]:
         "fixtures": task.fixtures,
         "scorecard_explicit": bool(task.metadata.get("scorecard_explicit")),
         "production_gate_eligible": bool(task.metadata.get("production_gate_eligible")),
+        "task_origin": task.metadata.get("task_origin") or task.source,
+        "production_eligibility": production_eligibility_for_task(task).as_dict(),
     }

@@ -20,6 +20,17 @@ INSTALL_HINT = (
     "python3 -m pip install gradio"
 )
 MAX_TEXT_CHARS = 20_000
+ALLOWED_ARTIFACTS = {
+    "manifest.json",
+    "checkpoint.json",
+    "report.md",
+    "diff.patch",
+    "gate_results.json",
+    "candidate_summary.json",
+    "rejected_edits.jsonl",
+    "proposed_SKILL.md",
+    "best_skill.md",
+}
 
 
 def require_gradio():
@@ -36,6 +47,8 @@ def _json(data: Any) -> str:
 
 def _safe_artifact_path(run_dir: Path, filename: str) -> Path | None:
     """Return a safe fixed artifact path under run_dir, rejecting symlink escapes."""
+    if filename not in ALLOWED_ARTIFACTS:
+        return None
     if Path(filename).name != filename:
         return None
     base = run_dir.resolve()
@@ -54,6 +67,120 @@ def _read_artifact_limited(run_dir: Path, filename: str, limit: int = MAX_TEXT_C
     if path is None:
         return ""
     return core.redact_secrets(path.read_text(encoding="utf-8", errors="replace")[:limit])
+
+
+def _load_artifact_json(run_dir: Path, filename: str) -> Any:
+    text = _read_artifact_limited(run_dir, filename)
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _rejected_edit_explorer(rejected_text: str, limit: int = 8) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in rejected_text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            item = {"raw": line[:500]}
+        if isinstance(item, dict):
+            rows.append(
+                {
+                    "iteration": item.get("iteration"),
+                    "candidate": item.get("candidate_id") or item.get("candidate"),
+                    "reason": item.get("reason") or item.get("rationale") or item.get("gate_reason"),
+                    "task_id": item.get("task_id"),
+                    "score_delta": item.get("score_delta"),
+                    "preview": core.redact_secrets(str(item.get("edit") or item.get("raw") or item)[:500]),
+                }
+            )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def report_summary_data(manifest: dict[str, Any], run_dir: Path | None = None) -> dict[str, Any]:
+    """Build a read-only observability/reporting summary for WebUI and tests."""
+    checkpoint = _load_artifact_json(run_dir, "checkpoint.json") if run_dir is not None else None
+    rejected_text = _read_artifact_limited(run_dir, "rejected_edits.jsonl") if run_dir is not None else ""
+    rejected_preview = _rejected_edit_explorer(rejected_text)
+    completed = checkpoint.get("completed_stages") if isinstance(checkpoint, dict) else None
+    timeline = {
+        "run_status": manifest.get("status"),
+        "checkpoint_status": checkpoint.get("status") if isinstance(checkpoint, dict) else None,
+        "completed_stages": completed or [],
+        "created_at": manifest.get("created_at"),
+    }
+    eligibility = {
+        "adoptable": manifest.get("adoptable") is True,
+        "accepted_for_adopt": manifest.get("status") in ("staged_best", "accepted", "adopted") and manifest.get("adoptable") is True,
+        "reasons": manifest.get("production_eligibility_reasons") or (["eligible"] if manifest.get("adoptable") is True else []),
+        "checklist": {
+            "staged_best": manifest.get("status") == "staged_best",
+            "production_gate_eligible": manifest.get("production_gate_eligible") is True,
+            "heldout_test_gate_eligible": manifest.get("test_gate_eligible") is True,
+            "review_only": manifest.get("review_only") is True,
+        },
+    }
+    provenance = manifest.get("provenance_fingerprint") or {}
+    policy = manifest.get("production_eval_policy") or {}
+    gate_policy = manifest.get("gate_policy") or {}
+    security = {
+        "artifact_integrity": "hashes_recorded" if manifest.get("artifact_sha256") else "legacy_or_missing_hashes",
+        "artifact_count": len(manifest.get("artifact_sha256") or {}),
+        "provenance_fingerprint": provenance.get("fingerprint_sha256") if isinstance(provenance, dict) else None,
+        "production_eval_policy": policy.get("policy_version") if isinstance(policy, dict) else None,
+        "optimizer_backend": manifest.get("optimizer_backend") or manifest.get("backend"),
+        "target_executor": manifest.get("target_executor"),
+        "gate_policy": gate_policy.get("mode") if isinstance(gate_policy, dict) else gate_policy,
+    }
+    return {
+        "run_id": manifest.get("run_id"),
+        "skill": manifest.get("skill_name"),
+        "timeline": timeline,
+        "eligibility": eligibility,
+        "split_scores": manifest.get("split_scores") or {
+            "validation": {"current": manifest.get("validation_current_score"), "candidate": manifest.get("validation_candidate_score")},
+            "production_validation": {"current": manifest.get("production_validation_current_score"), "candidate": manifest.get("production_validation_candidate_score")},
+            "heldout_test": {"best": manifest.get("test_score")},
+        },
+        "candidate_comparison": manifest.get("candidate_comparison") or [],
+        "regression_cases": manifest.get("regression_cases") or [],
+        "provenance_security": security,
+        "gate_reason": manifest.get("gate_reason"),
+        "rejected_edits": {"count_previewed": len(rejected_preview), "preview": rejected_preview},
+    }
+
+
+def report_summary_markdown(data: dict[str, Any]) -> str:
+    eligibility = data.get("eligibility") or {}
+    security = data.get("provenance_security") or {}
+    timeline = data.get("timeline") or {}
+    lines = [
+        "## Observability report summary",
+        f"- run_id: `{data.get('run_id')}`",
+        f"- skill: {data.get('skill')}",
+        f"- run_status: {timeline.get('run_status')} (checkpoint={timeline.get('checkpoint_status')})",
+        f"- completed_stages: {', '.join(timeline.get('completed_stages') or []) or 'unknown'}",
+        f"- adoptable: {eligibility.get('adoptable')}",
+        f"- accepted_for_adopt: {eligibility.get('accepted_for_adopt')}",
+        f"- not_adoptable_reasons: {eligibility.get('reasons') or []}",
+        f"- eligibility_checklist: {json.dumps(eligibility.get('checklist') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- split_scores: {json.dumps(data.get('split_scores') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- candidate_comparison_count: {len(data.get('candidate_comparison') or [])}",
+        f"- regression_cases: {data.get('regression_cases') or []}",
+        f"- provenance_fingerprint: {security.get('provenance_fingerprint') or 'missing'}",
+        f"- production_eval_policy: {security.get('production_eval_policy') or 'missing'}",
+        f"- artifact_integrity: {security.get('artifact_integrity')} ({security.get('artifact_count')} files)",
+        f"- optimizer/target/gate: {security.get('optimizer_backend')} / {security.get('target_executor')} / {security.get('gate_policy')}",
+        f"- rejected_edit_preview_count: {(data.get('rejected_edits') or {}).get('count_previewed', 0)}",
+    ]
+    return "\n".join(lines)
 
 
 def _run_dir(home: str | None, run_id: str) -> Path:
@@ -84,19 +211,26 @@ def status_markdown(home: str | None = None) -> str:
     if not runs:
         lines.append("- none")
     for r in runs[:10]:
+        reasons = r.get("not_adoptable_reasons") or r.get("production_eligibility_reasons") or []
+        split = r.get("split_scores") or {}
+        val = split.get("validation") if isinstance(split, dict) else {}
+        test = split.get("heldout_test") if isinstance(split, dict) else {}
         lines.append(
-            "- `{run_id}` — {status} — adoptable={adoptable} prod_gate={prod} test_gate={test} — {skill} — {engine}{backend} — {created}".format(
+            "- `{run_id}` — {status} — adoptable={adoptable} prod_gate={prod} test_gate={test_gate} — {skill} — {engine}{backend} — {created}".format(
                 run_id=r.get("run_id") or "",
                 status=r.get("status") or "unknown",
                 adoptable=r.get("adoptable"),
                 prod=r.get("production_gate_eligible"),
-                test=r.get("test_gate_eligible"),
+                test_gate=r.get("test_gate_eligible"),
                 skill=r.get("skill_name") or "unknown-skill",
                 engine=r.get("engine") or "unknown-engine",
                 backend=("/" + str(r.get("backend"))) if r.get("backend") else "",
                 created=r.get("created_at") or "",
             )
         )
+        lines.append(f"  - why: {', '.join(map(str, reasons)) if reasons else 'eligible or legacy run'}")
+        if isinstance(val, dict) or isinstance(test, dict):
+            lines.append(f"  - scores: validation current={val.get('current') if isinstance(val, dict) else None} candidate={val.get('candidate') if isinstance(val, dict) else None}; heldout_test={test.get('best') if isinstance(test, dict) else None}")
     return "\n".join(lines)
 
 
@@ -121,10 +255,16 @@ def review_payload(run_id: str | None = None, home: str | None = None) -> tuple[
         diff = _read_artifact_limited(rd, "diff.patch")
         gate = gate_text or _json(gate_data)
         candidate_summary = _read_artifact_limited(rd, "candidate_summary.json")
+        observability = report_summary_data(manifest, rd)
+        observability_md = report_summary_markdown(observability)
         if candidate_summary:
-            gate = (gate + "\n\n" + candidate_summary) if gate else candidate_summary
+            gate = (gate + "\n\n## Candidate summary\n" + candidate_summary) if gate else candidate_summary
+        gate = (gate + "\n\n## Exportable observability JSON\n" + _json(observability)) if gate else _json(observability)
         candidate = _read_artifact_limited(rd, "proposed_SKILL.md") or _read_artifact_limited(rd, "best_skill.md")
         rejected = _read_artifact_limited(rd, "rejected_edits.jsonl")
+        rejected_preview = _json((observability.get("rejected_edits") or {}).get("preview") or [])
+        if rejected_preview != "[]":
+            rejected = ("## Rejected edit explorer preview\n" + rejected_preview + "\n\n## Raw rejected_edits.jsonl\n" + rejected) if rejected else rejected_preview
         summary = [
             f"## Review `{rid}`",
             f"- status: {manifest.get('status')}",
@@ -141,6 +281,8 @@ def review_payload(run_id: str | None = None, home: str | None = None) -> tuple[
             f"- run_dir: `{rd}`",
             f"- diff_path: `{rd / 'diff.patch'}`",
             f"- report_path: `{rd / 'report.md'}`",
+            "",
+            observability_md,
         ]
         return "\n".join(summary), report, diff, gate, candidate, rejected
     except Exception as exc:
@@ -159,6 +301,10 @@ def run_full_callback(
     backend: str,
     allow_mock: bool,
     home: str | None,
+    optimizer_backend: str | None = None,
+    target_backend: str | None = None,
+    gate_mode: str = "soft",
+    resume_run_id: str | None = None,
 ) -> tuple[str, str, str, str, str, str, str]:
     """Run full cycle, always staged-only from the WebUI."""
     try:
@@ -172,6 +318,10 @@ def run_full_callback(
             edit_budget=int(edit_budget),
             candidate_count=int(candidate_count),
             backend=backend or "auto",
+            optimizer_backend=optimizer_backend or None,
+            target_backend=target_backend or None,
+            gate_mode=gate_mode or "soft",
+            resume_run_id=resume_run_id or None,
             allow_mock=bool(allow_mock),
             auto_adopt=False,
             force=False,
@@ -254,7 +404,11 @@ def build_app(home_default: str | None = None):
                     candidate_count = gr.Slider(1, 5, value=1, step=1, label="Candidate count")
                 with gr.Row():
                     backend = gr.Dropdown(["auto", "hermes", "mock"], value="auto", label="Backend")
+                    optimizer_backend = gr.Dropdown(["", "auto", "hermes", "mock"], value="", label="Optimizer backend")
+                    target_backend = gr.Dropdown(["", "auto", "replay", "sandbox", "scorecard"], value="", label="Target backend")
+                    gate_mode = gr.Dropdown(["soft", "hard", "mixed", "strict"], value="soft", label="Gate mode")
                     allow_mock = gr.Checkbox(value=False, label="Allow mock fallback (smoke/tests only)")
+                resume_run_id = gr.Textbox(label="Resume run ID (optional)", placeholder="Reuse completed checkpoint if inputs match")
                 run_btn = gr.Button("Run full cycle (staged only)", variant="primary")
                 run_status = gr.Markdown()
 
@@ -294,7 +448,7 @@ def build_app(home_default: str | None = None):
 
         run_btn.click(
             run_full_callback,
-            inputs=[skill, query, eval_file, lookback, limit, iterations, edit_budget, candidate_count, backend, allow_mock, home],
+            inputs=[skill, query, eval_file, lookback, limit, iterations, edit_budget, candidate_count, backend, allow_mock, home, optimizer_backend, target_backend, gate_mode, resume_run_id],
             outputs=[run_status, review_summary, report, diff, gate, candidate, rejected],
         )
         review_btn.click(review_payload, inputs=[review_run_id, home], outputs=[review_summary, report, diff, gate, candidate, rejected])

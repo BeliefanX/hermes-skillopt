@@ -55,9 +55,12 @@ Toolset: `hermes_skillopt`
 Important full-run parameters:
 
 - `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`, `candidate_count`
-- `backend`: `auto|hermes|mock`
+- `backend`: `auto|hermes|mock` back-compat alias for the optimizer backend
+- `optimizer_backend`: `auto|hermes|mock`; controls reflection/bounded edit proposal generation
 - `allow_mock`: required before `backend=auto` may fall back to mock outside Hermes.
-- `target_executor`: `auto|replay|sandbox|scorecard`
+- `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard`; controls the frozen evaluator, separate from the optimizer backend
+- `gate_mode`: `soft|hard|mixed|strict`; deterministic metric policy, with LLM/judge text kept explanation-only
+- `resume_run_id`: opt-in reuse of a completed checkpointed run only when the stored input/config/provenance fingerprint matches
 - `force`: only affects adopt/rollback current-sha guard behavior where exposed; it does not bypass artifact, profile, validation, production, or test gates.
 
 CLI help confirms the supported surface:
@@ -84,10 +87,11 @@ Core artifacts include:
 - `original_SKILL.md`, `current_SKILL.md`, `proposed_SKILL.md`, and `best_skill.md` only when a best candidate exists
 - `evidence.json`, `train_items.jsonl`, `val_items.jsonl`, `test_items.jsonl`
 - `current_validation_results.json`, `candidate_validation_results.json`, `test_results.json`
-- `reflections.json`, `candidate_edits.json`, `candidate_summary.json`, `rejected_edits.jsonl`, `gate_results.json`
+- `reflections.json`, `candidate_edits.json`, `candidate_summary.json`, `rejected_edits.jsonl`, `gate_results.json`, `slow_meta.json`
+- `checkpoint.json` with `skillopt-checkpoint-v1` input fingerprint; resume currently reuses only completed runs and refuses partial-stage replay
 - `stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json`
 
-`manifest.json` records SHA-256 hashes for staged artifacts. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
+`manifest.json` records SHA-256 hashes for staged artifacts plus `skillopt-provenance-v2`: plugin repo/commit, upstream lock, eval/task fingerprint, optimizer_backend/target_backend configs, gate policy, profile/skill fingerprints, and production eval policy fingerprint. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
 
 ## Eval schema and production eligibility
 
@@ -128,6 +132,10 @@ Production adoption gates are intentionally narrow:
 
 Sandbox mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SKILL.md` inside that sandbox, runs a fixed internal runner, captures transcript/exit/timeout, and does not write the live profile. Task-provided commands in `fixtures.command` or `metadata.command` are blocked with `SANDBOX_COMMAND_BLOCKED` and are not production-gate eligible. Do not document or rely on sandbox as an arbitrary shell executor.
 
+## EnvAdapter, benchmarks, sessions, and sleep foundation
+
+`EnvAdapter` is the narrow Hermes-native contract for loaders, rollout metadata, scorer metadata, and production eligibility policy. `HermesEnvAdapter` wraps `HermesSkillEnv` and records split policy metadata (`hermes-skillopt-train-val-test-v1`). The built-in benchmarks (`delegation-handoff`, `tool-use-replay`, `skill-authoring-review`) provide train/val/test scaffolding but are marked non-production. Session-mined and fallback/synthetic tasks remain useful review evidence and future sleep/data-mining foundation; they are intentionally isolated from production adoption gates unless replaced by explicit curated eval-file tasks.
+
 ## Adopt and rollback
 
 `adopt(run_id)` writes the live skill only when all of these are true:
@@ -157,6 +165,8 @@ python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
 Tabs/actions: status, full run, review artifacts, adopt, rollback, upstream. Artifact review reads only fixed files in the selected staging directory. Adopt/rollback require typed confirmation and still call the core guards. If Gradio is missing, plugin import and tests still work.
+
+The WebUI is an observability/review surface, not an auto-adopter: it displays report/diff/gate/candidate/rejected artifacts from staging and delegates all live-write decisions to the same guarded core functions used by the CLI/plugin tools.
 
 ## Upstream tracking
 

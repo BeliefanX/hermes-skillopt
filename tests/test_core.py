@@ -23,6 +23,32 @@ def make_skill(home: Path, name="demo", body="Use tools safely.") -> Path:
     return p
 
 
+def full_run_with_deterministic_prod_optimizer(*args, **kwargs):
+    """Deterministic test hook that is not production mock provenance."""
+
+    class DeterministicProdBackend(core.LLMBackend):
+        def __init__(self, *a, **k): pass
+        mode = "hermes"
+        def json(self, prompt, schema_hint, repair_path=None):
+            kind = schema_hint.get("kind")
+            if kind == "reflect":
+                return {"recurring_defects": ["insufficient verification after edits"], "missing_rules": ["state expected artifacts and run tests before final"]}
+            if kind == "edit":
+                return {"edits": [{"op": "append", "text": "\n\n## SkillOpt Learned Rules\n\n- Verify changes with the most relevant command or test before reporting completion.\n- Preserve rollback safety and blocker handling.\n"}], "reasoning": "deterministic production-test hook"}
+            if kind == "gate":
+                return {"current_score": 0.45, "candidate_score": 0.82, "accepted": True, "rationale": "candidate adds verification rules"}
+            return {}
+
+    old = core.LLMBackend
+    core.LLMBackend = DeterministicProdBackend  # type: ignore[assignment]
+    try:
+        kwargs["backend"] = "hermes"
+        kwargs["allow_mock"] = False
+        return core.full_run(*args, **kwargs)
+    finally:
+        core.LLMBackend = old  # type: ignore[assignment]
+
+
 def test_skill_discovery_frontmatter(tmp_path):
     p = make_skill(tmp_path, "demo")
     skills = core.discover_skills(tmp_path)
@@ -51,7 +77,7 @@ def test_dry_run_stages_files_and_diff(tmp_path):
 def test_adopt_sha_guard_and_rollback(tmp_path):
     skill = make_skill(tmp_path, "demo")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_id = out["run_id"]
     skill.write_text(skill.read_text(encoding="utf-8") + "\nexternal edit\n", encoding="utf-8")
     with pytest.raises(ValueError, match="sha"):
@@ -68,7 +94,7 @@ def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_pat
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_dir = Path(out["run_dir"])
     (run_dir / "proposed_SKILL.md").write_text(original + "\ntampered staged artifact\n", encoding="utf-8")
 
@@ -96,7 +122,7 @@ def test_cross_profile_writeback_requires_explicit_unsafe_confirmation(tmp_path)
     other_home = tmp_path.parent / f"offline-profile-{tmp_path.name}"
     skill = make_skill(other_home, "demo")
     eval_path = write_eval_file(other_home)
-    out = core.full_run(skill="demo", hermes_home_path=str(other_home), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(other_home), eval_file=str(eval_path))
 
     adopt = core.adopt(out["run_id"], hermes_home_path=str(other_home), unsafe_cross_profile=True)
     assert adopt["status"] == "adopted"
@@ -120,7 +146,7 @@ def test_parent_traversal_run_id_rejected(tmp_path):
 def test_tampered_manifest_skill_path_outside_home_rejected(tmp_path):
     make_skill(tmp_path, "demo")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_dir = Path(out["run_dir"])
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -137,7 +163,7 @@ def test_rollback_refuses_current_skill_changed_after_adopt_unless_force(tmp_pat
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     skill.write_text(skill.read_text(encoding="utf-8") + "\nuser edit after adopt\n", encoding="utf-8")
@@ -151,7 +177,7 @@ def test_rollback_refuses_current_skill_changed_after_adopt_unless_force(tmp_pat
 def test_rollback_refuses_tampered_backup_dir_outside_profile_without_writing_target(tmp_path):
     skill = make_skill(tmp_path, "demo")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopted_text = skill.read_text(encoding="utf-8")
@@ -174,7 +200,7 @@ def test_rollback_refuses_tampered_backup_dir_outside_profile_without_writing_ta
 def test_rollback_refuses_backup_without_manifest_even_if_staging_sha_matches(tmp_path):
     skill = make_skill(tmp_path, "demo")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_id = out["run_id"]
     core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopted_text = skill.read_text(encoding="utf-8")
@@ -259,12 +285,96 @@ def test_full_run_mock_accepted_artifacts_and_review(tmp_path):
     out = core.full_run(skill="demo", query="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, iterations=2)
     assert out["status"] == "staged_best"
     run_dir = Path(out["run_dir"])
-    for fn in ["manifest.json", "original_SKILL.md", "current_SKILL.md", "best_skill.md", "proposed_SKILL.md", "diff.patch", "report.md", "evidence.json", "train_items.jsonl", "val_items.jsonl", "test_items.jsonl", "reflections.json", "candidate_edits.json", "gate_results.json", "rejected_edits.jsonl"]:
+    for fn in ["manifest.json", "original_SKILL.md", "current_SKILL.md", "best_skill.md", "proposed_SKILL.md", "diff.patch", "report.md", "evidence.json", "train_items.jsonl", "val_items.jsonl", "test_items.jsonl", "reflections.json", "candidate_edits.json", "gate_results.json", "rejected_edits.jsonl", "target_binding.json", "provenance_binding.json"]:
         assert (run_dir / fn).exists(), fn
     assert "SkillOpt Learned Rules" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
     review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
     assert review["gate"]["candidate_score"] > review["gate"]["current_score"]
     assert review["accepted"] is True
+    assert out["adoptable"] is False
+    assert "mock optimizer" in "\n".join(out["not_adoptable_reasons"])
+    with pytest.raises(ValueError, match="review-only"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+
+def test_adopt_rejects_manifest_scrubbed_mock_provenance_even_with_recomputed_fingerprint(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    original_live = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["status"] == "staged_best"
+    assert manifest["production_gate_eligible"] is True
+    assert manifest["test_gate_eligible"] is True
+    assert manifest["adoptable"] is False
+
+    clean_optimizer_config = dict(manifest["optimizer_backend_config"])
+    clean_optimizer_config.update({"backend": "hermes", "requested_backend": "hermes", "allow_mock": False})
+    manifest.update({
+        "adoptable": True,
+        "backend": "hermes",
+        "optimizer_backend": "hermes",
+        "optimizer_backend_config": clean_optimizer_config,
+        "optimizer_config": clean_optimizer_config,
+        "production_eligibility_reasons": [],
+    })
+
+    from hermes_skillopt.env import EvalTask, is_production_gate_task
+
+    def rows(name: str) -> list[dict]:
+        return [json.loads(line) for line in (run_dir / manifest["files"][name]).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def task_from_row(row: dict) -> EvalTask:
+        return EvalTask(
+            id=str(row.get("id", "")),
+            prompt=str(row.get("prompt", "")),
+            source=str(row.get("source", "")),
+            expected_behavior=str(row.get("expected_behavior", "")),
+            assertions=tuple(row.get("assertions") or ()),
+            judge=str(row.get("judge", "keyword_scorecard")),
+            allowed_tools=tuple(row.get("allowed_tools") or ()),
+            timeout=float(row.get("timeout", 30.0)),
+            fixtures=dict(row.get("fixtures") or {}),
+            expected_terms=tuple(row.get("expected_terms") or ()),
+            failure_terms=tuple(row.get("failure_terms") or ()),
+            required_markers=tuple(row.get("required_markers") or ()),
+            forbidden_markers=tuple(row.get("forbidden_markers") or ()),
+            split=str(row.get("split", "validation")),
+            weight=float(row.get("weight", 1.0)),
+            success_criteria=tuple(row.get("success_criteria") or ()),
+            metadata=dict(row.get("metadata") or {}),
+        )
+
+    tasks = {split: [task_from_row(r) for r in rows(split)] for split in ("train", "val", "test")}
+    evidence = json.loads((run_dir / manifest["files"]["evidence"]).read_text(encoding="utf-8"))
+    test_results = json.loads((run_dir / manifest["files"]["test_results"]).read_text(encoding="utf-8"))
+    production_gate_available = bool([t for t in tasks["val"] if is_production_gate_task(t)]) and bool(evidence.get("production_gate_eligible"))
+    production_test_results = [r for r in (test_results.get("results") or []) if isinstance(r, dict) and isinstance(r.get("metadata"), dict) and r["metadata"].get("production_gate_eligible")]
+    test_gate_eligible = bool(production_test_results) and all(float(r.get("score", 0.0)) >= 0.55 and bool(r.get("passed")) for r in production_test_results)
+    manifest["production_eval_policy"] = core._production_eval_policy(evidence, production_gate_available, test_gate_eligible)
+    manifest["provenance_fingerprint"] = core._provenance_fingerprint(
+        eval_file_used=evidence.get("eval_file"),
+        tasks=tasks,
+        backend_mode="hermes",
+        target_executor_mode=str(manifest.get("target_executor")),
+        target_config_id=str(manifest.get("target_config_id")),
+        production_gate_available=production_gate_available,
+        home=tmp_path,
+        skill_relpath=manifest.get("skill_relpath"),
+        original_sha256=core.sha256_text((run_dir / manifest["files"]["original"]).read_text(encoding="utf-8")),
+        proposed_sha256=core.sha256_text((run_dir / manifest["files"]["proposed"]).read_text(encoding="utf-8")),
+        optimizer_config=clean_optimizer_config,
+        target_config=manifest.get("target_backend_config"),
+        gate_policy=manifest.get("gate_policy"),
+        production_eval_policy=manifest["production_eval_policy"],
+    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Mock/non-production optimizer provenance"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert skill.read_text(encoding="utf-8") == original_live
 
 
 def test_rejected_gate_writes_rejected_buffer(tmp_path):
@@ -290,6 +400,81 @@ def test_rejected_gate_writes_rejected_buffer(tmp_path):
     assert rej.exists() and rej.read_text(encoding="utf-8").strip()
     assert not (Path(out["run_dir"]) / "best_skill.md").exists()
     assert (Path(out["run_dir"]) / "diff.patch").read_text(encoding="utf-8") == ""
+
+
+def test_full_run_resume_reuses_completed_checkpoint_and_refuses_mismatch(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    run_dir = Path(out["run_dir"])
+    assert (run_dir / "checkpoint.json").exists()
+
+    resumed = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, resume_run_id=out["run_id"])
+    assert resumed["resumed"] is True
+    assert resumed["resume_reused"] is True
+    assert resumed["run_id"] == out["run_id"]
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, edit_budget=2, resume_run_id=out["run_id"])
+
+
+def test_rejected_step_buffer_reused_by_next_candidate(monkeypatch, tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    prompts: list[str] = []
+
+    class BufferBackend(core.LLMBackend):
+        def __init__(self): pass
+        mode = "mock"
+        edit_calls = 0
+        def json(self, prompt, schema_hint, repair_path=None):
+            if schema_hint["kind"] == "reflect":
+                return {"recurring_defects": []}
+            if schema_hint["kind"] == "edit":
+                prompts.append(prompt)
+                BufferBackend.edit_calls += 1
+                if BufferBackend.edit_calls == 1:
+                    return {"edits": [{"op": "delete", "old": "missing-anchor"}], "reasoning": "bad anchor"}
+                return {"edits": [{"op": "append", "text": "\n\n## SkillOpt Learned Rules\n\n- verify blocker rollback\n"}], "reasoning": "uses buffer"}
+            return {"current_score": .1, "candidate_score": .9, "rationale": "explain only"}
+
+    monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: BufferBackend())
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True, candidate_count=2)
+    assert out["status"] == "staged_best"
+    assert len(prompts) == 2
+    assert "delete anchor must be unique" in prompts[1] or "non_unique_anchor" in prompts[1]
+
+
+def test_protected_region_rejection_and_slow_meta_artifact(tmp_path):
+    from hermes_skillopt.bounded_edit import validate_bounded_edits
+
+    skill_text = "---\nname: demo\n---\n# demo\n\n<!-- skillopt:protected:start -->\nDo not change safety.\n<!-- skillopt:protected:end -->\n\n<!-- skillopt:allowed:start -->\nAllowed body.\n<!-- skillopt:allowed:end -->\n"
+    result = validate_bounded_edits(skill_text, [{"op": "replace", "old": "Do not change safety.", "new": "weaken safety"}])
+    assert result.ok is False
+    assert any(r.get("reason") == "outside_allowed_region" or r.get("reason") == "protected_section" for r in result.rejected_edits)
+
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    slow = json.loads((Path(out["run_dir"]) / "slow_meta.json").read_text(encoding="utf-8"))
+    assert slow["mode"] == "evidence_only_no_live_write"
+    assert slow["normal_gate_required_for_any_write"] is True
+    assert "slow_meta" in json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))["files"]
+
+
+def test_append_cannot_replace_protected_heading_or_mutate_allowed_markers():
+    from hermes_skillopt.bounded_edit import validate_bounded_edits
+
+    skill_text = "---\nname: demo\n---\n# demo\n\n## Safety\n\nDo not weaken.\n\n## Notes\n\nAllowed notes.\n"
+    result = validate_bounded_edits(skill_text, [{"op": "append", "text": "\n\n## Safety\n\nweaken safety\n"}])
+    assert result.ok is False
+    assert any(r.get("reason") == "protected_append" for r in result.rejected_edits)
+
+    marked = "---\nname: demo\n---\n# demo\n\n<!-- skillopt:allowed:start -->\nAllowed body.\n<!-- skillopt:allowed:end -->\n"
+    outside_append = validate_bounded_edits(marked, [{"op": "append", "text": "\n\n## New Section\n\noutside\n"}])
+    marker_append = validate_bounded_edits("---\nname: demo\n---\n# demo\n", [{"op": "append", "text": "\n<!-- skillopt:allowed:start -->\nmove marker\n"}])
+    assert outside_append.ok is False
+    assert any(r.get("reason") == "outside_allowed_region" for r in outside_append.rejected_edits)
+    assert marker_append.ok is False
+    assert any(r.get("reason") == "allowed_region_marker_mutation" for r in marker_append.rejected_edits)
 
 
 def test_auto_backend_requires_mock_permission_without_ctx(tmp_path):
@@ -397,6 +582,22 @@ def test_curated_eval_file_loaded_and_candidate_improvement_stages_best(tmp_path
     assert current_eval["results"][0]["task_id"] == "v1"
     assert candidate_eval["score"] > current_eval["score"]
     assert (run_dir / "best_skill.md").exists()
+
+
+def test_review_returns_phase3_report_fields(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
+    assert review["artifact_integrity"] == "verified"
+    assert "report_fields" in review
+    assert review["report_fields"]["timeline"]["status"] == review["status"]
+    assert "eligibility" in review["report_fields"]
+    assert "split_scores" in review["report_fields"]
+    assert "candidate_comparison" in review["report_fields"]
+    assert "regression_cases" in review["report_fields"]
+    assert "provenance_security" in review["report_fields"]
+    assert review["report_fields"]["provenance_security"]["artifact_integrity"] == "verified"
 
 
 def test_curated_eval_json_object_file_supported(tmp_path):
@@ -608,7 +809,7 @@ def test_full_run_with_explicit_curated_scorecard_is_adoptable(tmp_path):
     skill = make_skill(tmp_path, "demo", body="Use tools safely.")
     eval_path = write_eval_file(tmp_path)
     original = skill.read_text(encoding="utf-8")
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     assert out["adoptable"] is True
     adopt = core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
     assert adopt["status"] == "adopted"
@@ -655,7 +856,7 @@ def test_mixed_validation_nonproduction_improvement_cannot_make_adoptable(monkey
         }
 
     monkeypatch.setattr(HermesSkillEnv, "build_tasks", mixed_tasks)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path))
     run_dir = Path(out["run_dir"])
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     gate_data = json.loads((run_dir / "gate_results.json").read_text(encoding="utf-8"))
@@ -715,7 +916,78 @@ def test_cli_help_commands_smoke():
             assert "--eval-file" in proc.stdout
             assert "--dry-run" not in proc.stdout
             assert "--target-executor" in proc.stdout
+            assert "--target-backend" in proc.stdout
+            assert "--optimizer-backend" in proc.stdout
+            assert "--gate-mode" in proc.stdout
             assert "--candidate-count" in proc.stdout
+
+
+def test_backend_separation_configs_and_fingerprints(tmp_path):
+    make_skill(tmp_path, "demo", body="Use tools safely.")
+    eval_path = write_eval_file(tmp_path)
+    out = core.full_run(
+        skill="demo",
+        hermes_home_path=str(tmp_path),
+        eval_file=str(eval_path),
+        backend="auto",
+        optimizer_backend="mock",
+        allow_mock=True,
+        target_backend="scorecard",
+        gate_mode="mixed",
+    )
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    prov = manifest["provenance_fingerprint"]
+
+    assert manifest["optimizer_backend_config"]["backend"] == "mock"
+    assert manifest["optimizer_backend_config"]["requested_backend"] == "mock"
+    assert manifest["target_backend_config"]["executor"] == "deterministic_mock_scorecard"
+    assert manifest["target_backend_config"]["requested_executor"] == "scorecard"
+    assert manifest["gate_policy"]["mode"] == "mixed"
+    assert prov["optimizer_backend_config"] == manifest["optimizer_backend_config"]
+    assert prov["target_backend_config"] == manifest["target_backend_config"]
+    assert prov["gate_policy"] == manifest["gate_policy"]
+    assert prov["optimizer_fingerprint_sha256"]
+    assert prov["target_fingerprint_sha256"]
+    assert prov["gate_policy_fingerprint_sha256"]
+
+
+def test_validation_gate_hard_soft_mixed_modes_ignore_llm_override():
+    from hermes_skillopt.gate import ValidationGate
+
+    current = {
+        "score": 0.5,
+        "results": [
+            {"score": 0.8, "passed": True, "metadata": {"weight": 1}},
+            {"score": 0.2, "passed": False, "metadata": {"weight": 1}},
+        ],
+    }
+    candidate_soft_only = {
+        "score": 0.6,
+        "results": [
+            {"score": 0.9, "passed": True, "metadata": {"weight": 1}},
+            {"score": 0.3, "passed": False, "metadata": {"weight": 1}},
+        ],
+    }
+    candidate_hard = {
+        "score": 0.55,
+        "results": [
+            {"score": 0.6, "passed": True, "metadata": {"weight": 1}},
+            {"score": 0.5, "passed": True, "metadata": {"weight": 1}},
+        ],
+    }
+    regressed = {"score": 0.1, "results": [{"score": 0.1, "passed": False, "metadata": {"weight": 1}}]}
+
+    assert ValidationGate(gate_mode="soft").decide(1, current, candidate_soft_only, "a", "b").accepted is True
+    assert ValidationGate(gate_mode="hard").decide(1, current, candidate_soft_only, "a", "b").accepted is False
+    hard_decision = ValidationGate(gate_mode="hard").decide(1, current, candidate_hard, "a", "b")
+    assert hard_decision.accepted is True
+    mixed_decision = ValidationGate(gate_mode="mixed").decide(1, current, candidate_hard, "a", "b")
+    assert mixed_decision.accepted is True
+    rejected = ValidationGate(gate_mode="soft").decide(1, current, regressed, "a", "b", judge={"accepted": True})
+    assert rejected.accepted is False
+    assert rejected.as_dict()["metric_summary"]["soft_delta"] < 0
+    assert "explanation-only" in rejected.as_dict()["acceptance_rule"]
 
 
 def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):
@@ -728,13 +1000,34 @@ def test_review_report_records_policy_fingerprints_and_per_task_delta(tmp_path):
     review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
 
     assert manifest["production_eval_policy"]["policy_version"] == "production-eval-schema-v1"
+    assert manifest["production_eval_policy"]["policy_fingerprint_sha256"]
     assert manifest["provenance_fingerprint"]["eval_file_sha256"] == core.sha256_file(eval_path)
     assert manifest["provenance_fingerprint"]["fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["schema_version"] == "skillopt-provenance-v2"
+    assert manifest["provenance_fingerprint"]["plugin_repo"]["repo_path"] == str(core.PLUGIN_ROOT.resolve())
+    assert "commit" in manifest["provenance_fingerprint"]["plugin_repo"]
+    assert "sha256" in manifest["provenance_fingerprint"]["upstream_lock"]
+    assert manifest["provenance_fingerprint"]["eval_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["optimizer_config"] == manifest["optimizer_config"]
+    assert manifest["provenance_fingerprint"]["optimizer_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["target_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["profile"]["hermes_home"] == str(tmp_path.resolve())
+    assert manifest["provenance_fingerprint"]["profile_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["skill"] == {
+        "skill_relpath": "skills/demo/SKILL.md",
+        "original_sha256": manifest["original_sha256"],
+        "proposed_sha256": manifest["proposed_sha256"],
+    }
+    assert manifest["provenance_fingerprint"]["skill_fingerprint_sha256"]
+    assert manifest["provenance_fingerprint"]["production_eval_policy_fingerprint_sha256"] == manifest["production_eval_policy"]["policy_fingerprint_sha256"]
     assert manifest["per_task_delta"] and manifest["per_task_delta"][0]["task_id"] == "v1"
     assert review["per_task_delta"] == manifest["per_task_delta"]
     assert "baseline/current/candidate/best/test" in report
     assert "not_adoptable_checklist" in report
     assert "provenance_fingerprint" in report
+    assert "production_eval_policy_fingerprint" in report
+    assert "optimizer_fingerprint" in report
+    assert "profile_fingerprint" in report
 
 
 def test_manifest_only_tamper_cannot_make_nonproduction_run_adoptable(tmp_path):
@@ -765,7 +1058,7 @@ def test_manifest_only_tamper_cannot_make_nonproduction_run_adoptable(tmp_path):
     manifest["production_eval_policy"] = dict(manifest["production_eval_policy"], production_gate_available=True, test_gate_eligible=True)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="verified artifacts"):
+    with pytest.raises(ValueError, match="review-only"):
         core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
 
     assert skill.read_text(encoding="utf-8") == original
@@ -778,12 +1071,41 @@ def test_eval_record_can_opt_out_of_production_adopt(tmp_path):
         {"id": "tr1", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
         {"id": "te1", "prompt": "test", "expected_keywords": ["rollback"], "split": "test"},
     ])
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     assert out["status"] == "staged_best"
     assert out["adoptable"] is False
     assert out["production_gate_eligible"] is False
     with pytest.raises(ValueError, match="Only adoptable"):
         core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_force_cannot_bypass_missing_production_gate(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    original = skill.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path, rows=[
+        {"id": "v1", "prompt": "validation", "expected_keywords": ["verify", "blocker"], "split": "validation", "production_gate_eligible": False},
+        {"id": "tr1", "prompt": "train", "expected_keywords": ["tool"], "split": "train"},
+        {"id": "te1", "prompt": "test", "expected_keywords": ["rollback"], "split": "test", "production_gate_eligible": False},
+    ])
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    assert out["status"] == "staged_best"
+    assert out["adoptable"] is False
+    with pytest.raises(ValueError, match="Only adoptable"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert skill.read_text(encoding="utf-8") == original
+
+
+def test_fallback_session_synthetic_mock_run_is_review_only_even_with_force(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    original = skill.read_text(encoding="utf-8")
+    make_state_db(tmp_path)
+    out = core.full_run(skill="demo", query="demo", hermes_home_path=str(tmp_path), backend="mock", allow_mock=True)
+    assert out["status"] == "staged_best"
+    assert out["adoptable"] is False
+    assert out["production_gate_eligible"] is False
+    with pytest.raises(ValueError, match="review-only"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert skill.read_text(encoding="utf-8") == original
 
 
 def test_multi_candidate_rank_select_buffers_rejected_candidates(monkeypatch, tmp_path):
@@ -811,6 +1133,10 @@ def test_multi_candidate_rank_select_buffers_rejected_candidates(monkeypatch, tm
 
     assert manifest["candidate_count"] == 2
     assert summary["rounds"][0]["selected_candidate_id"] == "candidate-1-2"
+    ranked = summary["rounds"][0]["ranked_candidates"]
+    assert summary["rounds"][0]["selected_candidate_rationale"]
+    assert all("metric_summary" in row and "rejection_reasons" in row and "rank" in row for row in ranked)
+    assert any(row["selected"] is True for row in ranked)
     assert "candidate-1-1" in rejected and "selection_rejection" in rejected
     assert "Strong candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
 
@@ -827,7 +1153,7 @@ def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch
 
     class ProductionAwareBackend(core.LLMBackend):
         def __init__(self): pass
-        mode = "mock"
+        mode = "hermes"
         def json(self, prompt, schema_hint, repair_path=None):
             if schema_hint["kind"] == "reflect":
                 return {"recurring_defects": ["choose production-safe edit"]}
@@ -838,7 +1164,7 @@ def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch
             return {"rationale": "aux"}
 
     monkeypatch.setattr(core, "LLMBackend", lambda *a, **k: ProductionAwareBackend())
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True, candidate_count=2)
+    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="hermes", allow_mock=False, candidate_count=2)
     run_dir = Path(out["run_dir"])
     summary = json.loads((run_dir / "candidate_summary.json").read_text(encoding="utf-8"))
     ranked = summary["rounds"][0]["ranked_candidates"]
@@ -857,7 +1183,7 @@ def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):
     skill = make_skill(tmp_path, "demo", body="Use tools safely.")
     original = skill.read_text(encoding="utf-8")
     eval_path = write_eval_file(tmp_path)
-    out = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
     assert review["adoptable"] is True
     adopt = core.adopt(out["run_id"], hermes_home_path=str(tmp_path))
@@ -867,7 +1193,7 @@ def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):
     assert rollback["status"] == "rolled_back"
     assert skill.read_text(encoding="utf-8") == original
 
-    out2 = core.full_run(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path), backend="mock", allow_mock=True)
+    out2 = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
     run_dir = Path(out2["run_dir"])
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -875,6 +1201,27 @@ def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="production eligible"):
         core.adopt(out2["run_id"], hermes_home_path=str(tmp_path))
+
+
+def test_adopt_rejects_manifest_retarget_even_with_force(tmp_path):
+    skill = make_skill(tmp_path, "demo", body="Use tools safely.")
+    other = make_skill(tmp_path, "other", body="Other skill unchanged.")
+    other_original = other.read_text(encoding="utf-8")
+    eval_path = write_eval_file(tmp_path)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    run_dir = Path(out["run_dir"])
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["skill_name"] = "other"
+    manifest["skill_relpath"] = "skills/other/SKILL.md"
+    manifest["skill_path"] = str(other)
+    manifest["original_sha256"] = core.sha256_text(other_original)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="verified artifacts"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert other.read_text(encoding="utf-8") == other_original
+    assert skill.read_text(encoding="utf-8") != (run_dir / "proposed_SKILL.md").read_text(encoding="utf-8")
 
 
 def test_heldout_test_results_and_artifact_hashes_are_recorded_and_verified(tmp_path):
