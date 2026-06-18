@@ -5,10 +5,10 @@ This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skil
 ## Principles
 
 - Treat `SKILL.md` as the only trainable state.
-- Run `doctor` and eval-pack inventory before optimization.
+- Run `scout`, `doctor`, and eval-pack inventory before optimization.
 - Use `optimize --intent smoke` for wiring only and `--intent review` for authoring loops.
 - Use `optimize --intent production` only with an explicit curated production eval pack, strict gate, non-mock optimizer, and eligible validation/test splits.
-- Review with `review latest --summary` before any writeback. The summary exposes production/test gate booleans, evidence class, blockers, artifact refs, and next safe action.
+- Review with `review latest --summary` or `review latest --digest` before any writeback. Summary/digest separate validation, production-best, and held-out-test gates; expose evidence class, blockers, score provenance, artifact refs, and next safe action.
 - Adopt only with an exact typed confirmation (`ADOPT <run_id>`). Core adopt re-verifies hashed artifacts, production/test eligibility, provenance, proposed skill SHA, and current live skill SHA.
 - Do not call local `benchmark`, `eval-only`, import, transfer, conformance, scorecard, or frozen-Hermes sandbox reports upstream parity or external benchmark performance.
 
@@ -16,14 +16,16 @@ This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skil
 
 ```bash
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" doctor --skill my-skill
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" scout --skill my-skill
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-inventory --skill my-skill
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" benchmark-parity-status
 ```
 
 Expected interpretation:
 
-- `doctor` is read-only: no eval execution, no fetch, no adopt, no rollback, no write.
-- Inventory should show a valid explicit curated pack with train/validation/test coverage before production intent.
+- `doctor` and `scout` are read-only: no eval execution/full-run, no fetch, no adopt, no rollback, no write.
+- `scout` is suitable for notifications. Its `cron_recommendation` is scout-only (`auto_adopt_from_cron: false`) and must not be expanded into scheduled optimize/adopt/rollback.
+- Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent.
 - Parity status should remain no-full-parity unless future code adds real upstream execution evidence.
 
 ## 2. Smoke check
@@ -45,11 +47,14 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
   --target-executor replay
 
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --summary
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --digest
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --slim
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" fleet-report --skill my-skill
 ```
 
 Review runs are staged-only. Static, sample, synthetic, session-mined, deterministic scorecard-only, and report-only replay evidence remains review-only even when a soft score improves.
+
+`--digest` is the preferred slim notification body: it includes decision, adoptability, production/test gate flags, review-only status, score provenance, eval-pack identity, blockers/warnings, next safe action, and report/diff refs without large previews.
 
 ## 4. Production candidate run
 
@@ -63,6 +68,7 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
   --gate-mode strict
 
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --summary
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --digest
 ```
 
 Production intent requirements enforced by code:
@@ -73,6 +79,8 @@ Production intent requirements enforced by code:
 - staged-only / no auto-adopt
 
 Adoptability additionally requires eligible curated validation and held-out test tasks, no production hard-failed rows, complete required runtime evidence for adoption-eligible frozen-target contracts, verified artifacts, and provenance consistency. Missing runtime evidence downgrades production eligibility even if a scorecard or skill-text-only score improves.
+
+If review/digest shows a held-out test score but also warns that `heldout_test_sensitivity` is missing, keep the score caveated and do not turn it into an external performance or upstream parity claim.
 
 ## 5. Explicit adopt
 
@@ -92,6 +100,7 @@ Quick CI smoke:
 ```bash
 python3 -m compileall -q hermes_skillopt tests
 python3 -m pytest -q tests/test_guided_ux.py tests/test_phase2_env_adapter.py tests/test_core.py::test_validation_gate_rejects_production_soft_gain_with_candidate_hard_failure tests/test_webui.py
+python3 -m hermes_skillopt.cli scout --output skillopt/reports/scout.json
 python3 -m hermes_skillopt.cli conformance --mode quick --output skillopt/reports/conformance-quick.json
 python3 -m hermes_skillopt.cli artifact-hygiene-report --limit 200
 ```
@@ -107,8 +116,19 @@ CI evidence labels:
 
 - `conformance --mode quick`: local smoke/regression subset, not full repo health.
 - `conformance --mode full`: local adapter test run, not upstream benchmark parity.
+- `scout`: read-only notification summary and safe next commands; no scheduled adoption.
 - `artifact-hygiene-report`: read-only cleanup guidance; never deletes or resumes.
 - `benchmark`/`eval-only`: fixed-skill local report only; always non-adoptable.
+
+## 6a. Scheduled scout only
+
+If you want scheduled monitoring, schedule only scout and route the JSON to your notifier:
+
+```bash
+hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json
+```
+
+Do not schedule `optimize`, `adopt`, `rollback`, `upstream-update`, or cleanup commands from scout output. Treat `next_actions` and `safe_next_commands` as human-review prompts.
 
 ## 7. WebUI workflow
 
@@ -116,13 +136,15 @@ CI evidence labels:
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Use the WebUI guided wizard for staged smoke/review/production runs and the review console for decision summaries and artifacts. Server-side APIs keep `auto_adopt=false`, require typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
+Use the WebUI scout/status views for read-only readiness, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, digests, and artifacts. Server-side APIs keep scout/review read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
 
 ## 8. Runtime evidence and no-overclaim checklist
 
 Before reporting a production candidate, verify:
 
 - `review --summary` has `production_gate_eligible: true`, `test_gate_eligible: true`, and no blockers.
+- `review --summary`/`--digest` score provenance points to the intended target executor/backend, optimizer backend, eval pack id/version/fingerprint, and `score_source: production_curated_eval_pack`.
+- Eval inventory readiness shows `hermes-skillopt-readiness-adoptability-v1` gates as production eligible for the pack; advisory package metadata (`references/`, `templates/`, `scripts/`, `assets/`) was reviewed if relevant but not treated as adoption authority.
 - Frozen-Hermes evidence includes explicit class/scope, target config fingerprint, provider/model/toolset/session fingerprints, permissions with task commands disabled, isolated runtime evidence, transcript/trajectory, and execution-scoring evidence.
 - `scorecard` or static skill-text-only evidence is not called true frozen Hermes execution.
 - Task-provided commands are blocked by default and blocked-command rows are not production-gate eligible.

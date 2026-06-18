@@ -9,7 +9,7 @@ Current Phase0-Phase5 code provides deterministic, local, no-credential tooling 
 - Staged six-phase skill optimization over a single Hermes `SKILL.md` with explicit review/adopt/rollback gates.
 - Reviewed Hermes static seed eval packs, safe curated eval-pack authoring, session-mined review drafts, and safe upstream-style benchmark manifest import into Hermes eval pack format.
 - Runtime-evidence-aware target execution through deterministic scorecard/replay and the sandbox-backed `frozen_hermes_target_execution_v1` MVP.
-- Guided UX surfaces (`doctor`, `optimize --intent`, `review latest --summary`), WebUI wizard/review console, fleet/readiness reports, artifact hygiene reports, and local CI conformance reports.
+- Guided UX surfaces (`scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`), WebUI wizard/review console/API, fleet/readiness reports, artifact hygiene reports, and local CI conformance reports.
 
 No command in this adapter vendors Microsoft SkillOpt, imports upstream Python modules, executes upstream benchmark code, or requires external services.
 
@@ -38,7 +38,16 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Import, transfer, and conformance report writers share `guard_safe_output_path`: `.json` outputs cannot target live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular files, wrong suffixes, or symlink escapes.
 - Bounded edit validation checks replacement/inserted text for protected headings/markers and allowed-region marker boundary mutations, not just the matched old text.
 - Score artifacts distinguish production-curated evidence from review-only evidence through `production_curated_score`, `review_only_score`, per-task delta rows, expected-term/assertion change details, and held-out test sensitivity warnings.
-- Resume tooling is inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
+- Resume/tooling and artifact hygiene are inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints, `partial_continuation_available: false`, and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
+
+## P0-P2 unified readiness/review UX contracts
+
+- `readiness_adoptability` is the shared schema (`hermes-skillopt-readiness-adoptability-v1`) used by inventory, decision summaries, review digests, fleet/scout-style surfaces, and WebUI review APIs. It separates validation gate, production-best gate, held-out test gate, review-only status, blockers, warnings, and `next_safe_action`; it is descriptive and never an adoption side effect.
+- `eval-pack-inventory` returns `hermes-skillopt-eval-pack-inventory-v2` and a top-level `hermes-skillopt-readiness-matrix-v1`. It recognizes versioned `hermes-curated-eval-pack-v1` packs by `pack_id`, `version`, and fingerprint, including name-derived files such as `<skill>-thermal-v4.json`, while avoiding broad substring false matches.
+- `review --summary` / plugin `summary=true` returns decision-first JSON; `review --digest` / plugin `digest=true` / `review_digest()` returns a slim notification text plus artifact refs. Both separate validation, production-best, and held-out-test gates and keep `adoptable` distinct from `accepted` or review-only improvement.
+- `score_provenance` records target executor/backend, optimizer backend, eval pack identity/version/path/fingerprint, policy fingerprints, split labels, score fields, and warnings. Held-out test scores without `heldout_test_sensitivity` are reported with a warning and must not be overclaimed.
+- `scout` is a read-only notification surface for eval inventory, recent runs, artifact hygiene, package metadata, and safe next commands. Its mode explicitly states no full-run/optimize/adopt/rollback/fetch, and its cron recommendation is no-auto-adopt.
+- Skill package awareness is advisory only: sibling `references/`, `templates/`, `scripts/`, and `assets/` are summarized by path/hash/count after symlink/profile-boundary checks, with `content_included: false`; this does not expand adoption authority or editable scope.
 
 ## Phase0-Phase5 commands/modules
 
@@ -46,13 +55,17 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Read-only readiness/guided UX report: skill discovery, eval-pack inventory summary, recent staged runs, upstream parity posture, and intent-specific recommended commands.
   - Does not run evals, fetch, adopt, rollback, or write.
 
+- `python3 -m hermes_skillopt.cli scout [--skill SKILL] [--output skillopt/reports/scout.json]`
+  - Read-only notification-ready summary: skill/package metadata, eval-pack inventory/readiness, recent staged runs, artifact hygiene classifications, safe next commands, and scout-only cron guidance.
+  - Does not run full-run/optimize, fetch/update upstream, adopt, rollback, write live profile files, or create cron entries.
+
 - `python3 -m hermes_skillopt.cli optimize --intent smoke|review|production ...`
   - Guided staged-only wrapper over `full_run`; always disables auto-adopt and force.
   - `smoke` is review-only/mock-capable, `review` is staged review evidence, and `production` requires explicit eval file, strict gate, no mock optimizer, and later explicit adopt.
 
-- `python3 -m hermes_skillopt.cli review latest --summary`
+- `python3 -m hermes_skillopt.cli review latest --summary|--digest|--slim`
   - Decision-first review surface exposing production/test gate booleans, evidence class, blockers/not-adoptable reasons, artifact refs, and next safe action.
-  - `review latest --slim` returns path/hash/byte refs without large previews.
+  - `--digest` returns notification-friendly text with score provenance and path/hash refs; `--slim` returns path/hash/byte refs without large previews.
 
 - `python3 -m hermes_skillopt.cli batch-preflight PLAN.json`
   - Read-only validation of `hermes-skillopt-batch-plan-v1` data.
@@ -102,7 +115,8 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`, written only through the shared safe report path guard when an output file is requested.
 
 - `hermes_skillopt.core.artifact_hygiene_report(...)`
-  - Read-only staging classifier for verified, tampered, checkpoint-only, stale incomplete, missing-manifest, hash-mismatch, and orphaned batch/child artifacts.
+  - Read-only staging classifier for `complete_verified`, `tampered_hash_mismatch`, `checkpoint_only_recent`, `stale_incomplete_checkpoint_only`, `stale_checkpoint_only`, `missing_manifest_or_checkpoint`, and `orphaned_batch_child` artifacts.
+  - Each row includes artifact state, score provenance when available, `next_safe_action`, and `partial_continuation_available: false`.
   - Provides cleanup guidance only; no delete/resume/adopt/rollback/writeback behavior.
 
 - `hermes_skillopt.core.review(..., slim=True)`
@@ -110,11 +124,15 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Returns `artifact_refs` with diff/report path, SHA-256, byte size, and preview length; slim mode intentionally omits large `diff_preview`/`report_summary` payloads.
   - Includes `artifact_lineage` summaries for skill hashes, eval pack identity/fingerprint, target/provenance fingerprints, and tracked artifact state.
 
+- `hermes_skillopt.core.review_digest(...)`
+  - Notification-safe digest wrapper over the decision summary; returns `hermes-skillopt-review-digest-v1`, score provenance, blocker/warning snippets, next safe action, and artifact refs only.
+
 CLI equivalents (console script after editable install, or `python3 -m hermes_skillopt.cli ...` from the repo):
 
 - `hermes-skillopt doctor --skill SKILL`
+- `hermes-skillopt scout --skill SKILL`
 - `hermes-skillopt optimize --intent review --skill SKILL --eval-file PACK.json`
-- `hermes-skillopt review latest --summary`
+- `hermes-skillopt review latest --summary` or `hermes-skillopt review latest --digest`
 - `hermes-skillopt benchmark --skill SKILL --eval-file PACK.json`
 - `hermes-skillopt import-upstream-benchmark MANIFEST --output PACK.json`
 - `hermes-skillopt transfer-eval --run-id RUN --target scorecard --target replay --output report.json`
@@ -122,6 +140,8 @@ CLI equivalents (console script after editable install, or `python3 -m hermes_sk
 
 Hermes plugin tool equivalents registered in `plugin.yaml`:
 
+- `hermes_skillopt_scout`
+- `hermes_skillopt_review` with `summary`, `digest`, and `slim` modes
 - `hermes_skillopt_import_upstream_benchmark`
 - `hermes_skillopt_transfer_eval`
 - `hermes_skillopt_conformance`

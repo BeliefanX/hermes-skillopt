@@ -44,6 +44,7 @@ OPTIMIZE_PROPS = {**FULL_PROPS, "intent": {"type": "string", "enum": ["smoke", "
 
 SCHEMAS = {
     "hermes_skillopt_status": _schema("Show SkillOpt plugin status, discovered skill count, recent staged runs, lineage summaries, and stale/incomplete checkpoint rows.", COMMON_HOME),
+    "hermes_skillopt_scout": _schema("Read-only notification-ready SkillOpt scout summary: skills/eval-pack inventory, recent staged runs, artifact hygiene, advisory curator metadata, cron-safe recommendation, and exact safe next commands. Never runs full_run/optimize/adopt/rollback/fetch; optional output is guarded report-only JSON.", {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 5}, "stale_after_hours": {"type": "number", "default": 24.0}, "output": {"type": "string", "description": "Optional guarded .json report path; default returns JSON only and writes nothing."}}),
     "hermes_skillopt_doctor": _schema("Read-only SkillOpt readiness/guided UX report: profile paths, skill/eval readiness, recent runs, upstream/parity posture, production checklist, and next actions. Never runs full_run/adopt/rollback/fetch.", {**COMMON_HOME, "skill": {"type": "string"}}),
     "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
@@ -60,7 +61,7 @@ SCHEMAS = {
     "hermes_skillopt_eval_pack_curate": _schema("Create a canonical curated eval pack from inline tasks. Defaults review-only; production eligibility requires explicit production_policy and compliant execution contract.", {**COMMON_HOME, "skill": {"type": "string"}, "tasks": {"type": "array", "items": {"type": "object"}}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string", "default": "curated-v1"}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "tasks"]),
     "hermes_skillopt_eval_pack_mine_sessions": _schema("Read-only/draft mining of redacted sessions or session-like fixture file into a review-only eval pack; never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "query": {"type": "string"}, "lookback_days": {"type": "integer", "default": 14}, "limit": {"type": "integer", "default": 50}, "session_fixture": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_resume_inspect": _schema("Read-only step-level resume inspection: verifies checkpoint/stage fingerprints and artifact hashes; refuses unsafe partial continuation.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
-    "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview. run_id may be omitted or 'latest'; summary returns decision-first slim output.", {**COMMON_HOME, "run_id": {"type": "string"}, "latest": {"type": "boolean", "default": False}, "summary": {"type": "boolean", "default": False}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}),
+    "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview. run_id may be omitted or 'latest'; summary returns decision-first slim output; digest returns Telegram-friendly path/hash refs only.", {**COMMON_HOME, "run_id": {"type": "string"}, "latest": {"type": "boolean", "default": False}, "summary": {"type": "boolean", "default": False}, "digest": {"type": "boolean", "default": False, "description": "Return Telegram-friendly slim digest with separated readiness/adoptability fields and artifact refs, not raw report/diff."}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}),
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", ADOPT_PROPS, ["run_id"]),
     "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", ROLLBACK_PROPS, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
@@ -108,6 +109,10 @@ def _handle_status(args: dict, **kw) -> str:
     return _ok(lambda hermes_home=None: core.status(hermes_home), {"hermes_home": args.get("hermes_home")})
 
 
+def _handle_scout(args: dict, **kw) -> str:
+    return _ok(core.scout, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "limit": int(args.get("limit") or 5), "stale_after_hours": float(args.get("stale_after_hours") or 24.0), "output_path": args.get("output")})
+
+
 def _handle_doctor(args: dict, **kw) -> str:
     return _ok(core.doctor, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
 
@@ -141,6 +146,8 @@ def _handle_optimize(args: dict, **kw) -> str:
 
 def _handle_review(args: dict, **kw) -> str:
     rid = "latest" if bool(args.get("latest", False)) else (args.get("run_id") or "latest")
+    if bool(args.get("digest", False)):
+        return _ok(core.review_digest, {"run_id": rid, "hermes_home_path": args.get("hermes_home")})
     if bool(args.get("summary", False)):
         return _ok(core.review_decision_summary, {"run_id": rid, "hermes_home_path": args.get("hermes_home")})
     if rid == "latest":
@@ -254,6 +261,7 @@ def _handle_handoff_optimize(args: dict, **kw) -> str:
 
 _TOOLS = (
     ("hermes_skillopt_status", SCHEMAS["hermes_skillopt_status"], _handle_status, "🧰"),
+    ("hermes_skillopt_scout", SCHEMAS["hermes_skillopt_scout"], _handle_scout, "🔭"),
     ("hermes_skillopt_doctor", SCHEMAS["hermes_skillopt_doctor"], _handle_doctor, "🩺"),
     ("hermes_skillopt_dry_run", SCHEMAS["hermes_skillopt_dry_run"], _handle_dry_run, "🧪"),
     ("hermes_skillopt_run", SCHEMAS["hermes_skillopt_run"], _handle_run, "🧠"),

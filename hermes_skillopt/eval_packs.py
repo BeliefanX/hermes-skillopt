@@ -21,6 +21,15 @@ def _candidate_eval_paths(home: Path, skill: core.Skill) -> list[Path]:
     for name in names:
         for suffix in (".json", ".jsonl"):
             out.append(home / "skillopt" / "evals" / f"{name}{suffix}")
+    profile_eval_dir = home / "skillopt" / "evals"
+    if profile_eval_dir.is_dir():
+        # Conservative name-derived discovery for run/versioned packs such as
+        # <skill>-thermal-v3.json.  Avoid broad substring matches: the stem must
+        # be exactly the skill/dir name or begin with a safe delimiter.
+        for p in sorted(list(profile_eval_dir.glob("*.json")) + list(profile_eval_dir.glob("*.jsonl"))):
+            stem = p.stem
+            if any(stem == name or stem.startswith(f"{name}-") or stem.startswith(f"{name}_") or stem.startswith(f"{name}.") for name in names if name):
+                out.append(p)
     local_eval_dir = skill.path.parent / "evals"
     if local_eval_dir.is_dir():
         out.extend(sorted(local_eval_dir.glob("*.json")))
@@ -100,6 +109,15 @@ def _recommended_next_action(*, packs: list[dict[str, Any]], invalid_packs: list
     if static:
         return "replace_static_review_pack_with_curated_replay_or_frozen_target_contract"
     return "curate_production_policy_and_explicit_val_test_scorecards"
+
+
+def _pack_readiness_schema(*, packs: list[dict[str, Any]], missing_reasons: list[str], recommendation: str) -> dict[str, Any]:
+    production_ready = any(p.get("production_eligible") for p in packs)
+    review_only = bool(packs) and not production_ready
+    validation_gate = {"present": any(_pack_split_complete(p) for p in packs), "accepted": production_ready, "reason": "eval pack has complete train/validation/test splits" if packs else "no matching eval pack found"}
+    production_best_gate = {"present": production_ready, "accepted": production_ready, "reason": "pack production policy and execution contract allow production adoption" if production_ready else "no production-eligible eval pack discovered"}
+    heldout_test_gate = {"present": any(int((p.get("split_counts") or {}).get("test") or 0) > 0 for p in packs if p.get("valid")), "eligible": production_ready, "reason": "held-out test split present in a production-eligible pack" if production_ready else "missing production-eligible held-out test evidence"}
+    return {"schema_version": "hermes-skillopt-readiness-adoptability-v1", "validation_gate": validation_gate, "production_best_gate": production_best_gate, "heldout_test_gate": heldout_test_gate, "adoptable": False, "production_gate_eligible": production_ready, "test_gate_eligible": production_ready, "review_only": review_only, "blockers": [] if production_ready else list(missing_reasons), "warnings": ["inventory is discovery-only; run strict production optimize before adopt"] if production_ready else [], "next_safe_action": recommendation}
 
 
 def _readiness_matrix(entries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -182,10 +200,12 @@ def eval_pack_inventory(*, hermes_home_path: str | None = None, skill: str | Non
         pack_missing_reasons = sorted({str(r) for p in packs for r in (p.get("missing_reasons") or []) if r})
         missing_reasons = pack_missing_reasons or ([] if packs else ["no matching eval pack found"])
         recommendation = _recommended_next_action(packs=packs, invalid_packs=invalid_packs)
+        readiness = _pack_readiness_schema(packs=packs, missing_reasons=missing_reasons, recommendation=recommendation)
         entries.append({
             "skill": sk.name,
             "skill_relpath": sk.relpath,
             "skill_sha256": sk.sha256,
+            "skill_package_support": core._safe_skill_package_support(sk, home),
             "skill_type": classify_skill_type(sk),
             "candidate_eval_paths": [str(p) for p in candidates],
             "eval_packs": packs,
@@ -198,10 +218,12 @@ def eval_pack_inventory(*, hermes_home_path: str | None = None, skill: str | Non
             "recommended_next_action": recommendation,
             "recommendation": recommendation,
             "missing_reasons": missing_reasons,
+            "readiness_adoptability": readiness,
         })
     matrix = _readiness_matrix(entries)
     return {
         "success": True,
+        "schema_version": "hermes-skillopt-eval-pack-inventory-v2",
         "mode": "eval_pack_inventory_read_only",
         "hermes_home": str(home),
         "skill_count": len(entries),

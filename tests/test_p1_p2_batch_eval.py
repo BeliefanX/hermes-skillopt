@@ -153,6 +153,26 @@ def test_eval_pack_inventory_and_scaffold_are_review_only(tmp_path):
     assert all(t["production_gate_eligible"] is False for t in payload["tasks"])
 
 
+def test_eval_pack_inventory_discovers_versioned_name_derived_packs_without_broad_false_matches(tmp_path):
+    make_skill(tmp_path, "demo")
+    versioned = write_production_eval(tmp_path, "demo-thermal-v3")
+    unrelated = write_review_eval(tmp_path, "demographic")
+
+    inv = eval_pack_inventory(hermes_home_path=str(tmp_path), skill="demo")
+    entry = inv["skills"][0]
+    paths = {p["path"] for p in entry["eval_packs"]}
+
+    assert str(versioned.resolve()) in paths
+    assert str(unrelated.resolve()) not in paths
+    assert entry["production_eligible"] is True
+    readiness = entry["readiness_adoptability"]
+    assert readiness["schema_version"] == "hermes-skillopt-readiness-adoptability-v1"
+    assert readiness["production_gate_eligible"] is True
+    assert readiness["test_gate_eligible"] is True
+    assert readiness["adoptable"] is False
+    assert "inventory is discovery-only" in readiness["warnings"][0]
+
+
 def test_curated_eval_pack_factory_validates_and_can_be_production_eligible(tmp_path):
     make_skill(tmp_path, "demo")
     out_path = tmp_path / "skillopt" / "evals" / "demo-curated.json"
@@ -429,10 +449,15 @@ def test_artifact_hygiene_report_classifies_verified_tampered_checkpoint_stale_a
     assert before == after
     by_id = {row["run_id"]: row for row in report["runs"]}
     assert by_id[verified["run_id"]]["classification"] == "complete_verified"
-    assert by_id[tampered["run_id"]]["classification"] == "complete_tampered"
+    assert by_id[tampered["run_id"]]["classification"] == "tampered_hash_mismatch"
+    assert by_id[tampered["run_id"]]["partial_continuation_available"] is False
+    assert "Do not adopt or reuse" in by_id[tampered["run_id"]]["next_safe_action"]
     assert by_id["recent-cp"]["classification"] == "checkpoint_only_recent"
-    assert by_id["stale-cp"]["classification"] == "stale_incomplete"
-    assert by_id["batch-orphan"]["classification"] == "orphaned_batch_child_mismatch"
+    assert by_id["recent-cp"]["partial_continuation_available"] is False
+    assert by_id["stale-cp"]["classification"] == "stale_incomplete_checkpoint_only"
+    assert "new full run" in by_id["stale-cp"]["next_safe_action"]
+    assert by_id["batch-orphan"]["classification"] == "orphaned_batch_child"
+    assert "missing children" in by_id["batch-orphan"]["next_safe_action"]
     assert report["mode"].startswith("read_only_artifact_hygiene_report")
     assert "does not delete" in report["read_only_guards"]
 

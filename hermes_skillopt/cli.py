@@ -67,6 +67,11 @@ def main() -> int:
     p.add_argument("--home", dest="home")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
+    scout_p = sub.add_parser("scout", help="Read-only notification-ready SkillOpt scout summary; no full_run/optimize/adopt/rollback/fetch")
+    scout_p.add_argument("--skill")
+    scout_p.add_argument("--limit", type=int, default=5)
+    scout_p.add_argument("--stale-after-hours", type=float, default=24.0)
+    scout_p.add_argument("--output", help="Optional guarded JSON report path under skillopt/reports or staging; default writes nothing")
     def add_fleet_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--limit", type=int, default=50, help="Max recent staging run directories to inspect (capped at 200)")
         parser.add_argument("--skill", help="Optional skill_name filter")
@@ -107,6 +112,7 @@ def main() -> int:
     r.add_argument("run_id", nargs="?", default="latest")
     r.add_argument("--latest", action="store_true")
     r.add_argument("--summary", action="store_true")
+    r.add_argument("--digest", action="store_true", help="Telegram-friendly slim digest with decision fields and artifact refs only")
     r.add_argument("--slim", action="store_true")
     r.add_argument("--include-diff-chars", type=int, default=4000)
     ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
@@ -134,6 +140,8 @@ def main() -> int:
     args = p.parse_args()
     if args.cmd == "status":
         out = core.status(args.home)
+    elif args.cmd == "scout":
+        out = core.scout(args.home, skill=args.skill, limit=args.limit, stale_after_hours=args.stale_after_hours, output_path=args.output)
     elif args.cmd == "doctor":
         out = core.doctor(args.home, skill=args.skill)
     elif args.cmd == "dry-run":
@@ -193,7 +201,9 @@ def main() -> int:
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
         rid = "latest" if args.latest else args.run_id
-        if args.summary:
+        if args.digest:
+            out = core.review_digest(rid, args.home)
+        elif args.summary:
             out = core.review_decision_summary(rid, args.home)
         elif rid == "latest":
             out = core.review_latest(args.home, include_diff_chars=args.include_diff_chars, slim=args.slim)

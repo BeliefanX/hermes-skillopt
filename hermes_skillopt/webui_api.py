@@ -45,6 +45,10 @@ def status(home: str | None = None) -> dict[str, Any]:
     return core.status(home or None)
 
 
+def scout(home: str | None = None, skill: str | None = None, limit: int = 5) -> dict[str, Any]:
+    return core.scout(home or None, skill=skill or None, limit=limit)
+
+
 def run_full(payload: dict[str, Any]) -> dict[str, Any]:
     """Run full cycle from WebUI, always staged-only and never force-adopt."""
     intent = str(payload.get("intent") or "review").strip().lower()

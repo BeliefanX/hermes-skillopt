@@ -11,8 +11,9 @@
   - upstream benchmark adapter levels are explicit: `json_import_only` and `pinned_manifest_replay` are supported data-only evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported/future.
 
 - Documents latest guided/runtime/CI hardening deltas:
-  - `doctor`, `optimize --intent smoke|review|production`, `review latest --summary`, CLI adopt confirmation, and WebUI wizard/review console are aligned around staged-only/no-auto-adopt behavior;
-  - decision summaries expose production/test gate status, evidence class, blockers, artifact refs, and next safe action;
+  - `scout`, `doctor`, `optimize --intent smoke|review|production`, `review latest --summary`, `review --digest`, CLI adopt confirmation, and WebUI scout/wizard/review console APIs are aligned around staged-only/no-auto-adopt behavior;
+  - unified readiness/adoptability schema (`hermes-skillopt-readiness-adoptability-v1`) and readiness matrix (`hermes-skillopt-readiness-matrix-v1`) separate validation, production-best, held-out-test, review-only, blockers, warnings, and safe next actions;
+  - decision summaries/digests expose production/test gate status, evidence class, blockers, score provenance, artifact refs, and next safe action; digest is notification-friendly and omits raw report/diff previews;
   - missing runtime evidence for adoption-eligible frozen-target contracts downgrades production eligibility; scorecard/static skill-text evidence remains review-only and must not be described as true frozen Hermes execution;
   - sandbox/frozen-Hermes target evidence records explicit evidence class/scope, isolated runtime fingerprints, permissions with task commands disabled, transcript/trajectory, and execution-scoring evidence; task-provided commands are blocked by default;
   - production hard-failed rows override soft score gains, and artifact hygiene/conformance remain read-only local CI aids with no upstream benchmark parity claim.
@@ -21,7 +22,9 @@
   - shared `safety.py` report/eval output guard now covers benchmark import, transfer eval, and conformance reports, blocking live/runtime-sensitive profile/plugin/source paths and symlink escapes;
   - bounded edit validation now checks replacement/insert text for protected headings/markers and allowed-region marker boundary mutations;
   - `frozen-hermes` / `frozen_hermes_target_execution_v1` is a sandbox-backed Hermes target execution MVP with isolated runtime evidence, provider/model/toolset/session fingerprints, transcript/trajectory scoring evidence, task commands disabled, and no live writes;
-  - reports distinguish production-curated score from review-only score, include score ledgers/per-task deltas with expected-term/assertion changes, and surface held-out test sensitivity warnings;
+  - reports distinguish production-curated score from review-only score, include score ledgers/per-task deltas with expected-term/assertion changes, expose score provenance fields, and surface held-out test sensitivity warnings;
+  - artifact hygiene rows classify verified/tampered/checkpoint/stale/orphaned states with `partial_continuation_available: false` and safe next actions;
+  - advisory skill package metadata (`references/`, `templates/`, `scripts/`, `assets/`) is surfaced for curator awareness without changing staged-only write scope or adoption authority;
   - upstream/benchmark reporting remains import-only/data-only with no Microsoft SkillOpt upstream execution/parity claim, no upstream Python import/network/task commands, and no live skill writes;
   - transfer eval remains report-only/read-only, now surfaces readiness/skill-type/evidence-contract summaries, and staged-only history/rejected/slow metadata remains audit evidence.
 

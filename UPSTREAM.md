@@ -17,7 +17,7 @@ The adapter implements SkillOpt-inspired concepts in Hermes terms:
 - `TargetExecutor` runs frozen replay/sandbox/scorecard evaluation; `frozen-hermes` / `frozen_hermes_target_execution_v1` currently routes to the constrained sandbox MVP with isolated runtime/provider/model/toolset/session evidence.
 - `OptimizerBackend` emits bounded edits only.
 - `HermesSkillEnv` builds curated/session/fallback train/validation/test tasks, with bundled static review seed packs under `examples/evals/` for review/training evidence only.
-- Hermes safety remains outside the trainer: staged-only artifacts, explicit review/adopt/rollback, artifact hashes, path/SHA guards, active-profile isolation.
+- Hermes safety remains outside the trainer: staged-only artifacts, read-only scout/review/digest surfaces, explicit review/adopt/rollback, artifact hashes, path/SHA guards, active-profile isolation.
 
 This is still not Microsoft’s official trainer package. Upstream changes must be reviewed and ported deliberately in small Hermes-safe changes.
 
@@ -58,7 +58,9 @@ Semantics:
 - `fleet_ux`: fleet/rollback reports group local Hermes runs by skill/type/readiness/adoptability/rollbackability and expose per-run rollback guard status; they are reporting surfaces, not upstream orchestration parity.
 - `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
 - `safe_outputs`: import/transfer/conformance report writers share a safe output path guard that blocks live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular outputs, wrong suffixes, and symlink escapes.
-- `guided_review_ux`: `doctor`, `optimize --intent`, `review latest --summary`, WebUI wizard/review console, and CLI/WebUI typed adopt confirmation are Hermes safety surfaces, not upstream parity claims.
+- `guided_review_ux`: `scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`, WebUI scout/wizard/review console, and CLI/WebUI typed adopt confirmation are Hermes safety surfaces, not upstream parity claims.
+- `readiness_review_schema`: inventory/review/WebUI/scout use `hermes-skillopt-readiness-adoptability-v1`, `hermes-skillopt-readiness-matrix-v1`, score provenance, and slim artifact refs to separate review-only acceptance from production/test adoptability.
+- `skill_package_awareness`: local Hermes skills may have `references/`, `templates/`, `scripts/`, and `assets/` summarized as advisory path/hash/count metadata only; upstream parity and adoption authority are unchanged.
 - `artifact_hygiene`: staging hygiene reports classify local artifact state for cleanup planning only; they do not delete, resume, adopt, or rollback.
 
 ## Upstream benchmark adapter levels
@@ -79,6 +81,7 @@ Supported local parity levels are intentionally limited to Hermes-native eval-pa
 The current adapter’s production adoption gates depend on local curated eval files, not on upstream code:
 
 - Explicit JSON/JSONL eval files under `$HERMES_HOME` can provide production validation and test tasks only when they are `hermes-curated-eval-pack-v1`, opt in through production policy, are not sample/static/keyword packs, and declare an adoption-eligible eval execution contract.
+- Eval inventory recognizes versioned pack metadata (`pack_id`, `version`, fingerprint) and conservative name-derived versioned pack files, then reports the unified readiness/adoptability schema; inventory readiness is discovery evidence only and does not authorize adoption by itself.
 - Validation adoption evidence requires eligible curated validation tasks and strict candidate improvement.
 - Held-out test eligibility requires eligible curated test tasks passing threshold.
 - Fallback, synthetic, session-mined, sample/static keyword packs, report-only replay contracts, and legacy dry-run evidence remains review-only.
@@ -107,6 +110,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - Sandbox/frozen-Hermes support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor or real upstream benchmark runner.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
 - `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; safe `json_import_only` and data-only `pinned_manifest_replay` conversion are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. Transfer eval does not create real cross-model claims. Reports distinguish production-curated scores from review-only scores and surface per-task deltas/ledger evidence rather than collapsing all evidence into a single benchmark claim.
+- `scout` and `review --digest` are notification/review conveniences only: they surface safe next actions, score provenance, gate separation, and artifact refs, but never fetch upstream, run optimizers, adopt, rollback, schedule cron, or claim parity.
 
 ## Upstream diff/status workflow
 
