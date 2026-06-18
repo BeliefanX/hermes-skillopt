@@ -54,7 +54,8 @@ Semantics:
 - `benchmarks_tests`: upstream benchmark ideas are adapted as Hermes eval packs plus explicit curated validation/test policy; current bundled `examples/evals/` packs are static review fixtures and cannot authorize adoption.
 - `benchmark_report`: CLI `benchmark` aliases eval-only and writes a reproducible local `hermes-native-benchmark-report-v1` with skill/eval/target fingerprints and read-only safety flags.
 - `benchmark_bridge`: upstream-style benchmark manifests are accepted only as inert JSON data and converted to Hermes eval packs; executable/remote benchmark fields are rejected.
-- `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text, not live cross-model training or writeback.
+- `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text with readiness/skill-type/evidence-contract summaries, not live cross-model training, upstream parity, or writeback.
+- `fleet_ux`: fleet/rollback reports group local Hermes runs by skill/type/readiness/adoptability/rollbackability and expose per-run rollback guard status; they are reporting surfaces, not upstream orchestration parity.
 - `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
 - `safe_outputs`: import/transfer/conformance report writers share a safe output path guard that blocks live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular outputs, wrong suffixes, and symlink escapes.
 
@@ -68,6 +69,8 @@ Semantics:
 - `parity_evidence_complete` — unsupported/future. This would require comparable pinned upstream execution evidence plus mapped Hermes eval evidence; it is not available on this branch.
 
 Consequently, `benchmark`, `eval-only`, `import-upstream-benchmark`, transfer eval, and sandbox-backed `frozen-hermes` results are local Hermes evidence. They must not be described as Microsoft SkillOpt upstream benchmark parity or external performance results.
+
+Supported local parity levels are intentionally limited to Hermes-native eval-pack replay plus JSON/pinned-manifest conversion evidence. Unsupported levels remain `pinned_upstream_execution`, `parity_evidence_complete`, arbitrary live Hermes command execution, and any claim that local transfer/fleet reports prove Microsoft SkillOpt benchmark behavior.
 
 ## Curated eval and gate alignment
 

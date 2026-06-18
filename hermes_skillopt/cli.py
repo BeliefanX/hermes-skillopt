@@ -47,10 +47,17 @@ def main() -> int:
     add_fleet_args(fres)
     frb = sub.add_parser("fleet-rollback-plan", help="Read-only rollback plan; lists per-run rollbackable backups, no bulk rollback/writeback")
     add_fleet_args(frb)
+    hyg = sub.add_parser("artifact-hygiene-report", help="Read-only staging artifact hygiene planner; classifies stale/tampered/orphaned run dirs and never deletes")
+    hyg.add_argument("--limit", type=int, default=200)
+    hyg.add_argument("--stale-after-hours", type=float, default=24.0)
     inv = sub.add_parser("eval-pack-inventory", help="Read-only inventory of skills and matching eval packs")
     inv.add_argument("--skill")
     scaf = sub.add_parser("eval-pack-scaffold", help="Generate a review-only eval-pack scaffold with train/val/test samples")
     scaf.add_argument("--skill", required=True); scaf.add_argument("--output"); scaf.add_argument("--overwrite", action="store_true")
+    cur = sub.add_parser("eval-pack-curate", help="Create a safe curated eval pack from a local tasks JSON file; review-only unless explicit production policy is supplied")
+    cur.add_argument("--skill", required=True); cur.add_argument("--tasks", required=True, help="Local JSON list or {'tasks':[...]} file"); cur.add_argument("--output"); cur.add_argument("--pack-id"); cur.add_argument("--version", default="curated-v1"); cur.add_argument("--production-policy", help="Optional local JSON policy file"); cur.add_argument("--eval-execution-contract", help="Optional local JSON execution contract file"); cur.add_argument("--overwrite", action="store_true")
+    mine = sub.add_parser("eval-pack-mine-sessions", help="Mine redacted sessions/session-like fixtures into a draft review-only eval pack")
+    mine.add_argument("--skill", required=True); mine.add_argument("--output"); mine.add_argument("--query"); mine.add_argument("--lookback-days", type=int, default=14); mine.add_argument("--limit", type=int, default=50); mine.add_argument("--session-fixture"); mine.add_argument("--overwrite", action="store_true")
     eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
     eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
@@ -98,12 +105,27 @@ def main() -> int:
         out = core.fleet_resume_plan(args.home, limit=args.limit, skill=args.skill)
     elif args.cmd == "fleet-rollback-plan":
         out = core.fleet_rollback_plan(args.home, limit=args.limit, skill=args.skill)
+    elif args.cmd == "artifact-hygiene-report":
+        out = core.artifact_hygiene_report(args.home, limit=args.limit, stale_after_hours=args.stale_after_hours)
     elif args.cmd == "eval-pack-inventory":
         from hermes_skillopt.eval_packs import eval_pack_inventory
         out = eval_pack_inventory(hermes_home_path=args.home, skill=args.skill)
     elif args.cmd == "eval-pack-scaffold":
         from hermes_skillopt.eval_packs import scaffold_eval_pack
         out = scaffold_eval_pack(skill=args.skill, output=args.output, hermes_home_path=args.home, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-curate":
+        from pathlib import Path
+        from hermes_skillopt.eval_packs import create_curated_eval_pack
+        tasks_payload = json.loads(Path(args.tasks).read_text(encoding="utf-8"))
+        tasks_obj = tasks_payload.get("tasks") if isinstance(tasks_payload, dict) else tasks_payload
+        if not isinstance(tasks_obj, list):
+            raise ValueError("--tasks must contain a JSON list or {'tasks': [...]} object")
+        policy = json.loads(Path(args.production_policy).read_text(encoding="utf-8")) if args.production_policy else None
+        contract = json.loads(Path(args.eval_execution_contract).read_text(encoding="utf-8")) if args.eval_execution_contract else None
+        out = create_curated_eval_pack(skill=args.skill, tasks=tasks_obj, output=args.output, hermes_home_path=args.home, pack_id=args.pack_id, version=args.version, production_policy=policy, eval_execution_contract=contract, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-mine-sessions":
+        from hermes_skillopt.eval_packs import mine_session_eval_pack
+        out = mine_session_eval_pack(skill=args.skill, output=args.output, hermes_home_path=args.home, query=args.query, lookback_days=args.lookback_days, limit=args.limit, session_fixture=args.session_fixture, overwrite=args.overwrite)
     elif args.cmd in {"eval-only", "benchmark"}:
         out = core.eval_only(skill=args.skill, skill_file=args.skill_file, eval_file=args.eval_file, hermes_home_path=args.home, target_executor=args.target_executor, target_backend=args.target_backend)
     elif args.cmd == "run" and args.mode == "legacy":

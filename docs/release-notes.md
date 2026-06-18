@@ -5,8 +5,8 @@
 - Documents latest batch/eval/fleet/WebUI/upstream status surfaces:
   - batch preflight validates data-only plans, budget caps, backend/target/gate policy, production-intent requirements, and forbidden writeback fields before any job runs;
   - batch run is staged-only, writes batch parent artifacts, and calls child `full_run` with `auto_adopt=false` and `force=false`;
-  - fleet report/resume-plan/rollback-plan are read-only planning surfaces; completed exact-fingerprint reuse remains opt-in, partial continuation is refused, and rollback remains per-run only;
-  - eval-pack inventory/scaffold exposes missing or review-only coverage instead of implying every skill has a curated pack; scaffold output is sample/review-only and not production evidence;
+  - fleet report/resume-plan/rollback-plan are read-only planning surfaces; completed exact-fingerprint reuse remains opt-in, partial continuation is refused, rollback remains per-run only, report rows include readiness/skill-type/evidence-contract status, grouping covers skill/type/readiness/adoptability/rollbackability, and rollback plans include safely readable backup/current-SHA status plus exact one-run commands;
+  - eval-pack inventory/scaffold/curate/session-mining exposes missing or review-only coverage instead of implying every skill has a curated pack; scaffold/session-mined output is review-only, and the curated factory is production-capable only with explicit policy plus adoption-eligible execution contract;
   - React/FastAPI WebUI now exposes fleet/upstream parity surfaces while keeping runs staged-only and defaulting to review-oriented soft gating; production adoption still requires strict/non-mock/curated val-test proof plus explicit guarded adopt;
   - upstream benchmark adapter levels are explicit: `json_import_only` and `pinned_manifest_replay` are supported data-only evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported/future.
 
@@ -16,7 +16,7 @@
   - `frozen-hermes` / `frozen_hermes_target_execution_v1` is a sandbox-backed Hermes target execution MVP with isolated runtime evidence, provider/model/toolset/session fingerprints, transcript/trajectory scoring evidence, task commands disabled, and no live writes;
   - reports distinguish production-curated score from review-only score, include score ledgers/per-task deltas with expected-term/assertion changes, and surface held-out test sensitivity warnings;
   - upstream/benchmark reporting remains import-only/data-only with no Microsoft SkillOpt upstream execution/parity claim, no upstream Python import/network/task commands, and no live skill writes;
-  - transfer eval remains report-only/read-only and staged-only history/rejected/slow metadata remains audit evidence.
+  - transfer eval remains report-only/read-only, now surfaces readiness/skill-type/evidence-contract summaries, and staged-only history/rejected/slow metadata remains audit evidence.
 
 - Documents current Phase0-3 behavior: staged-only Hermes SkillOpt-inspired adapter, eval-only/benchmark fixed-skill scoring with `hermes-native-benchmark-report-v1`, deterministic trainer batch metadata, provenance v2, separated optimizer/target backends, default `strict` gate mode, hard production validation failure overrides, conservative resume/checkpoint inspection with lineage summaries, history/lineage, slow_meta evidence, EnvAdapter benchmark/session foundation, benchmark bridge, transfer eval, conformance, and WebUI review surfaces.
 - Records latest eval hardening tasks 1-5:

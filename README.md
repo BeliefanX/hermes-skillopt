@@ -64,6 +64,8 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_fleet_rollback_plan`: read-only per-run rollback planning surface; no bulk rollback or writeback.
 - `hermes_skillopt_eval_pack_inventory`: read-only inventory of discovered skills and matching eval packs, surfacing split completeness, production eligibility, review-only status, and missing-pack gaps.
 - `hermes_skillopt_eval_pack_scaffold`: creates a review-only train/validation/test scaffold pack; it is a starter template, not production evidence.
+- `hermes_skillopt_eval_pack_curate`: curated eval-pack factory for local task JSON; review-only by default, production-capable only with explicit policy and adoption-eligible execution contract.
+- `hermes_skillopt_eval_pack_mine_sessions`: mines redacted sessions/session-like fixtures into draft review-only eval packs; never production evidence.
 - `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay or unsafe partial continuation.
 - `hermes_skillopt_dry_run`: legacy staged proposal; review-only.
 - `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, lineage, report/diff paths, artifact refs, and previews; `slim=true` omits large previews and returns path/hash/byte references.
@@ -131,7 +133,7 @@ python3 -m hermes_skillopt.cli fleet-resume-plan --skill my-skill
 python3 -m hermes_skillopt.cli fleet-rollback-plan --limit 20
 ```
 
-Preflight is read-only and rejects unsupported schema, budget overages, invalid backend/gate values, forbidden writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.), and production-intent jobs missing `skill` or `eval_file`. Current batch target validation accepts `auto|replay|sandbox|scorecard|live-readonly`; use normal `full-run` for explicit `frozen-hermes` aliases. `batch-run` always creates a batch parent staging directory and never adopts. Fleet commands are read-only planning/reporting surfaces: they inspect manifests/checkpoints/backups and emit guidance, but do not resume, delete, bulk rollback, or write skills.
+Preflight is read-only and rejects unsupported schema, budget overages, invalid backend/gate values, forbidden writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.), and production-intent jobs missing `skill` or `eval_file`. Current batch target validation accepts `auto|replay|sandbox|scorecard|live-readonly|frozen-hermes|frozen_hermes_target_execution_v1`; the frozen aliases route to the constrained sandbox MVP evidence contract and do not imply upstream parity. `batch-run` always creates a batch parent staging directory and never adopts. Fleet commands are read-only planning/reporting surfaces: they inspect manifests/checkpoints/backups and emit guidance, but do not resume, delete, bulk rollback, or write skills. `fleet-report` now groups runs by skill, advisory skill type, readiness, adoptability, and rollbackability and includes readiness/evidence-contract summaries. `fleet-rollback-plan` reports safely readable backup/current-SHA status and an exact one-run command (`hermes-skillopt rollback <run_id>`); it still never performs rollback itself.
 
 ## Full-run lifecycle
 
@@ -184,15 +186,17 @@ It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval
 
 Curated evals may be JSONL, JSON (`[...]` or `{ "tasks": [...] }`), or a versioned eval pack (`{ "schema_version": "hermes-curated-eval-pack-v1", "pack_id": "...", "version": "...", "tasks": [...] }`). An explicit `eval_file` must resolve to a regular file inside the active `$HERMES_HOME`; default discovery checks `$HERMES_HOME/skillopt/evals/<skill-name>.jsonl` and then `evals/*.jsonl` under the skill directory.
 
-Use inventory/scaffold before assuming coverage exists:
+Use inventory/scaffold/curate/mining before assuming coverage exists:
 
 ```bash
 python3 -m hermes_skillopt.cli eval-pack-inventory
 python3 -m hermes_skillopt.cli eval-pack-inventory --skill my-skill
 python3 -m hermes_skillopt.cli eval-pack-scaffold --skill my-skill --output skillopt/evals/my-skill-scaffold.json
+python3 -m hermes_skillopt.cli eval-pack-curate --skill my-skill --tasks local-tasks.json --output skillopt/evals/my-skill-curated.json
+python3 -m hermes_skillopt.cli eval-pack-mine-sessions --skill my-skill --output skillopt/evals/my-skill-session-draft.json
 ```
 
-`eval-pack-inventory` is read-only and reports candidate paths, existing packs, valid/invalid status, split counts, production-eligible task counts, review-only flags, and missing reasons. It deliberately surfaces gaps: most skills should be treated as lacking true curated train/validation/test packs until inventory shows a valid production-eligible pack. `eval-pack-scaffold` writes a safe `.json` starter with train/validation/test examples, `sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`, and `eval_execution_contract.classification: static_review_only`; replacing the sample tasks with curated evidence is required before any production claim.
+`eval-pack-inventory` is read-only and reports candidate paths, existing packs, valid/invalid status, split counts, production-eligible task counts, review-only flags, missing reasons, advisory skill type, and a readiness matrix. It deliberately surfaces gaps: most skills should be treated as lacking true curated train/validation/test packs until inventory shows a valid production-eligible pack. `eval-pack-scaffold` writes a safe `.json` starter with train/validation/test examples, `sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`, and `eval_execution_contract.classification: static_review_only`; replacing the sample tasks with curated evidence is required before any production claim. `eval-pack-curate` is the canonical curated factory for local task JSON and remains review-only unless explicit production policy and contract evidence are supplied. `eval-pack-mine-sessions` creates redacted session-mined draft packs for review only; mined/session artifacts cannot authorize production adoption.
 
 A sample Hermes-native pack template is bundled at `hermes_skillopt/eval_packs/hermes_native_core_v1.json` and covers tool-use correctness, delegation/handoff, file editing safety, research grounding/no fabrication, profile isolation, and adopt/rollback safety. That package-level sample pack is review-only.
 

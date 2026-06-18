@@ -12,8 +12,11 @@ provides_tools:
   - hermes_skillopt_fleet_report
   - hermes_skillopt_fleet_resume_plan
   - hermes_skillopt_fleet_rollback_plan
+  - hermes_skillopt_artifact_hygiene_report
   - hermes_skillopt_eval_pack_inventory
   - hermes_skillopt_eval_pack_scaffold
+  - hermes_skillopt_eval_pack_curate
+  - hermes_skillopt_eval_pack_mine_sessions
   - hermes_skillopt_resume_inspect
   - hermes_skillopt_review
   - hermes_skillopt_adopt

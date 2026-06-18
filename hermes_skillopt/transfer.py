@@ -23,6 +23,34 @@ def _profile_fingerprint(home: Path) -> dict[str, Any]:
     return {**payload, "fingerprint_sha256": _stable_sha(payload)}
 
 
+def _skill_type_summary(*, home: Path, skill_source: dict[str, Any], skill_text: str) -> dict[str, Any]:
+    """Best-effort advisory skill type for transfer reports; never a hard gate."""
+
+    try:
+        from hermes_skillopt import core
+        from hermes_skillopt.skill_types import classify_skill_type
+
+        if skill_source.get("source") == "staged_run" and skill_source.get("run_dir"):
+            manifest = core.load_manifest(Path(str(skill_source["run_dir"])))
+            relpath = str(manifest.get("skill_relpath") or "skills/unknown/SKILL.md")
+            name = str(manifest.get("skill_name") or Path(relpath).parent.name)
+            path = (home / relpath).resolve()
+        elif skill_source.get("path"):
+            path = Path(str(skill_source["path"])).resolve()
+            name = path.parent.name
+            try:
+                relpath = str(path.relative_to(home.resolve()))
+            except ValueError:
+                relpath = str(path)
+        else:
+            path = home / "skills" / "unknown" / "SKILL.md"
+            name = "unknown"
+            relpath = "skills/unknown/SKILL.md"
+        return classify_skill_type(core.Skill(name=name, path=path, relpath=relpath, sha256=hashlib.sha256(skill_text.encode("utf-8")).hexdigest()), text=skill_text)
+    except Exception as exc:
+        return {"category": "unknown", "confidence": "none", "advisory_only": True, "hard_gate": False, "reason": f"classification unavailable: {type(exc).__name__}: {exc}"}
+
+
 def _runner_for_target(target: str):
     if target == "scorecard":
         return DeterministicKeywordScorecard()
@@ -135,6 +163,15 @@ def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = N
         raise ValueError("eval_file is required when staged task artifacts are not available")
 
     task_splits = sorted({t.split for t in tasks})
+    skill_type = _skill_type_summary(home=home, skill_source=skill_source, skill_text=skill_text)
+    contract_raw = eval_meta.get("eval_execution_contract") if isinstance(eval_meta, dict) else None
+    eval_contract = contract_raw if isinstance(contract_raw, dict) else {}
+    eval_governance = {
+        "sample_pack": bool(eval_meta.get("sample_pack")) if isinstance(eval_meta, dict) and "sample_pack" in eval_meta else None,
+        "allow_production_adoption": bool(eval_meta.get("allow_production_adoption")) if isinstance(eval_meta, dict) and "allow_production_adoption" in eval_meta else None,
+        "eval_execution_contract_classification": eval_contract.get("classification"),
+        "contract_adoption_eligible": bool(eval_contract.get("adoption_eligible")),
+    }
     evaluations: list[dict[str, Any]] = []
     for profile_home in profile_paths:
         profile_fp = _profile_fingerprint(profile_home)
@@ -152,6 +189,8 @@ def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = N
                     "num_tasks": result.get("num_tasks"),
                     "splits": result.get("splits"),
                     "production_gate_eligible": result.get("production_gate_eligible"),
+                    "readiness": {"status": "production_evidence_present" if result.get("production_gate_eligible") is True else "review_only_or_not_ready", "production_gate_eligible": result.get("production_gate_eligible") is True, "no_auto_adopt": True},
+                    "evidence_contract": {"target_execution": result.get("target_execution_evidence_contract") or result.get("target_execution_evidence") or {}, "eval_execution_contract_checks": result.get("eval_execution_contract_checks") or [], "contract_complete": result.get("production_gate_eligible") is True},
                     "regression_cases": result.get("regression_cases"),
                     "result": result,
                 }
@@ -165,8 +204,11 @@ def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = N
         "staged_only": bool(staged_only),
         "hermes_home": str(home),
         "skill_source": skill_source,
+        "skill_type": skill_type,
         "skill_fingerprint_sha256": hashlib.sha256(skill_text.encode("utf-8")).hexdigest(),
         "eval_pack": eval_meta,
+        "readiness": {"status": "production_evidence_present" if evaluations and all(e.get("production_gate_eligible") is True for e in evaluations) and eval_governance.get("contract_adoption_eligible") else "review_only_or_not_ready", "eval_governance": eval_governance, "no_auto_adopt": True, "explicit_adopt_required": True},
+        "evidence_contract": {"eval_execution_contract": eval_contract, "target_contracts_complete": all(bool((e.get("evidence_contract") or {}).get("contract_complete")) for e in evaluations) if evaluations else False},
         "task_count": len(tasks),
         "task_splits": task_splits,
         "targets": list(target_names),

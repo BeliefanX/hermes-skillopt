@@ -39,7 +39,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Score artifacts distinguish production-curated evidence from review-only evidence through `production_curated_score`, `review_only_score`, per-task delta rows, expected-term/assertion change details, and held-out test sensitivity warnings.
 - Resume tooling is inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
 
-## P0/P1/P3/P4 commands/modules
+## P0/P1/P2/P3 commands/modules
 
 - `python3 -m hermes_skillopt.cli batch-preflight PLAN.json`
   - Read-only validation of `hermes-skillopt-batch-plan-v1` data.
@@ -52,12 +52,18 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - `python3 -m hermes_skillopt.cli fleet-report|fleet-resume-plan|fleet-rollback-plan`
   - Read-only fleet inspection over recent single-run and batch parent/child artifacts.
+  - Fleet report groups by skill, advisory skill type, readiness, adoptability, and rollbackability; rows include readiness and evidence-contract summaries.
   - Resume plan reports only completed exact-fingerprint reuse guidance; partial-stage continuation is unavailable.
-  - Rollback plan lists per-run rollbackable backups and suggested single-run commands; there is no bulk rollback/writeback.
+  - Rollback plan lists per-run rollbackable backups, verified backup/current-SHA status where safely readable, and exact one-run commands; there is no bulk rollback/writeback.
 
 - `python3 -m hermes_skillopt.cli eval-pack-inventory|eval-pack-scaffold`
   - Inventory surfaces real coverage and gaps per skill: candidate eval paths, existing valid/invalid packs, split counts, production-eligible task counts, review-only status, and missing reasons.
+  - Inventory includes the readiness matrix and advisory skill-type classification.
   - Scaffold creates a safe review-only `hermes-curated-eval-pack-v1` starter with complete train/validation/test samples, `sample_pack: true`, `allow_production_adoption: false`, and static-review-only execution contract. It is not curated evidence.
+
+- `python3 -m hermes_skillopt.cli eval-pack-curate|eval-pack-mine-sessions`
+  - Curate is the canonical factory for local task JSON; outputs are review-only unless explicit production policy and an adoption-eligible execution contract are supplied.
+  - Session mining redacts/mines sessions or fixtures into draft review-only packs; session-mined evidence cannot authorize production adoption.
 
 - `python3 -m hermes_skillopt.cli benchmark --skill SKILL --eval-file PACK.json`
   - Alias for eval-only fixed-skill scoring.
@@ -73,7 +79,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - `hermes_skillopt.transfer.transfer_eval(...)`
   - Inputs: staged `run_id` or explicit staged `skill_file`, eval pack/staged task artifacts, target list, profile list.
-  - Output: `hermes-skillopt-transfer-eval-v1` report with profile/backend/target fingerprints, written only through the shared safe report path guard when an output file is requested.
+  - Output: `hermes-skillopt-transfer-eval-v1` report with profile/backend/target fingerprints plus advisory skill type, readiness, and eval/target evidence-contract status, written only through the shared safe report path guard when an output file is requested.
   - Default posture: staged/report-only/read-only; no live skill writeback and no external/live model performance claim.
 
 - `hermes_skillopt.conformance.run_conformance(...)`

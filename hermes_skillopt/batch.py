@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_skillopt import core
+from hermes_skillopt.env import load_eval_pack, production_eligibility_for_task
 
 BATCH_SCHEMA_VERSION = "hermes-skillopt-batch-plan-v1"
 BATCH_RUN_SCHEMA_VERSION = "hermes-skillopt-batch-run-v1"
@@ -19,6 +20,38 @@ VALID_TARGETS = {"auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_ta
 VALID_GATES = {"soft", "hard", "mixed", "strict"}
 FORBIDDEN_JOB_FIELDS = {"auto_adopt", "force", "writeback", "adopt", "rollback", "unsafe_cross_profile_writeback"}
 DEFAULT_BUDGET = {"max_jobs": 10, "max_total_iterations": 20, "max_total_candidates": 40}
+POLICY_PROFILES: dict[str, dict[str, Any]] = {
+    "review_small": {
+        "production_intent": False,
+        "max_jobs": 5,
+        "max_total_iterations": 10,
+        "max_total_candidates": 10,
+        "max_iterations_per_job": 2,
+        "max_candidate_count_per_job": 2,
+        "max_edit_budget_per_job": 4,
+        "max_limit_per_job": 50,
+    },
+    "production_strict": {
+        "production_intent": True,
+        "max_jobs": 10,
+        "max_total_iterations": 20,
+        "max_total_candidates": 40,
+        "max_iterations_per_job": 3,
+        "max_candidate_count_per_job": 3,
+        "max_edit_budget_per_job": 5,
+        "max_limit_per_job": 100,
+    },
+    "custom": {
+        "production_intent": False,
+        "max_jobs": DEFAULT_BUDGET["max_jobs"],
+        "max_total_iterations": DEFAULT_BUDGET["max_total_iterations"],
+        "max_total_candidates": DEFAULT_BUDGET["max_total_candidates"],
+        "max_iterations_per_job": 3,
+        "max_candidate_count_per_job": 4,
+        "max_edit_budget_per_job": 6,
+        "max_limit_per_job": 100,
+    },
+}
 FULL_RUN_FIELDS = {
     "skill", "query", "lookback_days", "limit", "iterations", "edit_budget", "candidate_count",
     "backend", "optimizer_backend", "allow_mock", "eval_file", "target_executor", "target_backend",
@@ -65,15 +98,46 @@ def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
         merged["target_executor"] = merged.get("target_executor") or "auto"
         merged["gate_mode"] = merged.get("gate_mode") or "strict"
         jobs.append(merged)
-    budget = {**DEFAULT_BUDGET, **dict(plan.get("budget") or {})}
+    policy_profile = str(plan.get("policy_profile") or (plan.get("policy") or {}).get("profile") or "custom")
+    if policy_profile not in POLICY_PROFILES:
+        raise ValueError(f"unsupported policy_profile: {policy_profile}")
+    policy = {**POLICY_PROFILES[policy_profile], **dict(plan.get("policy") or {})}
+    budget = {**DEFAULT_BUDGET, **{k: v for k, v in policy.items() if k.startswith("max_")}, **dict(plan.get("budget") or {})}
     return {
         "schema_version": plan.get("schema_version") or BATCH_SCHEMA_VERSION,
         "defaults": defaults,
         "budget": budget,
+        "policy_profile": policy_profile,
+        "policy": policy,
         "jobs": jobs,
         "stop_on_first_failure": bool(plan.get("stop_on_first_failure", False)),
         "plan_id": plan.get("plan_id"),
     }
+
+
+def _eval_pack_production_ready(eval_file: Any) -> tuple[bool, list[str]]:
+    if not eval_file:
+        return False, ["missing eval_file"]
+    path = Path(str(eval_file)).expanduser()
+    if not path.is_file():
+        return False, ["eval_file does not exist"]
+    try:
+        tasks, meta = load_eval_pack(path)
+    except Exception as exc:
+        return False, [f"eval_file failed validation: {type(exc).__name__}: {core.redact_secrets(str(exc))}"]
+    split_counts = dict(meta.split_counts)
+    reasons: list[str] = []
+    missing = [s for s in ("train", "val", "test") if int(split_counts.get(s) or 0) <= 0]
+    if missing:
+        reasons.append("eval pack missing complete splits: " + ", ".join(missing))
+    if not [t for t in tasks if production_eligibility_for_task(t).eligible]:
+        reasons.append("eval pack has no production-eligible val/test tasks")
+    policy = meta.production_policy or {}
+    if not bool(policy.get("allow_production_adoption")):
+        reasons.append("eval pack production_policy does not allow production adoption")
+    if bool(policy.get("sample_pack")):
+        reasons.append("sample/review-only eval pack cannot satisfy production intent")
+    return not reasons, reasons
 
 
 def batch_preflight(plan: str | Path | dict[str, Any], *, hermes_home_path: str | None = None) -> dict[str, Any]:
@@ -88,10 +152,16 @@ def batch_preflight(plan: str | Path | dict[str, Any], *, hermes_home_path: str 
 
     jobs = normalised["jobs"]
     budget = normalised["budget"]
+    policy_profile = normalised["policy_profile"]
+    policy = normalised["policy"]
     max_jobs = _as_int(budget.get("max_jobs"), DEFAULT_BUDGET["max_jobs"], "budget.max_jobs")
     max_total_iterations = _as_int(budget.get("max_total_iterations"), DEFAULT_BUDGET["max_total_iterations"], "budget.max_total_iterations")
     max_total_candidates = _as_int(budget.get("max_total_candidates"), DEFAULT_BUDGET["max_total_candidates"], "budget.max_total_candidates")
-    budget = {"max_jobs": max_jobs, "max_total_iterations": max_total_iterations, "max_total_candidates": max_total_candidates}
+    max_iterations_per_job = _as_int(budget.get("max_iterations_per_job"), int(policy.get("max_iterations_per_job") or 3), "budget.max_iterations_per_job")
+    max_candidate_count_per_job = _as_int(budget.get("max_candidate_count_per_job"), int(policy.get("max_candidate_count_per_job") or 4), "budget.max_candidate_count_per_job")
+    max_edit_budget_per_job = _as_int(budget.get("max_edit_budget_per_job"), int(policy.get("max_edit_budget_per_job") or 6), "budget.max_edit_budget_per_job")
+    max_limit_per_job = _as_int(budget.get("max_limit_per_job"), int(policy.get("max_limit_per_job") or 100), "budget.max_limit_per_job")
+    budget = {"max_jobs": max_jobs, "max_total_iterations": max_total_iterations, "max_total_candidates": max_total_candidates, "max_iterations_per_job": max_iterations_per_job, "max_candidate_count_per_job": max_candidate_count_per_job, "max_edit_budget_per_job": max_edit_budget_per_job, "max_limit_per_job": max_limit_per_job}
 
     if len(jobs) > max_jobs:
         errors.append(f"job count {len(jobs)} exceeds budget.max_jobs {max_jobs}")
@@ -102,6 +172,7 @@ def batch_preflight(plan: str | Path | dict[str, Any], *, hermes_home_path: str 
     if total_candidates > max_total_candidates:
         errors.append(f"total iteration*candidate count {total_candidates} exceeds budget.max_total_candidates {max_total_candidates}")
 
+    threshold_decisions: list[dict[str, Any]] = []
     for i, job in enumerate(jobs, 1):
         present_forbidden = sorted(k for k in FORBIDDEN_JOB_FIELDS if k in job and job.get(k) not in (None, False, ""))
         if present_forbidden:
@@ -118,14 +189,34 @@ def batch_preflight(plan: str | Path | dict[str, Any], *, hermes_home_path: str 
             errors.append(f"job #{i} invalid target_backend/target_executor: {target_backend}")
         if gate not in VALID_GATES:
             errors.append(f"job #{i} invalid gate_mode: {gate}")
-        production_capable_intent = bool(job.get("production_intent", gate == "strict" and opt_backend != "mock" and not bool(job.get("allow_mock"))))
+        checks = {
+            "iterations": {"value": int(job["iterations"]), "max": max_iterations_per_job, "accepted": int(job["iterations"]) <= max_iterations_per_job},
+            "candidate_count": {"value": int(job["candidate_count"]), "max": max_candidate_count_per_job, "accepted": int(job["candidate_count"]) <= max_candidate_count_per_job},
+            "edit_budget": {"value": int(job["edit_budget"]), "max": max_edit_budget_per_job, "accepted": int(job["edit_budget"]) <= max_edit_budget_per_job},
+            "limit": {"value": int(job["limit"]), "max": max_limit_per_job, "accepted": int(job["limit"]) <= max_limit_per_job},
+        }
+        for field, decision in checks.items():
+            if not decision["accepted"]:
+                errors.append(f"job #{i} {field} {decision['value']} exceeds policy {policy_profile} cap {decision['max']}")
+        production_capable_intent = bool(job.get("production_intent", bool(policy.get("production_intent"))))
+        prod_reasons: list[str] = []
         if production_capable_intent:
             if not job.get("skill"):
                 errors.append(f"job #{i} missing skill for production-capable intent")
-            if not job.get("eval_file"):
-                errors.append(f"job #{i} missing eval_file for production-capable intent")
+            if bool(job.get("allow_mock")):
+                errors.append(f"job #{i} production intent rejects allow_mock")
+            if opt_backend == "mock":
+                errors.append(f"job #{i} production intent rejects mock optimizer_backend")
+            if gate != "strict":
+                errors.append(f"job #{i} production intent requires strict gate_mode")
+            if target_backend != "live-readonly":
+                errors.append(f"job #{i} production intent requires enabled live-readonly target_backend/target_executor")
+            eval_ready, prod_reasons = _eval_pack_production_ready(job.get("eval_file"))
+            if not eval_ready:
+                errors.append(f"job #{i} production intent requires production-ready curated eval pack/readiness: " + "; ".join(prod_reasons))
         if opt_backend == "mock" or bool(job.get("allow_mock")) or gate in {"soft", "mixed"}:
             warnings.append(f"job #{i} is review-only/non-production by backend/gate policy")
+        threshold_decisions.append({"job_index": i, "policy_profile": policy_profile, "production_intent": production_capable_intent, "thresholds": checks, "production_readiness_reasons": prod_reasons, "accepted": all(d["accepted"] for d in checks.values()) and not prod_reasons})
 
     report = {
         "success": not errors,
@@ -135,7 +226,10 @@ def batch_preflight(plan: str | Path | dict[str, Any], *, hermes_home_path: str 
         "hermes_home": str(core.hermes_home(hermes_home_path)),
         "job_count": len(jobs),
         "budget": budget,
+        "policy_profile": policy_profile,
+        "policy": policy,
         "budget_usage": {"total_iterations": total_iterations, "total_candidates": total_candidates},
+        "threshold_decisions": threshold_decisions,
         "errors": errors,
         "warnings": warnings,
         "jobs": [{k: v for k, v in j.items() if k in FULL_RUN_FIELDS or k in {"production_intent"}} for j in jobs],
@@ -206,5 +300,6 @@ def run_batch(plan: str | Path | dict[str, Any], *, hermes_home_path: str | None
     core.write_text(batch_dir / "report.md", "\n".join(lines) + "\n")
     manifest["completed_at"] = core.datetime.now(core.timezone.utc).isoformat()
     manifest["summary"] = summary
+    manifest["artifact_sha256"] = core.artifact_hashes(batch_dir, manifest["files"])
     write("manifest.json", manifest)
     return {**summary, "manifest": str(batch_dir / "manifest.json"), "preflight": preflight, "jobs": jobs_report}

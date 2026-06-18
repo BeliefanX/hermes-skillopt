@@ -66,6 +66,8 @@ class SkillOptArtifacts:
     target_binding: Path
     provenance_binding: Path
     history: Path
+    target_execution_evidence: Path
+    reviewer_gate: Path
 
     @classmethod
     def for_run(cls, run_id: str, run_dir: Path) -> "SkillOptArtifacts":
@@ -95,6 +97,8 @@ class SkillOptArtifacts:
             target_binding=run_dir / "target_binding.json",
             provenance_binding=run_dir / "provenance_binding.json",
             history=run_dir / "history.json",
+            target_execution_evidence=run_dir / "target_execution_evidence.json",
+            reviewer_gate=run_dir / "reviewer_gate.json",
         )
 
     def manifest_files(self, include_best: bool) -> dict[str, str]:
@@ -120,6 +124,8 @@ class SkillOptArtifacts:
             "target_binding": self.target_binding.name,
             "provenance_binding": self.provenance_binding.name,
             "history": self.history.name,
+            "target_execution_evidence": self.target_execution_evidence.name,
+            "reviewer_gate": self.reviewer_gate.name,
         }
         if include_best:
             files["best"] = self.best.name

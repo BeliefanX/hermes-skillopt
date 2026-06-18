@@ -328,7 +328,7 @@ def _provenance_binding_payload(*, backend: str, optimizer_config: dict[str, Any
 def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> None:
     """Re-derive adopt eligibility from hashed artifacts, not mutable manifest fields."""
 
-    required = ("gate_results", "test_results", "val", "test", "candidate_summary", "evidence", "proposed", "target_binding", "provenance_binding")
+    required = ("gate_results", "test_results", "val", "test", "candidate_summary", "evidence", "proposed", "target_binding", "provenance_binding", "target_execution_evidence", "reviewer_gate")
     for key in required:
         _artifact_path(run_dir, manifest, key)
 
@@ -340,6 +340,21 @@ def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> 
     evidence = _read_hashed_json(run_dir, manifest, "evidence")
     target_binding = _read_hashed_json(run_dir, manifest, "target_binding")
     provenance_binding = _read_hashed_json(run_dir, manifest, "provenance_binding")
+    target_execution_evidence = _read_hashed_json(run_dir, manifest, "target_execution_evidence")
+    reviewer_gate = _read_hashed_json(run_dir, manifest, "reviewer_gate")
+
+    if not isinstance(target_execution_evidence, dict) or target_execution_evidence.get("schema_version") != "skillopt-target-execution-evidence-v1":
+        raise ValueError("Manifest target execution evidence artifact is invalid; refusing to adopt")
+    if target_execution_evidence.get("classification") == "frozen_hermes_target_execution_v1" and target_execution_evidence.get("complete") is not True:
+        raise ValueError("Frozen Hermes target execution evidence is incomplete; refusing to adopt")
+    manifest_txe = manifest.get("target_execution_evidence") if isinstance(manifest.get("target_execution_evidence"), dict) else {}
+    _manifest_equal(target_execution_evidence.get("fingerprint_sha256"), manifest_txe.get("fingerprint_sha256"), "target_execution_evidence")
+    if not isinstance(reviewer_gate, dict) or reviewer_gate.get("schema_version") != "skillopt-reviewer-gate-v1":
+        raise ValueError("Manifest reviewer gate artifact is invalid; refusing to adopt")
+    if reviewer_gate.get("adoptable_after_reviewer_gate") is not True or reviewer_gate.get("passed") is not True:
+        raise ValueError("Deterministic reviewer gate did not pass; refusing to adopt")
+    manifest_rg = manifest.get("reviewer_gate") if isinstance(manifest.get("reviewer_gate"), dict) else {}
+    _manifest_equal(reviewer_gate.get("fingerprint_sha256"), manifest_rg.get("fingerprint_sha256"), "reviewer_gate")
 
     if not isinstance(target_binding, dict) or target_binding.get("schema_version") != "skillopt-target-binding-v1":
         raise ValueError("Manifest target binding artifact is invalid; refusing to adopt")
@@ -1016,6 +1031,8 @@ def _production_eval_policy(evidence: dict[str, Any], production_gate_available:
             "strict candidate improvement on frozen target executor",
             "held-out production-eligible test split passes threshold",
             "fallback/session/synthetic tasks are review-only and cannot authorize adopt",
+            "frozen_hermes_target_execution_v1 target_execution_evidence artifact is present and complete",
+            "deterministic reviewer gate artifact passes; reviewer notes cannot override validation gate",
         ],
         "eval_file": evidence.get("eval_file"),
         "eval_pack": evidence.get("eval_pack") or {},
@@ -1029,6 +1046,121 @@ def _production_eval_policy(evidence: dict[str, Any], production_gate_available:
     }
     policy["policy_fingerprint_sha256"] = _stable_json_sha(policy)
     return policy
+
+
+def _flatten_eval_results(*evals: dict[str, Any] | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for ev in evals:
+        if isinstance(ev, dict):
+            rows.extend(r for r in (ev.get("results") or []) if isinstance(r, dict))
+    return rows
+
+
+def _target_execution_evidence_summary(*, target_config: dict[str, Any], validation_summary: dict[str, Any] | None, production_validation_summary: dict[str, Any] | None, test_results: dict[str, Any], target_backend: str) -> dict[str, Any]:
+    """Uniform, hashed evidence summary for frozen-Hermes target runs."""
+
+    evals: list[dict[str, Any]] = []
+    if isinstance(validation_summary, dict) and isinstance(validation_summary.get("candidate_eval"), dict):
+        evals.append(validation_summary["candidate_eval"])
+    if isinstance(production_validation_summary, dict) and isinstance(production_validation_summary.get("candidate_eval"), dict):
+        evals.append(production_validation_summary["candidate_eval"])
+    if isinstance(test_results, dict):
+        evals.append(test_results)
+    results = _flatten_eval_results(*evals)
+    metadata_rows = [r.get("metadata") for r in results if isinstance(r.get("metadata"), dict)]
+    contract_checks = [c for ev in evals for c in (ev.get("eval_execution_contract_checks") or []) if isinstance(c, dict)]
+    params = target_config.get("parameters") if isinstance(target_config.get("parameters"), dict) else {}
+    frozen_requested = target_backend in {"hermes_sandbox_executor_mvp", "frozen-hermes", "frozen_hermes_target_execution_v1", "sandbox"} or bool(params.get("frozen_hermes_contract"))
+    missing = sorted({str(x) for c in contract_checks for x in (c.get("missing_runtime_evidence") or []) if x})
+    exemplar = next((m for m in metadata_rows if m.get("frozen_hermes_contract") == "frozen_hermes_target_execution_v1"), metadata_rows[0] if metadata_rows else {})
+    runtime_available = any(isinstance(m.get("runtime_fingerprint"), dict) and m["runtime_fingerprint"].get("available") is True for m in metadata_rows)
+    sandbox_mvp = str(target_config.get("executor") or target_backend) == "hermes_sandbox_executor_mvp"
+    permissions = exemplar.get("permissions") if isinstance(exemplar.get("permissions"), dict) else {}
+    complete = bool(frozen_requested and contract_checks and not missing and permissions.get("task_commands_allowed") is False and permissions.get("profile_write_allowed") is False and runtime_available)
+    payload = {
+        "schema_version": "skillopt-target-execution-evidence-v1",
+        "classification": "frozen_hermes_target_execution_v1" if frozen_requested else "non_frozen_or_scorecard_target",
+        "implementation_label": "sandbox_mvp_not_live_upstream_hermes" if sandbox_mvp else "deterministic_or_readonly_target",
+        "production_adoption_requires_complete_evidence": True,
+        "complete": complete,
+        "review_only_unless_complete": True,
+        "frozen_target_config": target_config,
+        "frozen_target_config_id": target_config.get("target_config_id"),
+        "frozen_target_fingerprint_sha256": target_config.get("fingerprint_sha256"),
+        "provider_fingerprint": exemplar.get("provider_fingerprint"),
+        "model_fingerprint": exemplar.get("model_fingerprint"),
+        "toolset_fingerprint": exemplar.get("toolset_fingerprint"),
+        "tool_policy_fingerprint": exemplar.get("tool_policy_fingerprint"),
+        "session_fingerprint": exemplar.get("session_fingerprint"),
+        "runtime_fingerprint": exemplar.get("runtime_fingerprint"),
+        "isolated_runtime_proof": exemplar.get("isolated_runtime_evidence"),
+        "permissions": {"task_commands_allowed": permissions.get("task_commands_allowed"), "profile_write_allowed": permissions.get("profile_write_allowed"), "live_profile_writes": permissions.get("live_profile_writes")},
+        "task_command_policy": "task-provided commands disabled/blocked by default; never executed for evidence",
+        "task_commands_executed": any(m.get("task_commands_executed") is True for m in metadata_rows),
+        "trajectory_or_transcript_artifact_fingerprint": {
+            "validation": (validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(validation_summary, dict) else None,
+            "production_validation": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
+            "test": test_results.get("trajectory_fingerprint_sha256") if isinstance(test_results, dict) else None,
+            "per_result_trace_fingerprints": [m.get("trace_fingerprint_sha256") for m in metadata_rows if m.get("trace_fingerprint_sha256")],
+        },
+        "execution_scoring_evidence": [m.get("execution_scoring_evidence") for m in metadata_rows if isinstance(m.get("execution_scoring_evidence"), dict)][:20],
+        "contract_checks": contract_checks,
+        "missing_required_evidence": missing,
+        "evidence_result_count": len(metadata_rows),
+    }
+    payload["fingerprint_sha256"] = _stable_json_sha(payload)
+    return payload
+
+
+def _reviewer_gate_artifact(*, candidate_summary: list[dict[str, Any]], validation_summary: dict[str, Any] | None, production_validation_summary: dict[str, Any] | None, test_results: dict[str, Any], regression_cases: list[Any], adoptability_reasons: list[str], final_status: str, deterministic_adoptable_before_review: bool) -> dict[str, Any]:
+    """Deterministic reviewer checklist; optional LLM notes remain non-authoritative."""
+
+    ranked = [c for round_row in candidate_summary for c in (round_row.get("ranked_candidates") or []) if isinstance(c, dict)]
+    selected_ids = {str(c.get("candidate_id")) for c in ranked if c.get("selected")}
+    non_selected = [c for c in ranked if str(c.get("candidate_id")) not in selected_ids]
+    selected = [c for c in ranked if str(c.get("candidate_id")) in selected_ids]
+    protected_reasons = {"protected_append", "protected_replace", "protected_insert", "protected_section", "protected_frontmatter", "boundary_marker_mutation", "allowed_region_marker_mutation", "outside_allowed_region"}
+    rejected_reasons = [str(e.get("reason")) for c in ranked for e in (c.get("rejected_edits") or []) if isinstance(e, dict) and e.get("reason")]
+    validation_failures = [c for c in selected if c.get("validation_ok") is False]
+    hard_failures: list[Any] = []
+    for gate in (validation_summary, production_validation_summary):
+        if isinstance(gate, dict) and isinstance(gate.get("metric_summary"), dict):
+            hard_failures.extend(gate["metric_summary"].get("candidate_hard_failures") or [])
+            hard_failures.extend(gate["metric_summary"].get("production_candidate_hard_failures") or [])
+    if isinstance(test_results, dict):
+        hard_failures.extend(test_results.get("regression_cases") or [])
+    checklist = {
+        "bounded_edit_validation_passed": not validation_failures,
+        "protected_marker_mutation_absent": not (set(rejected_reasons) & protected_reasons),
+        "validation_delta_nonnegative": all(float(c.get("delta") or 0.0) >= 0.0 for c in selected),
+        "production_delta_nonnegative_or_unavailable": all(c.get("production_delta") is None or float(c.get("production_delta") or 0.0) >= 0.0 for c in selected),
+        "heldout_test_no_regressions": not regression_cases,
+        "hard_failures_absent": not hard_failures,
+        "deterministic_gate_adoptable_before_review": bool(deterministic_adoptable_before_review),
+    }
+    reviewer_passed = all(bool(v) for v in checklist.values())
+    payload = {
+        "schema_version": "skillopt-reviewer-gate-v1",
+        "deterministic": True,
+        "authority": "deterministic_validation_gate",
+        "deterministic_validation_gate_authoritative": True,
+        "reviewer_artifact_authoritative": False,
+        "llm_notes_authoritative": False,
+        "cannot_override_validation_gate": True,
+        "final_status": final_status,
+        "checklist": checklist,
+        "passed": reviewer_passed,
+        "adoptable_after_reviewer_gate": bool(deterministic_adoptable_before_review and reviewer_passed),
+        "selected_candidate_ids": sorted(selected_ids),
+        "selected_candidate_deltas": [{"candidate_id": c.get("candidate_id"), "validation_delta": c.get("delta"), "production_delta": c.get("production_delta"), "validation_ok": c.get("validation_ok"), "accepted": c.get("accepted"), "production_accepted": c.get("production_accepted")} for c in selected],
+        "non_selected_candidate_reasons": [{"candidate_id": c.get("candidate_id"), "rank": c.get("rank"), "accepted": c.get("accepted"), "selected": False, "reasons": c.get("rejection_reasons") or (["lower deterministic rank than selected candidate"] if c.get("accepted") else ["not accepted by deterministic gate"])} for c in non_selected],
+        "hard_failures": hard_failures,
+        "regression_cases": regression_cases,
+        "adoptability_reasons_before_reviewer": adoptability_reasons,
+        "optional_llm_notes": {"present": False, "authoritative": False},
+    }
+    payload["fingerprint_sha256"] = _stable_json_sha(payload)
+    return payload
 
 
 def _resume_input_payload(*, home: Path, target: Skill, original: str, query: str | None, lookback_days: int, limit: int, iterations: int, edit_budget: int, candidate_count: int, optimizer_backend: str | None, target_backend: str | None, gate_mode: str, eval_file: str | None, allow_mock: bool) -> dict[str, Any]:
@@ -1610,15 +1742,20 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     slow_meta = _slow_meta_artifact(original, evidence, rejected, candidate_summary)
     write_text(artifacts.slow_meta, json.dumps(slow_meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     target_config_for_binding = executor.config.as_dict()
-    target_execution_evidence_for_binding = {
-        "validation_trajectory_fingerprint_sha256": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
-        "test_trajectory_fingerprint_sha256": test_results.get("trajectory_fingerprint_sha256") if isinstance(test_results, dict) else None,
-        "test_contract_checks": test_results.get("eval_execution_contract_checks") if isinstance(test_results, dict) else None,
-        "test_evidence_contract": test_results.get("target_execution_evidence_contract") if isinstance(test_results, dict) else None,
-        "execution_scoring_evidence_present": any(isinstance(r, dict) and isinstance(r.get("metadata"), dict) and isinstance(r["metadata"].get("execution_scoring_evidence"), dict) for r in (test_results.get("results") or []) if isinstance(test_results, dict)),
-        "review_only_unless_complete_contract_checks": True,
-    }
-    target_binding = _target_binding_payload(home, target, original, target_config=target_config_for_binding, target_execution_evidence=target_execution_evidence_for_binding)
+    target_execution_evidence = _target_execution_evidence_summary(
+        target_config=target_config_for_binding,
+        validation_summary=validation_summary,
+        production_validation_summary=production_validation_summary,
+        test_results=test_results,
+        target_backend=executor.mode,
+    )
+    write_text(artifacts.target_execution_evidence, json.dumps(target_execution_evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    if target_execution_evidence.get("classification") == "frozen_hermes_target_execution_v1" and not target_execution_evidence.get("complete"):
+        adoptable = False
+        reason = "missing complete frozen target execution evidence artifact"
+        if reason not in adoptability_reasons:
+            adoptability_reasons.append(reason)
+    target_binding = _target_binding_payload(home, target, original, target_config=target_config_for_binding, target_execution_evidence=target_execution_evidence)
     write_text(artifacts.target_binding, json.dumps(target_binding, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
     current_score = validation_summary.get("current_score") if validation_summary else None
@@ -1634,6 +1771,22 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     }
     candidate_comparison = candidate_summary[-1]["ranked_candidates"] if candidate_summary else []
     regression_cases = sorted(set((test_results.get("regression_cases") or []) + [d.get("task_id") for d in per_task_delta if isinstance(d, dict) and d.get("regressed") and d.get("task_id")]))
+    reviewer_gate = _reviewer_gate_artifact(
+        candidate_summary=candidate_summary,
+        validation_summary=validation_summary,
+        production_validation_summary=production_validation_summary,
+        test_results=test_results,
+        regression_cases=regression_cases,
+        adoptability_reasons=adoptability_reasons,
+        final_status=final_status,
+        deterministic_adoptable_before_review=adoptable,
+    )
+    if not reviewer_gate.get("adoptable_after_reviewer_gate"):
+        adoptable = False
+        reason = "deterministic reviewer gate did not pass"
+        if reason not in adoptability_reasons:
+            adoptability_reasons.append(reason)
+    write_text(artifacts.reviewer_gate, json.dumps(reviewer_gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     production_eval_policy = _production_eval_policy(evidence, production_gate_available, test_gate_eligible)
     optimizer_config = optimizer.config.as_dict()
     optimizer_prompt_fingerprints = list(getattr(optimizer, "prompt_fingerprints", []) or [])
@@ -1719,6 +1872,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "benchmark_parity_status": benchmark_parity,
         "provenance_fingerprint": provenance,
         "production_eval_policy": production_eval_policy,
+        "target_execution_evidence": {"file": "target_execution_evidence.json", "complete": target_execution_evidence.get("complete"), "classification": target_execution_evidence.get("classification"), "fingerprint_sha256": target_execution_evidence.get("fingerprint_sha256")},
+        "reviewer_gate": {"file": "reviewer_gate.json", "passed": reviewer_gate.get("passed"), "adoptable_after_reviewer_gate": reviewer_gate.get("adoptable_after_reviewer_gate"), "fingerprint_sha256": reviewer_gate.get("fingerprint_sha256")},
         "per_task_delta": per_task_delta,
         "heldout_test_sensitivity": heldout_test_sensitivity,
         "split_scores": split_scores,
@@ -1800,7 +1955,7 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
     dirs = skillopt_paths(home)
     runs = []
     seen_dirs: set[Path] = set()
-    manifest_keys = ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "target_executor", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score")
+    manifest_keys = ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "target_executor", "target_execution_evidence", "reviewer_gate", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score")
     for m in sorted(dirs["staging"].glob("*/manifest.json"), reverse=True)[:20]:
         try:
             d = json.loads(read_text(m))
@@ -1854,15 +2009,54 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
     gate_policy: dict[str, Any] = raw_gate_policy if isinstance(raw_gate_policy, dict) else {}
     raw_provenance = manifest.get("provenance_fingerprint")
     provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
+    production_ready = manifest.get("adoptable") is True and manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict"
     backup_dir = manifest.get("backup_dir")
     rollback_available = False
     rollback_reason = "run is not adopted"
+    backup_status: dict[str, Any] = {"present": False, "manifest_present": False, "skill_sha256": None, "manifest_sha256": None, "verified": False}
+    current_sha_status: dict[str, Any] = {"checked": False, "skill_path": None, "current_sha256": None, "expected_adopted_sha256": manifest.get("adopted_sha256") or manifest.get("proposed_sha256"), "matches_adopted": None, "reason": "run is not adopted"}
     if manifest.get("status") == "adopted":
-        if backup_dir and (Path(str(backup_dir)) / "SKILL.md").is_file() and (Path(str(backup_dir)) / "manifest.json").is_file():
+        backup_path = Path(str(backup_dir)) if backup_dir else None
+        backup_skill = backup_path / "SKILL.md" if backup_path else None
+        backup_manifest = backup_path / "manifest.json" if backup_path else None
+        if backup_skill and backup_manifest:
+            backup_status.update({"present": backup_skill.is_file(), "manifest_present": backup_manifest.is_file()})
+            if backup_skill.is_file() and not backup_skill.is_symlink():
+                backup_status["skill_sha256"] = sha256_file(backup_skill)
+            if backup_manifest.is_file() and not backup_manifest.is_symlink():
+                try:
+                    backup_raw = json.loads(read_text(backup_manifest))
+                    backup_status["manifest_sha256"] = backup_raw.get("sha256") or backup_raw.get("original_sha256")
+                    backup_status["verified"] = bool(backup_status["skill_sha256"] and backup_status["manifest_sha256"] == backup_status["skill_sha256"])
+                except Exception as exc:
+                    warnings = [*(warnings or []), f"backup manifest unreadable: {type(exc).__name__}: {exc}"]
+        try:
+            target = manifest_skill_path(home, manifest)
+            guard_manifest_skill_path(home, manifest, target)
+            current_sha_status.update({"checked": True, "skill_path": str(target), "reason": None})
+            if target.exists() and target.is_file() and not target.is_symlink():
+                current_sha = sha256_file(target)
+                current_sha_status["current_sha256"] = current_sha
+                current_sha_status["matches_adopted"] = bool(current_sha_status["expected_adopted_sha256"] and current_sha == current_sha_status["expected_adopted_sha256"])
+            else:
+                current_sha_status["reason"] = "current skill missing or unsafe"
+        except Exception as exc:
+            current_sha_status["reason"] = f"current skill check unavailable: {type(exc).__name__}: {exc}"
+        if backup_dir and backup_status["present"] and backup_status["manifest_present"]:
             rollback_available = True
             rollback_reason = "adopted run has backup SKILL.md and backup manifest; use per-run rollback command only"
         else:
             rollback_reason = "adopted run lacks safely inferable backup artifacts"
+    skill_type: dict[str, Any] = {"category": "unknown", "confidence": "none", "advisory_only": True, "hard_gate": False, "reason": "live skill unavailable for advisory classification"}
+    try:
+        target_path = manifest_skill_path(home, manifest)
+        if target_path.exists() and target_path.is_file() and not target_path.is_symlink():
+            from hermes_skillopt.skill_types import classify_skill_type
+
+            text = read_text(target_path)
+            skill_type = classify_skill_type(Skill(name=str(manifest.get("skill_name") or target_path.parent.name), path=target_path, relpath=str(target_path.resolve().relative_to(home.resolve())), sha256=sha256_text(text)), text=text)
+    except Exception as exc:
+        skill_type["reason"] = f"classification unavailable: {type(exc).__name__}: {exc}"
     cp_path = run_dir / "checkpoint.json"
     checkpoint_status = None
     checkpoint_input_sha256 = None
@@ -1885,7 +2079,10 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
         "created_at": manifest.get("created_at") or manifest.get("started_at") or manifest.get("completed_at"),
         "status": manifest.get("status") or ("batch_complete" if manifest.get("batch_id") else None),
         "adoptable": manifest.get("adoptable") is True,
-        "production_eligible": manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict",
+        "production_eligible": production_ready,
+        "readiness": {"status": "production_candidate" if production_ready else "review_only_or_not_ready", "adoptable": manifest.get("adoptable") is True, "production_gate_eligible": manifest.get("production_gate_eligible") is True, "test_gate_eligible": manifest.get("test_gate_eligible") is True, "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True, "reasons": manifest.get("production_eligibility_reasons") or []},
+        "skill_type": skill_type,
+        "evidence_contract": {"target_execution": manifest.get("target_execution_evidence") if isinstance(manifest.get("target_execution_evidence"), dict) else {"complete": False, "classification": None}, "reviewer_gate": manifest.get("reviewer_gate") if isinstance(manifest.get("reviewer_gate"), dict) else {"passed": False}, "eval_pack_governance": manifest.get("eval_pack_governance") or {}, "production_eval_policy_version": (manifest.get("production_eval_policy") or {}).get("policy_version") if isinstance(manifest.get("production_eval_policy"), dict) else None, "manifest_artifacts_verified": verified},
         "test_eligible": manifest.get("test_gate_eligible") is True,
         "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True,
         "gate_mode": gate_policy.get("mode"),
@@ -1895,7 +2092,7 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
         "score_summary": {"validation_current": manifest.get("validation_current_score"), "validation_candidate": manifest.get("validation_candidate_score"), "production_validation_current": manifest.get("production_validation_current_score"), "production_validation_candidate": manifest.get("production_validation_candidate_score"), "test": manifest.get("test_score")},
         "not_adoptable_reasons": manifest.get("production_eligibility_reasons") or [],
         "resume": {"checkpoint_present": cp_path.is_file(), "checkpoint_status": checkpoint_status, "checkpoint_input_sha256": checkpoint_input_sha256, "safe_completed_reuse": resume_safe, "partial_continuation_available": False},
-        "rollback": {"available": rollback_available, "reason": rollback_reason, "backup_dir": backup_dir},
+        "rollback": {"available": rollback_available, "reason": rollback_reason, "backup_dir": backup_dir, "backup_status": backup_status, "current_sha_status": current_sha_status},
         "artifact_lineage": manifest.get("artifact_lineage") or _artifact_lineage_status(run_dir, manifest),
         "fingerprints": {"provenance": provenance.get("fingerprint_sha256"), "eval": provenance.get("eval_fingerprint_sha256") or provenance.get("eval_file_sha256"), "task": provenance.get("task_sha256"), "optimizer": provenance.get("optimizer_fingerprint_sha256"), "target": provenance.get("target_fingerprint_sha256"), "profile": provenance.get("profile_fingerprint_sha256"), "manifest_artifacts_verified": verified},
         "warnings": sorted(set(warnings or [])),
@@ -1949,6 +2146,113 @@ def _scan_fleet_runs(home: Path, limit: int = 50) -> tuple[list[dict[str, Any]],
     return rows, incomplete, warnings
 
 
+def _dir_age_seconds(path: Path) -> float:
+    try:
+        return max(0.0, datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+
+def _hygiene_row(run_dir: Path, *, stale_after_hours: float) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    checkpoint_path = run_dir / "checkpoint.json"
+    age_seconds = _dir_age_seconds(run_dir)
+    reasons: list[str] = []
+    safe_guidance = [
+        "Read-only report only: no files are deleted or modified.",
+        "Before manual cleanup, inspect run_dir and confirm no SkillOpt process is writing it.",
+        "Prefer retaining complete_verified/adopted artifacts until external retention policy says otherwise.",
+    ]
+    classification = "missing_manifest_or_checkpoint"
+    manifest: dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            manifest = load_manifest(run_dir)
+            verify_artifact_hashes(run_dir, manifest)
+            classification = "complete_verified"
+            if manifest.get("batch_id"):
+                jobs_path = run_dir / "jobs.json"
+                try:
+                    jobs = json.loads(read_text(jobs_path)) if jobs_path.is_file() else []
+                except Exception as exc:
+                    jobs = []
+                    reasons.append(f"batch jobs unreadable: {type(exc).__name__}: {exc}")
+                child_missing = [str(j.get("run_id")) for j in jobs if isinstance(j, dict) and j.get("run_id") and not (run_dir.parent / str(j.get("run_id"))).is_dir()]
+                if child_missing:
+                    classification = "orphaned_batch_child_mismatch"
+                    reasons.append("batch parent references missing child run dirs: " + ", ".join(child_missing))
+        except Exception as exc:
+            classification = "complete_tampered"
+            reasons.append(f"manifest missing/hash mismatch/unverified: {type(exc).__name__}: {redact_secrets(str(exc))}")
+            try:
+                manifest = json.loads(read_text(manifest_path))
+            except Exception:
+                manifest = {}
+    elif checkpoint_path.is_file():
+        try:
+            cp = json.loads(read_text(checkpoint_path))
+        except Exception as exc:
+            cp = {}
+            reasons.append(f"checkpoint unreadable: {type(exc).__name__}: {exc}")
+        status = cp.get("status")
+        stale = age_seconds >= stale_after_hours * 3600.0
+        classification = "checkpoint_only_recent" if not stale else "stale_incomplete"
+        if status == "complete":
+            reasons.append("checkpoint status is complete but manifest is missing; completed-run reuse unavailable")
+        elif stale:
+            reasons.append(f"checkpoint-only/incomplete directory is older than stale_after_hours={stale_after_hours:g}")
+        else:
+            reasons.append("recent checkpoint-only/incomplete directory; leave in place unless confirmed abandoned")
+        raw_input = cp.get("input")
+        input_obj: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+        manifest = {"status": status, "skill_name": input_obj.get("skill_name")}
+    else:
+        reasons.append("directory has neither manifest.json nor checkpoint.json")
+        if age_seconds >= stale_after_hours * 3600.0:
+            classification = "stale_incomplete"
+    return {
+        "run_id": run_dir.name,
+        "run_dir": str(run_dir),
+        "classification": classification,
+        "age_seconds": round(age_seconds, 3),
+        "age_hours": round(age_seconds / 3600.0, 3),
+        "status": manifest.get("status"),
+        "kind": "batch_parent" if manifest.get("batch_id") else "single_or_checkpoint",
+        "skill_name": manifest.get("skill_name"),
+        "manifest_present": manifest_path.is_file(),
+        "checkpoint_present": checkpoint_path.is_file(),
+        "artifact_state": _slim_artifact_state(run_dir),
+        "reasons": sorted(set(reasons)),
+        "safe_manual_cleanup_guidance": safe_guidance,
+    }
+
+
+def artifact_hygiene_report(hermes_home_path: str | None = None, *, limit: int = 200, stale_after_hours: float = 24.0) -> dict[str, Any]:
+    """Read-only artifact hygiene planner for staging run dirs; never deletes."""
+    home = hermes_home(hermes_home_path)
+    staging = skillopt_paths(home)["staging"]
+    cap = max(1, min(int(limit or 200), 500))
+    run_dirs = sorted([p for p in staging.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True) if staging.exists() else []
+    rows = [_hygiene_row(p, stale_after_hours=stale_after_hours) for p in run_dirs[:cap]]
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[str(row["classification"])] = counts.get(str(row["classification"]), 0) + 1
+    return {
+        "success": True,
+        "schema_version": "hermes-skillopt-artifact-hygiene-v1",
+        "mode": "read_only_artifact_hygiene_report_no_delete_no_writeback",
+        "hermes_home": str(home),
+        "staging": str(staging),
+        "limit": cap,
+        "stale_after_hours": stale_after_hours,
+        "run_count": len(rows),
+        "classification_counts": counts,
+        "runs": rows,
+        "safe_manual_cleanup_guidance": ["This report is a planner only and performs no deletion.", "Remove only stale_incomplete/checkpoint-only/orphaned artifacts after manual inspection and after confirming no active writer.", "Do not auto-adopt or infer production readiness from hygiene status."],
+        "read_only_guards": ["does not delete", "does not call full_run", "does not adopt", "does not rollback", "does not write skills or staging artifacts"],
+    }
+
+
 def fleet_report(hermes_home_path: str | None = None, *, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
     """Read-only fleet report over recent single and batch SkillOpt runs."""
     home = hermes_home(hermes_home_path)
@@ -1957,7 +2261,14 @@ def fleet_report(hermes_home_path: str | None = None, *, limit: int = 50, skill:
         rows = [r for r in rows if r.get("skill_name") == skill]
         incomplete = [r for r in incomplete if r.get("skill_name") == skill]
     by_skill: dict[str, dict[str, Any]] = {}
+    grouped: dict[str, dict[str, Any]] = {"by_skill": by_skill, "by_skill_type": {}, "by_readiness": {}, "by_adoptability": {}, "by_rollbackability": {}}
     batch_children: dict[str, list[str]] = {}
+
+    def add_group(group_name: str, key: str, row: dict[str, Any]) -> None:
+        group = grouped[group_name].setdefault(key, {"key": key, "run_count": 0, "run_ids": []})
+        group["run_count"] += 1
+        group["run_ids"].append(row.get("run_id"))
+
     for row in rows:
         if row.get("kind") == "batch_parent":
             try:
@@ -1966,7 +2277,7 @@ def fleet_report(hermes_home_path: str | None = None, *, limit: int = 50, skill:
             except Exception as exc:
                 row.setdefault("warnings", []).append(f"batch jobs unreadable: {type(exc).__name__}: {exc}")
         sk = row.get("skill_name") or "<unknown>"
-        bucket = by_skill.setdefault(sk, {"skill_name": sk, "runs": [], "latest_run": None, "adoptable_count": 0, "rollbackable_count": 0, "incomplete_count": 0})
+        bucket = by_skill.setdefault(sk, {"skill_name": sk, "runs": [], "latest_run": None, "adoptable_count": 0, "rollbackable_count": 0, "incomplete_count": 0, "readiness_counts": {}, "skill_type_counts": {}})
         bucket["runs"].append(row)
         if bucket["latest_run"] is None:
             bucket["latest_run"] = row
@@ -1976,7 +2287,17 @@ def fleet_report(hermes_home_path: str | None = None, *, limit: int = 50, skill:
             bucket["rollbackable_count"] += 1
         if row.get("kind") == "checkpoint_only" or (row.get("resume") or {}).get("checkpoint_status") not in (None, "complete"):
             bucket["incomplete_count"] += 1
-    return {"success": True, "schema_version": "hermes-skillopt-fleet-report-v1", "mode": "read_only_report_no_resume_no_rollback_no_writeback", "hermes_home": str(home), "limit": max(1, min(int(limit or 50), 200)), "run_count": len(rows), "latest_runs": rows, "skills": list(by_skill.values()), "batch_children": batch_children, "incomplete_or_checkpoint_only": incomplete, "warnings": sorted(set(warnings)), "read_only_guards": ["does not call full_run", "does not adopt", "does not rollback", "does not write skills or staging artifacts"]}
+        readiness_key = str((row.get("readiness") or {}).get("status") or ("production_candidate" if row.get("production_eligible") else "review_only_or_not_ready"))
+        type_key = str((row.get("skill_type") or {}).get("category") or "unknown")
+        adopt_key = "adoptable" if row.get("adoptable") else "not_adoptable"
+        rollback_key = "rollbackable" if (row.get("rollback") or {}).get("available") else "not_rollbackable"
+        bucket["readiness_counts"][readiness_key] = bucket["readiness_counts"].get(readiness_key, 0) + 1
+        bucket["skill_type_counts"][type_key] = bucket["skill_type_counts"].get(type_key, 0) + 1
+        add_group("by_skill_type", type_key, row)
+        add_group("by_readiness", readiness_key, row)
+        add_group("by_adoptability", adopt_key, row)
+        add_group("by_rollbackability", rollback_key, row)
+    return {"success": True, "schema_version": "hermes-skillopt-fleet-report-v2", "mode": "read_only_report_no_resume_no_rollback_no_writeback", "hermes_home": str(home), "limit": max(1, min(int(limit or 50), 200)), "run_count": len(rows), "latest_runs": rows, "skills": list(by_skill.values()), "groups": {k: (list(v.values()) if k != "by_skill" else list(by_skill.values())) for k, v in grouped.items()}, "batch_children": batch_children, "incomplete_or_checkpoint_only": incomplete, "warnings": sorted(set(warnings)), "read_only_guards": ["does not call full_run", "does not adopt", "does not rollback", "does not write skills or staging artifacts"]}
 
 
 def fleet_resume_plan(hermes_home_path: str | None = None, *, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
@@ -1999,13 +2320,26 @@ def fleet_rollback_plan(hermes_home_path: str | None = None, *, limit: int = 50,
     rollbackable = []
     not_rollbackable = []
     for row in report["latest_runs"]:
-        item = {"run_id": row.get("run_id"), "skill_name": row.get("skill_name"), "status": row.get("status"), "backup_dir": (row.get("rollback") or {}).get("backup_dir"), "reason": (row.get("rollback") or {}).get("reason")}
-        if (row.get("rollback") or {}).get("available"):
-            item["command"] = f"hermes-skillopt rollback {row.get('run_id')}"
+        rollback = row.get("rollback") or {}
+        item = {
+            "run_id": row.get("run_id"),
+            "skill_name": row.get("skill_name"),
+            "skill_type": row.get("skill_type"),
+            "readiness": row.get("readiness"),
+            "status": row.get("status"),
+            "backup_dir": rollback.get("backup_dir"),
+            "backup_status": rollback.get("backup_status"),
+            "current_sha_status": rollback.get("current_sha_status"),
+            "reason": rollback.get("reason"),
+        }
+        if rollback.get("available"):
+            item["one_run_command"] = f"hermes-skillopt rollback {row.get('run_id')}"
+            item["command"] = item["one_run_command"]
+            item["bulk_safe"] = False
             rollbackable.append(item)
         else:
             not_rollbackable.append(item)
-    return {"success": True, "schema_version": "hermes-skillopt-fleet-rollback-plan-v1", "mode": "read_only_plan_no_bulk_rollback_no_writeback", "hermes_home": report["hermes_home"], "rollbackable_adopted_runs": rollbackable, "not_rollbackable_recent_runs": not_rollbackable, "bulk_rollback_available": False, "guidance": "Run the existing per-run rollback command for exactly one reviewed run_id; this plan never writes.", "read_only_guards": report["read_only_guards"]}
+    return {"success": True, "schema_version": "hermes-skillopt-fleet-rollback-plan-v2", "mode": "read_only_plan_no_bulk_rollback_no_writeback", "hermes_home": report["hermes_home"], "rollbackable_adopted_runs": rollbackable, "not_rollbackable_recent_runs": not_rollbackable, "bulk_rollback_available": False, "exact_one_run_command_template": "hermes-skillopt rollback <run_id>", "guidance": "Run the existing per-run rollback command for exactly one reviewed run_id; this plan verifies backup/current-sha status when safely readable and never writes.", "read_only_guards": report["read_only_guards"]}
 
 
 def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars: int = 4000, slim: bool = False) -> dict[str, Any]:

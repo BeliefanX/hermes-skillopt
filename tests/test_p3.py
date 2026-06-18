@@ -327,7 +327,68 @@ def test_transfer_eval_is_read_only_and_fingerprinted(tmp_path):
     assert {e["target"] for e in report["evaluations"]} == {"scorecard", "replay"}
     assert all(e["profile_fingerprint"]["fingerprint_sha256"] for e in report["evaluations"])
     assert all(e["target_fingerprint_sha256"] for e in report["evaluations"])
+    assert report["skill_type"]["advisory_only"] is True
+    assert report["readiness"]["no_auto_adopt"] is True
+    assert report["readiness"]["explicit_adopt_required"] is True
+    assert "eval_execution_contract" in report["evidence_contract"]
+    assert all("readiness" in e and "evidence_contract" in e for e in report["evaluations"])
     assert report_path.exists()
+
+
+def test_fleet_report_groups_readiness_and_rollback_plan_verifies_backup(tmp_path):
+    skill = make_skill(tmp_path)
+    original = skill.read_text(encoding="utf-8")
+    proposed = original + "\n- Verify rollback status.\n"
+    skill.write_text(proposed, encoding="utf-8")
+    run_id = "20260618-adopted-demo"
+    run_dir = tmp_path / "skillopt" / "staging" / run_id
+    run_dir.mkdir(parents=True)
+    backup_dir = tmp_path / "skillopt" / "backups" / f"backup-{run_id}"
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "SKILL.md").write_text(original, encoding="utf-8")
+    (backup_dir / "manifest.json").write_text(json.dumps({"run_id": run_id, "sha256": hashlib.sha256(original.encode("utf-8")).hexdigest()}), encoding="utf-8")
+    files = {"original": "original_SKILL.md", "proposed": "proposed_SKILL.md", "current": "current_SKILL.md", "report": "report.md"}
+    (run_dir / "original_SKILL.md").write_text(original, encoding="utf-8")
+    (run_dir / "proposed_SKILL.md").write_text(proposed, encoding="utf-8")
+    (run_dir / "current_SKILL.md").write_text(original, encoding="utf-8")
+    (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "status": "adopted",
+        "adoptable": True,
+        "skill_name": "demo",
+        "skill_relpath": "skills/demo/SKILL.md",
+        "created_at": "2026-06-18T00:00:00Z",
+        "original_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+        "proposed_sha256": hashlib.sha256(proposed.encode("utf-8")).hexdigest(),
+        "adopted_sha256": hashlib.sha256(proposed.encode("utf-8")).hexdigest(),
+        "backup_dir": str(backup_dir),
+        "gate_policy": {"mode": "strict"},
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "target_execution_evidence": {"classification": "frozen_hermes_target_execution_v1", "complete": True, "fingerprint_sha256": "txe"},
+        "reviewer_gate": {"passed": True, "adoptable_after_reviewer_gate": True, "fingerprint_sha256": "rg"},
+        "production_eval_policy": {"policy_version": "production-eval-schema-v1"},
+        "files": files,
+    }
+    manifest["artifact_sha256"] = {k: hashlib.sha256((run_dir / rel).read_bytes()).hexdigest() for k, rel in files.items()}
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = core.fleet_report(str(tmp_path), limit=5)
+    row = report["latest_runs"][0]
+
+    assert report["schema_version"] == "hermes-skillopt-fleet-report-v2"
+    assert {g["key"] for g in report["groups"]["by_readiness"]} == {"production_candidate"}
+    assert {g["key"] for g in report["groups"]["by_rollbackability"]} == {"rollbackable"}
+    assert row["skill_type"]["advisory_only"] is True
+    assert row["evidence_contract"]["target_execution"]["complete"] is True
+    assert row["rollback"]["backup_status"]["verified"] is True
+    assert row["rollback"]["current_sha_status"]["matches_adopted"] is True
+
+    plan = core.fleet_rollback_plan(str(tmp_path), limit=5)
+    assert plan["schema_version"] == "hermes-skillopt-fleet-rollback-plan-v2"
+    assert plan["bulk_rollback_available"] is False
+    assert plan["rollbackable_adopted_runs"][0]["one_run_command"] == f"hermes-skillopt rollback {run_id}"
 
 
 def test_transfer_eval_defaults_to_staged_input(tmp_path):
