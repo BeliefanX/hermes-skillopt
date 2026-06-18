@@ -54,7 +54,7 @@ def main() -> int:
     conf = sub.add_parser("conformance", help="Run local conformance and write a JSON report. Default mode=quick is a smoke suite, not full repo health; use --mode full for all pytest tests.")
     conf.add_argument("--output"); conf.add_argument("--pytest-arg", action="append", dest="pytest_args"); conf.add_argument("--timeout", type=int, default=180); conf.add_argument("--mode", choices=["quick", "full"], default="quick")
     ho = sub.add_parser("handoff-optimize"); ho.add_argument("requirements"); ho.add_argument("--worker"); ho.add_argument("--context-budget-chars", type=int, default=6000)
-    web = sub.add_parser("webui", help="Launch the optional Gradio Hermes SkillOpt WebUI")
+    web = sub.add_parser("webui", help="Launch the optional React/FastAPI Hermes SkillOpt WebUI")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=7860)
     web.add_argument("--share", action="store_true")

@@ -12,13 +12,16 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-webui = ["gradio>=4"]
+webui = ["fastapi>=0.110", "uvicorn>=0.27"]
 
 [project.scripts]
 hermes-skillopt = "hermes_skillopt.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["hermes_skillopt*"]
+
 [tool.setuptools.package-data]
-hermes_skillopt = ["eval_packs/*.json"]
+hermes_skillopt = ["eval_packs/*.json", "webui_static/*.html", "webui_static/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -18,9 +18,9 @@ from typing import Any
 from hermes_skillopt import core
 
 INSTALL_HINT = (
-    "Gradio is required for the hermes-skillopt WebUI. Install the optional "
+    "FastAPI and Uvicorn are required for the hermes-skillopt WebUI. Install the optional "
     "dependency with: python3 -m pip install 'hermes-skillopt[webui]' or "
-    "python3 -m pip install gradio"
+    "python3 -m pip install fastapi uvicorn"
 )
 MAX_TEXT_CHARS = 20_000
 PWA_THEME_COLOR = "#f6f3ee"
@@ -1169,22 +1169,9 @@ def launch_webui(app: Any, *, host: str, port: int, share: bool, browser: bool) 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m hermes_skillopt.webui", description="Launch the Hermes SkillOpt Gradio WebUI")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7860)
-    parser.add_argument("--share", action="store_true")
-    parser.add_argument("--browser", action="store_true", help="Open a browser after launch")
-    parser.add_argument("--home", help="HERMES_HOME override for WebUI defaults and callbacks")
-    args = parser.parse_args(argv)
-    try:
-        app = build_app(args.home)
-    except RuntimeError as exc:
-        if str(exc) == INSTALL_HINT:
-            print(str(exc), file=sys.stderr)
-            return 1
-        raise
-    launch_webui(app, host=args.host, port=args.port, share=args.share, browser=args.browser)
-    return 0
+    from hermes_skillopt.webui_server import main as server_main
+
+    return server_main(argv)
 
 
 if __name__ == "__main__":
