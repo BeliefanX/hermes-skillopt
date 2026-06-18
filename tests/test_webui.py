@@ -259,6 +259,69 @@ def test_webui_launch_kwargs_injects_pwa_head_and_startup_js_when_supported():
     assert kwargs["head"] == webui.pwa_head_html()
 
 
+def test_webui_launch_webui_attaches_pwa_routes_after_gradio_builds_server_app(monkeypatch):
+    class FakeRoute:
+        def __init__(self, path):
+            self.path = path
+
+    class FakeFastAPI:
+        def __init__(self):
+            self.routes = []
+            self.calls = []
+
+        def add_api_route(self, path, endpoint, **kwargs):
+            self.routes.append(FakeRoute(path))
+            self.calls.append((path, endpoint, kwargs))
+
+    class FakeApp:
+        def __init__(self):
+            self.server_app = None
+            self.launch_kwargs = None
+            self.blocked = False
+
+        def launch(self, *, server_name=None, server_port=None, share=None, inbrowser=None, prevent_thread_lock=False):
+            self.launch_kwargs = {
+                "server_name": server_name,
+                "server_port": server_port,
+                "share": share,
+                "inbrowser": inbrowser,
+                "prevent_thread_lock": prevent_thread_lock,
+            }
+            self.server_app = FakeFastAPI()
+
+        def block_thread(self):
+            self.blocked = True
+
+    app = FakeApp()
+    webui.launch_webui(app, host="127.0.0.1", port=7862, share=False, browser=False)
+    assert app.launch_kwargs is not None
+    assert app.launch_kwargs["prevent_thread_lock"] is True
+    assert app.blocked is True
+    assert app.server_app is not None
+    paths = {call[0] for call in app.server_app.calls}
+    assert "/manifest.webmanifest" in paths
+    assert "/sw.js" in paths
+
+
+def test_webui_attach_pwa_routes_accepts_concrete_fastapi_like_app():
+    class FakeRoute:
+        def __init__(self, path):
+            self.path = path
+
+    class FakeFastAPI:
+        def __init__(self):
+            self.routes = []
+            self.calls = []
+
+        def add_api_route(self, path, endpoint, **kwargs):
+            self.routes.append(FakeRoute(path))
+            self.calls.append((path, endpoint, kwargs))
+
+    fastapi_app = FakeFastAPI()
+    assert webui.attach_pwa_routes(fastapi_app) is True
+    assert "/offline.html" in {call[0] for call in fastapi_app.calls}
+
+
 def test_webui_service_worker_safe_cache_invariants():
     sw = webui.service_worker_js()
     assert "STATIC_ASSETS" in sw

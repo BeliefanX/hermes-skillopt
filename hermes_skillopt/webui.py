@@ -529,9 +529,18 @@ def pwa_response_headers(*, static_asset: bool = False) -> dict[str, str]:
     return {"Cache-Control": cache_control, "X-Content-Type-Options": "nosniff"}
 
 
+def _resolve_fastapi_app(app: Any) -> Any | None:
+    """Return the concrete FastAPI app from a Gradio Blocks/app wrapper."""
+    candidates = (app, getattr(app, "server_app", None), getattr(app, "app", None))
+    for candidate in candidates:
+        if callable(getattr(candidate, "add_api_route", None)):
+            return candidate
+    return None
+
+
 def attach_pwa_routes(app: Any) -> bool:
-    """Attach safe PWA endpoints to Gradio's FastAPI app when available."""
-    fastapi_app = getattr(app, "app", None)
+    """Attach safe PWA endpoints to Gradio's concrete FastAPI app when available."""
+    fastapi_app = _resolve_fastapi_app(app)
     add_route = getattr(fastapi_app, "add_api_route", None)
     if not callable(add_route):
         return False
@@ -559,13 +568,13 @@ def attach_pwa_routes(app: Any) -> bool:
         route.path for route in getattr(fastapi_app, "routes", []) if hasattr(route, "path")
     }
     if "/manifest.webmanifest" not in routes:
-        add_route("/manifest.webmanifest", manifest_endpoint, methods=["GET"], include_in_schema=False)
+        add_route("/manifest.webmanifest", manifest_endpoint, methods=["GET", "HEAD"], include_in_schema=False)
     if "/sw.js" not in routes:
-        add_route("/sw.js", sw_endpoint, methods=["GET"], include_in_schema=False)
+        add_route("/sw.js", sw_endpoint, methods=["GET", "HEAD"], include_in_schema=False)
     if "/offline.html" not in routes:
-        add_route("/offline.html", offline_endpoint, methods=["GET"], include_in_schema=False)
+        add_route("/offline.html", offline_endpoint, methods=["GET", "HEAD"], include_in_schema=False)
     if "/favicon.svg" not in routes:
-        add_route("/favicon.svg", favicon_endpoint, methods=["GET"], include_in_schema=False)
+        add_route("/favicon.svg", favicon_endpoint, methods=["GET", "HEAD"], include_in_schema=False)
     icon_routes = {
         "/icons/skillopt-icon-192.png": 192,
         "/icons/skillopt-icon-512.png": 512,
@@ -573,7 +582,7 @@ def attach_pwa_routes(app: Any) -> bool:
     }
     for path, size in icon_routes.items():
         if path not in routes:
-            add_route(path, lambda size=size: icon_endpoint(size), methods=["GET"], include_in_schema=False)
+            add_route(path, lambda size=size: icon_endpoint(size), methods=["GET", "HEAD"], include_in_schema=False)
     setattr(app, "_skillopt_pwa_routes_attached", True)
     return True
 
@@ -1028,6 +1037,27 @@ def build_app(home_default: str | None = None):
     return app
 
 
+def launch_webui(app: Any, *, host: str, port: int, share: bool, browser: bool) -> None:
+    """Launch Gradio and attach PWA routes to the actual served FastAPI app.
+
+    Blocks.launch() builds/replaces the FastAPI app during launch, so routes
+    registered on the pre-launch Blocks object are not necessarily served.
+    Launch non-blocking, attach to the concrete server app, then enter Gradio's
+    normal blocking loop.
+    """
+    kwargs = launch_kwargs(app, host=host, port=port, share=share, browser=browser)
+    launched_nonblocking = False
+    if _supports_kwarg(app.launch, "prevent_thread_lock"):
+        kwargs["prevent_thread_lock"] = True
+        launched_nonblocking = True
+    app.launch(**kwargs)
+    attach_pwa_routes(app)
+    if launched_nonblocking:
+        block_thread = getattr(app, "block_thread", None)
+        if callable(block_thread):
+            block_thread()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m hermes_skillopt.webui", description="Launch the Hermes SkillOpt Gradio WebUI")
     parser.add_argument("--host", default="127.0.0.1")
@@ -1043,7 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         raise
-    app.launch(**launch_kwargs(app, host=args.host, port=args.port, share=args.share, browser=args.browser))
+    launch_webui(app, host=args.host, port=args.port, share=args.share, browser=args.browser)
     return 0
 
 
