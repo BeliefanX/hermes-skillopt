@@ -4,15 +4,15 @@
 
 ## Diagrams
 
-The README diagrams are deterministic SVG/vector assets with large text and high-contrast labels so they stay sharp in GitHub rendering and can be opened directly for zooming.
+The README diagrams use enhanced PNGs based on the previous detailed generated diagrams, with non-generative upscaling, clarity, and sharpening for easier GitHub viewing.
 
-![hermes-skillopt architecture: plugin and CLI entrypoints, staged orchestrator, bounded optimizer, sandbox-backed target execution, review gates, and explicit adopt or rollback](docs/assets/hermes-skillopt-architecture.svg)
+![hermes-skillopt architecture: plugin and CLI entrypoints, staged orchestrator, bounded optimizer, sandbox-backed target execution, review gates, and explicit adopt or rollback](docs/assets/hermes-skillopt-architecture-enhanced.png)
 
-[Open high-resolution architecture SVG](docs/assets/hermes-skillopt-architecture.svg)
+[Open enhanced architecture PNG](docs/assets/hermes-skillopt-architecture-enhanced.png)
 
-![hermes-skillopt full-run flow: six staged phases, immutable artifacts, strict production gate, read-only review, explicit adopt, and rollback](docs/assets/hermes-skillopt-flow.svg)
+![hermes-skillopt full-run flow: six staged phases, immutable artifacts, strict production gate, read-only review, explicit adopt, and rollback](docs/assets/hermes-skillopt-flow-enhanced.png)
 
-[Open high-resolution flow SVG](docs/assets/hermes-skillopt-flow.svg)
+[Open enhanced flow PNG](docs/assets/hermes-skillopt-flow-enhanced.png)
 
 ## What it is
 
