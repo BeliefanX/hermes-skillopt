@@ -248,7 +248,9 @@ python3 -m hermes_skillopt.webui --host 127.0.0.1 --port 7860
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Tabs/actions: status, full run, review artifacts, adopt, rollback, upstream. Artifact review reads only fixed files in the selected staging directory. Adopt/rollback require typed confirmation and still call the core guards. If Gradio is missing, plugin import and tests still work.
+Tabs/actions: status, staged optimization run, artifact review, adopt, rollback, upstream. The interface includes an English/Chinese language selector for the primary headings, safety copy, labels, and action buttons. Artifact review reads only fixed files in the selected staging directory. Adopt/rollback require typed confirmation and still call the core guards. If Gradio is missing, plugin import and tests still work. The diff viewer avoids Gradio-version-specific `diff` language assumptions so the WebUI can start across supported Gradio releases.
+
+When served on a local/LAN origin, the WebUI advertises PWA/mobile standalone metadata (`manifest.webmanifest`, icons, viewport safe-area hints, Apple mobile tags, and a service worker) so browsers can offer “Add to Home Screen”. The service worker cache boundary is intentionally narrow: it only caches static PWA assets/icons plus the generic offline fallback, and treats `/`, Gradio/API/run/file/result/status-style routes as network-only/no-store so staged run data, profile paths, artifacts, and operation results are not replayed from cache. The offline fallback is static safety copy only and contains no run/profile/status data.
 
 The WebUI is an observability/review surface, not an auto-adopter: it displays report/diff/gate/candidate/rejected artifacts from staging and delegates all live-write decisions to the same guarded core functions used by the CLI/plugin tools.
 

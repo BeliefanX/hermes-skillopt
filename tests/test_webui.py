@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -122,8 +123,216 @@ def test_cli_webui_propagates_home(monkeypatch, tmp_path):
     assert calls["argv"] == ["--host", "127.0.0.1", "--port", "9999", "--home", str(tmp_path)]
 
 
+def test_webui_i18n_helpers_cover_primary_safety_copy():
+    assert webui.ui_text("en", "run_button") == "Run full cycle (staged only)"
+    assert webui.ui_text("zh", "run_button") == "运行完整周期（仅暂存）"
+    assert "安全模型" in webui.safety_cards_markdown("zh")
+    assert "typed confirmations" in webui.safety_cards_markdown("en")
+    updates = webui.language_updates(type("FakeGr", (), {})(), "zh")
+    assert "用于审查暂存" in updates[0]
+    assert updates[23]["placeholder"] == "Type: ADOPT <run_id>"
+    assert updates[27]["placeholder"] == "Type: ROLLBACK <run_id>"
+
+
+
+def test_webui_code_component_does_not_emit_unsupported_diff_language():
+    seen = []
+
+    class FakeGr:
+        @staticmethod
+        def Code(**kwargs):
+            seen.append(kwargs)
+            return kwargs
+
+    webui.make_code_component(FakeGr, label="diff.patch", language="diff")
+    webui.make_code_component(FakeGr, label="gate.json", language="json")
+    assert seen[0] == {"label": "diff.patch"}
+    assert seen[1] == {"label": "gate.json", "language": "json"}
+
+
+def test_webui_pwa_head_manifest_and_mobile_css_are_present():
+    head = webui.pwa_head_html()
+    manifest = webui.pwa_manifest()
+    assert 'rel="manifest" href="/manifest.webmanifest"' in head
+    assert 'rel="apple-touch-icon" href="/icons/apple-touch-icon.png"' in head
+    assert 'name="mobile-web-app-capable" content="yes"' in head
+    assert 'name="apple-mobile-web-app-status-bar-style" content="black-translucent"' in head
+    assert "viewport-fit=cover" in head
+    assert 'navigator.serviceWorker.register("/sw.js", { scope: "/" })' in head
+    assert manifest["display"] == "standalone"
+    assert manifest["id"] == "/?hermes-skillopt-pwa"
+    assert manifest["start_url"] == "/"
+    assert manifest["scope"] == "/"
+    assert {icon["sizes"] for icon in manifest["icons"]} >= {"192x192", "512x512", "180x180"}
+    assert "env(safe-area-inset-top)" in webui.WEBUI_CSS
+    assert "overflow-wrap: anywhere" in webui.WEBUI_CSS
+
+
+def test_webui_mobile_css_clamps_real_gradio_widths_without_only_hiding_overflow():
+    css = webui.WEBUI_CSS
+    assert "overflow-x: hidden" in css
+    assert "max-width: min(1180px, 100vw)" in css
+    assert "@media (max-width: 860px)" in css
+    for selector in (
+        "gradio-app",
+        ".gradio-container",
+        ".gradio-container .main",
+        ".gradio-container main.contain",
+        ".gradio-container .wrap",
+        ".gradio-container .column",
+        ".gradio-container .block",
+        ".skillopt-shell",
+        ".skillopt-hero",
+        ".skillopt-cards",
+        ".skillopt-card",
+    ):
+        assert selector in css
+    assert "width: min(100%, 100vw) !important" in css
+    assert "max-width: 100vw !important" in css
+    assert "min-width: 0 !important" in css
+    assert "overflow-x: auto" in css
+    assert "overflow-wrap: anywhere !important" in css
+
+
+def test_webui_mobile_polish_css_covers_settings_tabs_and_dark_markdown():
+    css = webui.WEBUI_CSS
+    assert ".skillopt-settings-row" in css
+    assert "@media (max-width: 640px)" in css
+    assert ".skillopt-settings-row { flex-direction: column !important; }" in css
+    assert ".gradio-container .tabs [role=\"tablist\"]" in css
+    assert ".gradio-container div[role=\"tablist\"]" in css
+    assert ".tab-nav" in css
+    assert "display: flex !important" in css
+    assert "overflow-x: auto !important" in css
+    assert "flex-wrap: nowrap !important" in css
+    assert "scroll-snap-type: x proximity" in css
+    assert "scrollbar-width: none" in css
+    assert ".gradio-container button[role=\"tab\"]" in css
+    assert "flex: 0 0 auto !important" in css
+    assert "width: auto !important" in css
+    assert "min-width: max-content !important" in css
+    assert "max-width: none !important" in css
+    assert "white-space: nowrap !important" in css
+    assert "text-overflow: clip !important" in css
+    assert "overflow: visible !important" in css
+    assert ".gradio-container [role=\"tab\"] *" in css
+    assert ".skillopt-status-md" in css
+    assert ".skillopt-result-md" in css
+    assert "--skillopt-code-bg: #171a21" in css
+    assert "background: var(--skillopt-code-bg) !important" in css
+    assert "word-break: break-word !important" in css
+
+
+def test_webui_blocks_kwargs_injects_pwa_head_when_supported():
+    class FakeBlocks:
+        def __init__(self, *, title=None, css=None, js=None, head=None):
+            pass
+
+    class FakeGr:
+        Blocks = FakeBlocks
+
+    kwargs = webui.blocks_kwargs(FakeGr)
+    assert kwargs["title"] == "Hermes SkillOpt"
+    assert kwargs["css"] == webui.WEBUI_CSS
+    assert kwargs["js"] == webui.pwa_startup_js()
+    assert kwargs["head"] == webui.pwa_head_html()
+
+
+def test_webui_pwa_startup_js_patches_real_gradio_head_defaults():
+    js = webui.pwa_startup_js()
+    assert 'ensureLink("manifest", "/manifest.webmanifest")' in js
+    assert 'link.getAttribute("href") !== href) link.remove()' in js
+    assert 'ensureLink("apple-touch-icon", "/icons/apple-touch-icon.png")' in js
+    assert 'ensureMeta("viewport", "width=device-width, initial-scale=1, viewport-fit=cover")' in js
+    assert 'ensureMeta("theme-color"' in js
+    assert 'navigator.serviceWorker.register("/sw.js", { scope: "/" })' in js
+
+
+def test_webui_launch_kwargs_injects_pwa_head_and_startup_js_when_supported():
+    class FakeApp:
+        def launch(self, *, server_name=None, server_port=None, share=None, inbrowser=None, css=None, js=None, head=None):
+            pass
+
+    kwargs = webui.launch_kwargs(FakeApp(), host="127.0.0.1", port=7861, share=False, browser=False)
+    assert kwargs["css"] == webui.WEBUI_CSS
+    assert kwargs["js"] == webui.pwa_startup_js()
+    assert kwargs["head"] == webui.pwa_head_html()
+
+
+def test_webui_service_worker_safe_cache_invariants():
+    sw = webui.service_worker_js()
+    assert "STATIC_ASSETS" in sw
+    for path in webui.PWA_ASSET_PATHS:
+        assert json.dumps(path) in sw
+    assert 'url.pathname === "/"' in sw
+    assert '"/api/"' in sw
+    assert '"/run/"' in sw
+    assert '"/queue/"' in sw
+    assert 'request.method !== "GET"' in sw
+    assert "url.origin !== self.location.origin" in sw
+    assert "response.ok" in sw
+    assert 'cache: "no-store"' in sw
+    assert "await cache.put(url.pathname" in sw
+    assert "await cache.put(\"/\"" not in sw
+    assert "caches.match(\"/offline.html\")" in sw
+
+
+def test_webui_offline_fallback_has_no_stale_private_data_and_no_store_headers():
+    html = webui.offline_html()
+    lowered = html.lower()
+    assert "offline" in lowered
+    for forbidden in ("run_id", "hermes_home", "skillopt/staging", "status:", "artifact_sha256"):
+        assert forbidden not in lowered
+    assert webui.pwa_response_headers()["Cache-Control"] == "no-store"
+    assert webui.pwa_response_headers(static_asset=True)["Cache-Control"].startswith("public")
+
+
+def test_webui_generated_icon_pngs_are_deterministic_and_valid():
+    icon_a = webui.pwa_icon_png(192)
+    icon_b = webui.pwa_icon_png(192)
+    assert icon_a == icon_b
+    assert icon_a.startswith(b"\x89PNG\r\n\x1a\n")
+    assert webui.pwa_icon_png(180).startswith(b"\x89PNG")
+    assert webui.pwa_icon_png(512).startswith(b"\x89PNG")
+    with pytest.raises(ValueError):
+        webui.pwa_icon_png(128)
+
+
+def test_webui_attach_pwa_routes_registers_expected_paths():
+    class FakeRoute:
+        def __init__(self, path):
+            self.path = path
+
+    class FakeFastAPI:
+        def __init__(self):
+            self.routes = []
+            self.calls = []
+
+        def add_api_route(self, path, endpoint, **kwargs):
+            self.routes.append(FakeRoute(path))
+            self.calls.append((path, endpoint, kwargs))
+
+    class FakeApp:
+        def __init__(self):
+            self.app = FakeFastAPI()
+
+    app = FakeApp()
+    assert webui.attach_pwa_routes(app) is True
+    paths = {call[0] for call in app.app.calls}
+    assert {
+        "/manifest.webmanifest",
+        "/sw.js",
+        "/offline.html",
+        "/favicon.svg",
+        "/icons/skillopt-icon-192.png",
+        "/icons/skillopt-icon-512.png",
+        "/icons/apple-touch-icon.png",
+    } <= paths
+    assert getattr(app, "_skillopt_pwa_routes_attached") is True
+
+
 def test_webui_build_app_uses_home_default_for_initial_status(monkeypatch, tmp_path):
-    seen = {"status_home": None, "textbox_values": []}
+    seen = {"status_home": None, "textbox_values": [], "code_kwargs": [], "load_js": None}
 
     def fake_status(home=None):
         seen["status_home"] = home
@@ -144,6 +353,10 @@ def test_webui_build_app_uses_home_default_for_initial_status(monkeypatch, tmp_p
         def __exit__(self, *args):
             return False
 
+        def load(self, *args, **kwargs):
+            seen["load_js"] = kwargs.get("js")
+            return None
+
     class FakeGr:
         Blocks = Context
         Tabs = Context
@@ -155,7 +368,11 @@ def test_webui_build_app_uses_home_default_for_initial_status(monkeypatch, tmp_p
         Slider = Component
         Dropdown = Component
         Checkbox = Component
-        Code = Component
+
+        @staticmethod
+        def Code(*args, **kwargs):
+            seen["code_kwargs"].append(kwargs)
+            return Component(*args, **kwargs)
 
     monkeypatch.setattr(webui, "require_gradio", lambda: FakeGr)
     monkeypatch.setattr(webui, "status_markdown", fake_status)
@@ -163,6 +380,9 @@ def test_webui_build_app_uses_home_default_for_initial_status(monkeypatch, tmp_p
     assert isinstance(app, Context)
     assert seen["status_home"] == str(tmp_path)
     assert str(tmp_path) in seen["textbox_values"]
+    assert {"label": "diff.patch"} in seen["code_kwargs"]
+    assert all(kwargs.get("language") != "diff" for kwargs in seen["code_kwargs"])
+    assert seen["load_js"] == webui.pwa_startup_js()
 
 
 def test_webui_review_rejects_symlink_artifact_escape(tmp_path):
