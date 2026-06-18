@@ -53,7 +53,7 @@ UI_TEXT: dict[str, dict[str, str]] = {
         "title": "Hermes SkillOpt",
         "eyebrow": "Local safety operations console",
         "hero_title": "Hermes SkillOpt",
-        "hero_subtitle": "A calm review surface for staged SKILL.md optimization runs.",
+        "hero_subtitle": "Staged SKILL.md optimization review console.",
         "intro": "SkillOpt treats SKILL.md as trainable state while keeping the Hermes executor, staged artifacts, profile isolation, and adopt/rollback guards outside the optimizer. WebUI runs are staged-only unless a separate guarded writeback action is explicitly confirmed.",
         "card_safety_title": "Safety model",
         "card_safety_body": "Optimizer backends only propose bounded edits. Adoption and rollback stay behind typed confirmations and core integrity checks.",
@@ -111,7 +111,7 @@ UI_TEXT: dict[str, dict[str, str]] = {
         "title": "Hermes SkillOpt",
         "eyebrow": "本地安全运维控制台",
         "hero_title": "Hermes SkillOpt",
-        "hero_subtitle": "用于审查暂存 SKILL.md 优化运行的冷静界面。",
+        "hero_subtitle": "暂存 SKILL.md 优化审查控制台。",
         "intro": "SkillOpt 将 SKILL.md 视为可训练状态，同时把 Hermes 执行器、暂存产物、Profile 隔离以及采用/回滚保护保留在优化器之外。WebUI 默认只写入暂存区；实时写回必须通过单独的受保护确认操作完成。",
         "card_safety_title": "安全模型",
         "card_safety_body": "优化后端只提出有边界的编辑。采用与回滚仍需精确输入确认，并经过核心完整性检查。",
@@ -171,26 +171,32 @@ WEBUI_CSS = """
 :root { --skillopt-bg: #f6f3ee; --skillopt-surface: #fbfaf8; --skillopt-panel: rgba(255,255,255,.76); --skillopt-panel-solid: #ffffff; --skillopt-border: #ded7cc; --skillopt-border-strong: #cfc6b8; --skillopt-muted: #6f6a61; --skillopt-text: #25211b; --skillopt-heading: #181510; --skillopt-accent: #b7612c; --skillopt-accent-soft: #f2dfd1; --skillopt-code-bg: #f1eee8; --skillopt-code-border: #d8d0c2; --skillopt-shadow: 0 18px 55px rgba(54,45,31,.10); color-scheme: light; }
 html, body { min-height: 100%; width: 100%; max-width: 100vw; overflow-x: hidden !important; }
 body { margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-body > gradio-app { display: block !important; width: 100% !important; max-width: min(1120px, calc(100vw - 32px)) !important; margin: 0 auto !important; }
-gradio-app, .gradio-container { display: block; width: 100% !important; max-width: min(1180px, 100vw) !important; min-width: 0 !important; box-sizing: border-box !important; }
+body > gradio-app { display: block !important; width: min(100%, calc(100vw - 48px)) !important; max-width: min(1920px, calc(100vw - 48px)) !important; margin: 0 auto !important; }
+gradio-app, .gradio-container { display: block; width: 100% !important; max-width: min(1920px, calc(100vw - 48px)) !important; min-width: 0 !important; box-sizing: border-box !important; }
 .gradio-container { margin: 0 auto !important; padding-left: max(8px, env(safe-area-inset-left)) !important; padding-right: max(8px, env(safe-area-inset-right)) !important; padding-bottom: max(14px, env(safe-area-inset-bottom)) !important; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
 body, .gradio-container, .gradio-container .main, .gradio-container main.contain, .gradio-container .contain { background: radial-gradient(circle at top left, rgba(183,97,44,.10), transparent 28rem), linear-gradient(180deg, #faf8f4 0%, var(--skillopt-bg) 46%, #f1eee8 100%) !important; color: var(--skillopt-text) !important; }
-.skillopt-shell { width: 100%; max-width: 100%; min-width: 0; padding: max(14px, env(safe-area-inset-top)) 0 10px; box-sizing: border-box; }
-.skillopt-hero { width: 100%; max-width: 100%; min-width: 0; border: 1px solid rgba(222,215,204,.88); background: linear-gradient(180deg, rgba(255,255,255,.86), rgba(255,255,255,.64)); border-radius: 18px; padding: 20px 22px; box-shadow: 0 10px 32px rgba(54,45,31,.075); }
-.skillopt-hero .skillopt-eyebrow { color: var(--skillopt-accent); letter-spacing: .14em; text-transform: uppercase; font-size: 11px; font-weight: 750; margin-bottom: 7px; }
-.skillopt-hero h1 { color: var(--skillopt-heading) !important; letter-spacing: -.045em; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.03; margin: 0 0 6px; }
-.skillopt-hero .skillopt-subtitle { color: #4b4338; font-size: clamp(15px, 1.6vw, 18px); line-height: 1.36; margin: 0 0 10px; font-weight: 620; }
-.skillopt-hero .skillopt-intro, .skillopt-card p { color: var(--skillopt-muted); line-height: 1.58; margin: 0; }
-.skillopt-cards { display: grid; width: 100%; max-width: 100%; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 14px; align-items: stretch; }
-.skillopt-card { width: 100%; max-width: 100%; min-width: 0; min-height: 96px; border: 1px solid var(--skillopt-border); background: var(--skillopt-panel); border-radius: 15px; padding: 14px 15px; box-shadow: 0 8px 24px rgba(54,45,31,.052); display: flex; flex-direction: column; justify-content: flex-start; }
+.skillopt-shell { width: 100%; max-width: 100%; min-width: 0; padding: max(6px, env(safe-area-inset-top)) 0 0; box-sizing: border-box; }
+.skillopt-hero, .skillopt-topbar { width: 100%; max-width: 100%; min-width: 0; border: 1px solid rgba(222,215,204,.82); background: linear-gradient(180deg, rgba(255,255,255,.84), rgba(255,255,255,.58)); border-radius: 16px 16px 10px 10px; padding: 8px 12px 6px; box-shadow: 0 8px 22px rgba(54,45,31,.055); display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.skillopt-topbar-main { min-width: 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.skillopt-hero .skillopt-eyebrow, .skillopt-topbar .skillopt-eyebrow { color: var(--skillopt-accent); letter-spacing: .12em; text-transform: uppercase; font-size: 10px; font-weight: 760; white-space: nowrap; }
+.skillopt-hero h1, .skillopt-topbar h1 { color: var(--skillopt-heading) !important; letter-spacing: -.035em; font-size: clamp(21px, 1.45vw, 28px); line-height: 1.02; margin: 0; }
+.skillopt-hero .skillopt-subtitle, .skillopt-topbar .skillopt-subtitle { color: #4b4338; font-size: 12px; line-height: 1.18; margin: 0; font-weight: 620; }
+.skillopt-hero .skillopt-intro, .skillopt-card p { color: var(--skillopt-muted); line-height: 1.45; margin: 0; }
+.skillopt-cards { display: block; width: 100%; max-width: 100%; min-width: 0; margin: 0; }
+.skillopt-safety-details { color: var(--skillopt-muted); font-size: 11px; border: 1px solid rgba(222,215,204,.58); background: rgba(255,255,255,.40); border-radius: 10px; padding: 3px 8px; }
+.skillopt-topbar .skillopt-safety-details { flex: 1 0 100%; }
+.skillopt-safety-details summary { cursor: pointer; color: #6b4a35; font-weight: 720; line-height: 1.2; }
+.skillopt-safety-details[open] { padding-bottom: 8px; }
+.skillopt-safety-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.skillopt-card { width: 100%; max-width: 100%; min-width: 0; min-height: 0; border: 1px solid var(--skillopt-border); background: var(--skillopt-panel); border-radius: 12px; padding: 9px 10px; box-shadow: none; display: flex; flex-direction: column; justify-content: flex-start; }
 .skillopt-card h3 { color: var(--skillopt-heading) !important; margin: 0 0 5px; font-size: 15px; }
 .skillopt-note { color: var(--skillopt-muted); font-size: 13px; }
-.gradio-container *, .skillopt-card, .skillopt-hero, textarea, input, pre, code { box-sizing: border-box; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.gradio-container *, .skillopt-card, .skillopt-hero, .skillopt-topbar, textarea, input, pre, code { box-sizing: border-box; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .gradio-container pre, .gradio-container code, .cm-content, .cm-line { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
 .gradio-container .main, .gradio-container main.contain, .gradio-container .contain, .gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel, .gradio-container .tabs, .gradio-container .tabitem, .gradio-container .column, .gradio-container .row, .gradio-container .prose { width: 100%; max-width: 100% !important; min-width: 0 !important; box-sizing: border-box !important; }
 .gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
 .gradio-container .wrap.center.full.hide, .gradio-container .hide, .gradio-container [hidden], .gradio-container .loader-container, .gradio-container .loading, .gradio-container .toast-wrap { display: none !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
-.gradio-container .tabs { background: rgba(255,255,255,.58) !important; border: 1px solid rgba(222,215,204,.82) !important; border-radius: 18px !important; padding: 12px !important; box-shadow: 0 10px 28px rgba(54,45,31,.05); }
+.gradio-container .tabs { background: rgba(255,255,255,.58) !important; border: 1px solid rgba(222,215,204,.82) !important; border-radius: 18px !important; padding: 8px !important; box-shadow: 0 10px 28px rgba(54,45,31,.05); }
 .gradio-container .tabitem { padding: 16px 0 0 !important; background: transparent !important; border: 0 !important; box-shadow: none !important; }
 .gradio-container .row { gap: 12px !important; }
 .gradio-container textarea, .gradio-container input, .gradio-container select, .gradio-container label, .gradio-container .input, .gradio-container .output { max-width: 100% !important; min-width: 0 !important; color: var(--skillopt-text) !important; }
@@ -199,15 +205,17 @@ body, .gradio-container, .gradio-container .main, .gradio-container main.contain
 .gradio-container input::placeholder, .gradio-container textarea::placeholder { color: #9a9286 !important; }
 .gradio-container input[type="range"], .gradio-container .slider input { accent-color: var(--skillopt-accent) !important; }
 .gradio-container input[type="checkbox"] { accent-color: var(--skillopt-accent) !important; }
-.skillopt-settings-row { align-items: flex-end !important; gap: 16px !important; margin: 2px 0 16px !important; background: rgba(255,255,255,.42) !important; border: 1px solid rgba(222,215,204,.62) !important; border-radius: 16px !important; padding: 12px !important; }
+.skillopt-settings-row { align-items: center !important; gap: 8px !important; margin: -14px 0 -12px !important; background: rgba(255,255,255,.48) !important; border: 1px solid rgba(222,215,204,.70) !important; border-top: 0 !important; border-radius: 0 0 14px 14px !important; padding: 5px 10px 6px !important; box-shadow: 0 6px 18px rgba(54,45,31,.035) !important; }
 .skillopt-settings-row > * { min-width: 0 !important; }
-.skillopt-settings-row > *:first-child { flex: 1 1 auto !important; max-width: 100% !important; }
-.skillopt-settings-row > *:last-child { flex: 1 1 auto !important; }
+.skillopt-settings-row > .form { flex: 1 1 auto !important; max-width: 100% !important; display: grid !important; grid-template-columns: minmax(150px, 190px) minmax(260px, 1fr) !important; gap: 10px !important; align-items: center !important; width: 100% !important; }
 .skillopt-settings-row .block, .skillopt-settings-row .form { background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; }
-.skillopt-settings-row > .form { display: grid !important; grid-template-columns: 260px minmax(0, 1fr) !important; gap: 16px !important; align-items: end !important; width: 100% !important; }
-.skillopt-settings-row label, .skillopt-settings-row .label-wrap { min-height: 22px !important; align-items: center !important; }
-.skillopt-settings-row input, .skillopt-settings-row select, .skillopt-settings-row .wrap, .skillopt-settings-row .input, .skillopt-settings-row [data-testid="dropdown"] { min-height: 42px !important; height: 42px !important; }
-.skillopt-settings-row svg { width: 16px !important; height: 16px !important; }
+.skillopt-settings-row .label-wrap, .skillopt-settings-row [data-testid="block-info"] { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; margin: 0 !important; }
+.skillopt-settings-row .info, .skillopt-settings-row .info-text { display: none !important; }
+.skillopt-settings-row .container, .skillopt-settings-row .padded, .skillopt-settings-row .block { padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
+.skillopt-settings-row input, .skillopt-settings-row select, .skillopt-settings-row textarea, .skillopt-settings-row .wrap, .skillopt-settings-row .input, .skillopt-settings-row .input-container, .skillopt-settings-row [data-testid="dropdown"] { min-height: 30px !important; height: 30px !important; }
+.skillopt-settings-row input, .skillopt-settings-row textarea { font-size: 13px !important; }
+.skillopt-settings-row textarea { resize: none !important; overflow: hidden !important; padding: 5px 10px !important; }
+.skillopt-settings-row svg { width: 15px !important; height: 15px !important; }
 .gradio-container .tabs [role="tablist"], .gradio-container .tab-nav, .gradio-container div[role="tablist"], .tab-nav { display: grid !important; grid-template-columns: repeat(6, minmax(0, 1fr)) !important; flex-wrap: nowrap !important; gap: 6px !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; overflow-x: auto !important; overflow-y: hidden !important; overscroll-behavior-x: contain; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; padding: 4px !important; scrollbar-width: none; background: rgba(246,243,238,.82) !important; border: 1px solid rgba(222,215,204,.72) !important; border-radius: 14px !important; }
 .gradio-container .tabs [role="tablist"]::-webkit-scrollbar, .gradio-container .tab-nav::-webkit-scrollbar, .gradio-container div[role="tablist"]::-webkit-scrollbar, .tab-nav::-webkit-scrollbar { display: none; }
 .gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"], .gradio-container button[role="tab"], .gradio-container [role="tab"], .tab-nav button { flex: 0 0 auto !important; width: auto !important; min-width: max-content !important; max-width: none !important; font-weight: 680 !important; white-space: nowrap !important; border-radius: 10px !important; padding: 10px 12px !important; line-height: 1.2 !important; text-overflow: clip !important; overflow: visible !important; scroll-snap-align: start; color: var(--skillopt-muted) !important; background: transparent !important; border: 1px solid transparent !important; box-shadow: none !important; justify-content: center !important; }
@@ -216,7 +224,7 @@ body, .gradio-container, .gradio-container .main, .gradio-container main.contain
 .gradio-container [role="tab"]::after, .gradio-container button[role="tab"]::after, .tab-nav button::after { display: none !important; content: none !important; }
 .gradio-container [role="tab"] * { white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; }
 .skillopt-status-md, .skillopt-status-md > div, .skillopt-status-md .wrap { border: 0 !important; background: transparent !important; box-shadow: none !important; padding: 0 !important; }
-.skillopt-status-html { display: block; width: 100%; max-height: min(680px, 62vh); overflow: auto; border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.82) !important; border-radius: 16px !important; padding: 16px !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.7); }
+.skillopt-status-html { display: block; width: 100%; max-height: min(760px, 72vh); overflow: auto; border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.82) !important; border-radius: 16px !important; padding: 16px !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.7); }
 .skillopt-status-html, .skillopt-status-html * { box-sizing: border-box; min-width: 0; }
 .skillopt-status-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .skillopt-status-title { margin: 0; font-size: 21px; line-height: 1.15; color: var(--skillopt-heading); }
@@ -234,6 +242,7 @@ body, .gradio-container, .gradio-container .main, .gradio-container main.contain
 .skillopt-badge-ok { color: #17603b; background: #e8f5ed; border-color: #b9dec7; }
 .skillopt-badge-warn { color: #8a2f18; background: #fff4ec; border-color: #efc3a3; }
 .skillopt-run-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.skillopt-run-dir .skillopt-metric-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .skillopt-run-note { color: var(--skillopt-muted); font-size: 12px; line-height: 1.45; margin-top: 8px; }
 .skillopt-status-md, .skillopt-result-md, .gradio-container .prose { color: var(--skillopt-text) !important; line-height: 1.58 !important; }
 .skillopt-status-md.prose, .skillopt-status-md .prose, .skillopt-result-md.prose, .skillopt-result-md .prose { border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.72) !important; border-radius: 16px !important; padding: 14px 16px !important; }
@@ -247,9 +256,10 @@ body, .gradio-container, .gradio-container .main, .gradio-container main.contain
 .gradio-container button.primary, .primary button, .gradio-container button[variant="primary"] { background: #9d4f24 !important; color: #fffaf5 !important; border-color: #9d4f24 !important; }
 .gradio-container button.stop, .stop button { background: #fff7ed !important; color: #8a2f18 !important; border-color: #f0c4a4 !important; }
 textarea, input { border-radius: 12px !important; }
-@media (max-width: 860px) { body > gradio-app, gradio-app, .gradio-container, .gradio-container .main, .gradio-container main.contain, .gradio-container .wrap, .gradio-container .column, .gradio-container .block, .skillopt-shell, .skillopt-hero, .skillopt-cards, .skillopt-card { width: min(100%, 100vw) !important; max-width: 100vw !important; min-width: 0 !important; } .gradio-container { margin-inline: 0 !important; padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right)) !important; } .skillopt-cards { grid-template-columns: minmax(0, 1fr); } .skillopt-hero { padding: 18px; border-radius: 17px; } .skillopt-hero h1 { font-size: 32px; } .skillopt-status-meta, .skillopt-run-grid { grid-template-columns: minmax(0, 1fr); } .skillopt-status-html { max-height: 62vh; } }
-@media (max-width: 640px) { body > gradio-app { max-width: 100vw !important; } .skillopt-settings-row { flex-direction: column !important; } .skillopt-settings-row { align-items: stretch !important; } .skillopt-settings-row > *, .skillopt-settings-row > *:first-child, .skillopt-settings-row > *:last-child, .skillopt-settings-row .form, .skillopt-settings-row .block { width: 100% !important; max-width: 100% !important; flex: 1 1 auto !important; } .skillopt-settings-row > .form { display: grid !important; grid-template-columns: minmax(0, 1fr) !important; } .tabs [role="tablist"], .tabs .tab-container[role="tablist"], .tab-wrapper [role="tablist"], div[role="tablist"], .gradio-container .tabs [role="tablist"], .gradio-container .tab-nav, .gradio-container div[role="tablist"], .tab-nav { display: flex !important; grid-template-columns: none !important; overflow-x: auto !important; overflow-y: hidden !important; flex-wrap: nowrap !important; justify-content: flex-start !important; } button[role="tab"], [role="tab"], .tabs [role="tablist"] > button[role="tab"], .tabs .tab-container[role="tablist"] > button[role="tab"], .tab-wrapper [role="tablist"] > button[role="tab"], div[role="tablist"] > button[role="tab"], .gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"], .gradio-container button[role="tab"], .gradio-container [role="tab"], .tab-nav button { flex: 0 0 auto !important; width: auto !important; min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; padding-inline: 12px !important; } [role="tab"] *, .gradio-container [role="tab"] * { min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; } .tab-nav button { font-size: 14px !important; } .skillopt-status-md .prose, .skillopt-result-md .prose, .skillopt-status-html { padding: 12px !important; border-radius: 14px !important; } .skillopt-status-head, .skillopt-run-top { flex-direction: column; } .skillopt-badges { justify-content: flex-start; } }
-@media (max-width: 520px) { .skillopt-shell { padding-top: max(14px, env(safe-area-inset-top)); padding-inline: 0; } .skillopt-hero { padding: 16px; } .skillopt-hero h1 { font-size: clamp(24px, 7vw, 28px); } button { min-height: 42px; } }
+@media (min-width: 1500px) { .skillopt-run-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } .skillopt-status-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 860px) { body > gradio-app, gradio-app, .gradio-container, .gradio-container .main, .gradio-container main.contain, .gradio-container .wrap, .gradio-container .column, .gradio-container .block, .skillopt-shell, .skillopt-hero, .skillopt-topbar, .skillopt-cards, .skillopt-card { width: min(100%, 100vw) !important; max-width: 100vw !important; min-width: 0 !important; } body > gradio-app, gradio-app, .gradio-container { max-width: 100vw !important; } .gradio-container { margin-inline: 0 !important; padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right)) !important; } .skillopt-safety-grid { grid-template-columns: minmax(0, 1fr); } .skillopt-hero, .skillopt-topbar { padding: 10px 12px; border-radius: 14px; align-items: flex-start; } .skillopt-hero h1, .skillopt-topbar h1 { font-size: 24px; } .skillopt-status-meta, .skillopt-run-grid { grid-template-columns: minmax(0, 1fr); } .skillopt-status-html { max-height: 68vh; } }
+@media (max-width: 640px) { body > gradio-app { width: 100% !important; max-width: 100vw !important; } .skillopt-hero, .skillopt-topbar { flex-direction: column; gap: 6px; } .skillopt-topbar-main { align-items: flex-start; gap: 4px 8px; } .skillopt-settings-row { flex-direction: column !important; border-top: 1px solid rgba(222,215,204,.70) !important; border-radius: 14px !important; margin: 4px 0 6px !important; } .skillopt-settings-row { align-items: stretch !important; } .skillopt-settings-row > *, .skillopt-settings-row > *:first-child, .skillopt-settings-row > *:last-child, .skillopt-settings-row .form, .skillopt-settings-row .block { width: 100% !important; max-width: 100% !important; flex: 1 1 auto !important; } .skillopt-settings-row > .form { display: grid !important; grid-template-columns: minmax(0, 1fr) !important; } .tabs [role="tablist"], .tabs .tab-container[role="tablist"], .tab-wrapper [role="tablist"], div[role="tablist"], .gradio-container .tabs [role="tablist"], .gradio-container .tab-nav, .gradio-container div[role="tablist"], .tab-nav { display: flex !important; grid-template-columns: none !important; overflow-x: auto !important; overflow-y: hidden !important; flex-wrap: nowrap !important; justify-content: flex-start !important; } button[role="tab"], [role="tab"], .tabs [role="tablist"] > button[role="tab"], .tabs .tab-container[role="tablist"] > button[role="tab"], .tab-wrapper [role="tablist"] > button[role="tab"], div[role="tablist"] > button[role="tab"], .gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"], .gradio-container button[role="tab"], .gradio-container [role="tab"], .tab-nav button { flex: 0 0 auto !important; width: auto !important; min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; padding-inline: 12px !important; } [role="tab"] *, .gradio-container [role="tab"] * { min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; } .tab-nav button { font-size: 14px !important; } .skillopt-status-md .prose, .skillopt-result-md .prose, .skillopt-status-html { padding: 12px !important; border-radius: 14px !important; } .skillopt-status-head, .skillopt-run-top { flex-direction: column; } .skillopt-badges { justify-content: flex-start; } }
+@media (max-width: 520px) { .skillopt-shell { padding-top: max(10px, env(safe-area-inset-top)); padding-inline: 0; } .skillopt-hero, .skillopt-topbar { padding: 10px; } .skillopt-hero h1, .skillopt-topbar h1 { font-size: clamp(22px, 6vw, 26px); } button { min-height: 42px; } }
 """
 
 PWA_HEAD = f"""
@@ -471,22 +481,37 @@ def ui_text(lang: str | None, key: str) -> str:
     return UI_TEXT[code].get(key) or UI_TEXT["en"].get(key, key)
 
 
-def hero_markdown(lang: str | None = "en") -> str:
+def _safety_details_html(lang: str | None = "en") -> str:
+    cards = []
+    for prefix in ("card_safety", "card_review", "card_profile"):
+        cards.append(f"<div class=\"skillopt-card\"><h3>{ui_text(lang, prefix + '_title')}</h3><p>{ui_text(lang, prefix + '_body')}</p></div>")
     return (
-        '<div class="skillopt-shell"><section class="skillopt-hero">'
-        f'<div class="skillopt-eyebrow">{ui_text(lang, "eyebrow")}</div>'
+        '<details class="skillopt-safety-details">'
+        f'<summary>{ui_text(lang, "card_safety_title")} · staged-only writeback guards</summary>'
+        '<div class="skillopt-safety-grid">'
+        + "".join(cards)
+        + "</div></details>"
+    )
+
+
+def hero_markdown(lang: str | None = "en") -> str:
+    """Compact operational header; no persistent marketing/explainer hero."""
+    return (
+        '<div class="skillopt-shell">'
+        '<section class="skillopt-topbar skillopt-hero">'
+        '<div class="skillopt-topbar-main">'
         f'<h1>{ui_text(lang, "hero_title")}</h1>'
         f'<p class="skillopt-subtitle">{ui_text(lang, "hero_subtitle")}</p>'
-        f'<p class="skillopt-intro">{ui_text(lang, "intro")}</p>'
-        "</section></div>"
+        '</div>'
+        f'<div class="skillopt-eyebrow">{ui_text(lang, "eyebrow")}</div>'
+        + _safety_details_html(lang)
+        + "</section></div>"
     )
 
 
 def safety_cards_markdown(lang: str | None = "en") -> str:
-    cards = []
-    for prefix in ("card_safety", "card_review", "card_profile"):
-        cards.append(f"<div class=\"skillopt-card\"><h3>{ui_text(lang, prefix + '_title')}</h3><p>{ui_text(lang, prefix + '_body')}</p></div>")
-    return "<div class=\"skillopt-cards\">" + "".join(cards) + "</div>"
+    """Collapsed safety reference so status/tabs own the first screen."""
+    return '<div class="skillopt-cards">' + _safety_details_html(lang) + "</div>"
 
 
 def _gr_update(gr: Any, **kwargs: Any) -> Any:
@@ -500,7 +525,6 @@ def language_updates(gr: Any, lang: str | None) -> tuple[Any, ...]:
     """Return component updates for the language selector without touching internal values."""
     return (
         hero_markdown(lang),
-        safety_cards_markdown(lang),
         _gr_update(gr, label=ui_text(lang, "home_label"), info=ui_text(lang, "home_info"), placeholder=ui_text(lang, "home_placeholder")),
         _gr_update(gr, value=ui_text(lang, "refresh_status")),
         _gr_update(gr, label=ui_text(lang, "skill_label"), placeholder=ui_text(lang, "skill_placeholder")),
@@ -818,8 +842,9 @@ def status_markdown(home: str | None = None) -> str:
         return f'<span class="{cls}">{esc(label)}: {esc(value)}</span>'
 
     def metric(label: str, value: Any) -> str:
+        cls = "skillopt-metric skillopt-run-dir" if label == "run dir" else "skillopt-metric"
         return (
-            '<div class="skillopt-metric">'
+            f'<div class="{cls}">'
             f'<div class="skillopt-metric-label">{esc(label)}</div>'
             f'<div class="skillopt-metric-value">{esc(value)}</div>'
             '</div>'
@@ -1028,7 +1053,6 @@ def build_app(home_default: str | None = None):
     lang_default = "en"
     with gr.Blocks(**blocks_kwargs(gr)) as app:
         hero = gr.Markdown(hero_markdown(lang_default))
-        cards = gr.Markdown(safety_cards_markdown(lang_default))
         with gr.Row(elem_classes=["skillopt-settings-row"]):
             language = gr.Dropdown(list(LANGUAGES.keys()), value=lang_default, label=ui_text(lang_default, "language"), info="English / 中文")
             home = gr.Textbox(label=ui_text(lang_default, "home_label"), info=ui_text(lang_default, "home_info"), placeholder=ui_text(lang_default, "home_placeholder"), value=home_default or "")
@@ -1098,7 +1122,7 @@ def build_app(home_default: str | None = None):
                     up_update_btn = gr.Button(ui_text(lang_default, "upstream_update"))
 
         language_outputs = [
-            hero, cards, home, refresh, skill, query, eval_file, lookback, limit, iterations, edit_budget, candidate_count,
+            hero, home, refresh, skill, query, eval_file, lookback, limit, iterations, edit_budget, candidate_count,
             backend, optimizer_backend, target_backend, gate_mode, allow_mock, resume_run_id, run_btn, run_status,
             review_run_id, review_btn, adopt_copy, adopt_confirm, adopt_force, adopt_btn, rollback_copy,
             rollback_confirm, rollback_force, rollback_btn, upstream_copy, fetch_only, up_status_btn, parity_btn, up_update_btn,

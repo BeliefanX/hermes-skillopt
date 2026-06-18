@@ -126,17 +126,21 @@ def test_cli_webui_propagates_home(monkeypatch, tmp_path):
 def test_webui_i18n_helpers_cover_primary_safety_copy():
     assert webui.ui_text("en", "run_button") == "Run full cycle (staged only)"
     assert webui.ui_text("zh", "run_button") == "运行完整周期（仅暂存）"
-    assert "安全模型" in webui.safety_cards_markdown("zh")
+    safety = webui.safety_cards_markdown("zh")
+    assert "安全模型" in safety
+    assert "<details" in webui.safety_cards_markdown("en")
     assert "typed confirmations" in webui.safety_cards_markdown("en")
     hero = webui.hero_markdown("en")
     assert '<h1>Hermes SkillOpt</h1>' in hero
+    assert "skillopt-topbar" in hero
     assert "skillopt-subtitle" in hero
+    assert "skillopt-intro" not in hero
     assert "# Hermes SkillOpt" not in hero
     updates = webui.language_updates(type("FakeGr", (), {})(), "zh")
-    assert "用于审查暂存" in updates[0]
+    assert "暂存 SKILL.md 优化审查控制台" in updates[0]
     assert "# Hermes SkillOpt" not in updates[0]
-    assert updates[23]["placeholder"] == "Type: ADOPT <run_id>"
-    assert updates[27]["placeholder"] == "Type: ROLLBACK <run_id>"
+    assert updates[22]["placeholder"] == "Type: ADOPT <run_id>"
+    assert updates[26]["placeholder"] == "Type: ROLLBACK <run_id>"
 
 
 
@@ -176,7 +180,7 @@ def test_webui_pwa_head_manifest_and_mobile_css_are_present():
 def test_webui_mobile_css_clamps_real_gradio_widths_without_only_hiding_overflow():
     css = webui.WEBUI_CSS
     assert "overflow-x: hidden" in css
-    assert "max-width: min(1180px, 100vw)" in css
+    assert "max-width: min(1920px, calc(100vw - 48px))" in css
     assert "@media (max-width: 860px)" in css
     for selector in (
         "gradio-app",
@@ -203,7 +207,7 @@ def test_webui_mobile_polish_css_covers_settings_tabs_and_light_markdown():
     css = webui.WEBUI_CSS
     assert ".skillopt-settings-row" in css
     assert "@media (max-width: 640px)" in css
-    assert ".skillopt-settings-row { flex-direction: column !important; }" in css
+    assert ".skillopt-settings-row { flex-direction: column !important; border-top: 1px solid rgba(222,215,204,.70) !important; border-radius: 14px !important; margin: 4px 0 6px !important; }" in css
     assert ".gradio-container .tabs [role=\"tablist\"]" in css
     assert ".gradio-container div[role=\"tablist\"]" in css
     assert ".tabs [role=\"tablist\"]" in css
@@ -258,6 +262,25 @@ def test_webui_mobile_tab_override_beats_desktop_segmented_grid_compression():
     assert '.gradio-container [role="tab"] * { min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; }' in mobile_css
 
 
+def test_webui_first_screen_ia_is_compact_and_widescreen():
+    hero = webui.hero_markdown("en")
+    safety = webui.safety_cards_markdown("en")
+    css = webui.WEBUI_CSS
+    assert "skillopt-topbar" in hero
+    assert "skillopt-intro" not in hero
+    assert webui.ui_text("en", "intro") not in hero
+    assert '<details class="skillopt-safety-details">' in hero
+    assert '<details class="skillopt-safety-details">' in safety
+    assert '<div class="skillopt-cards"><div class="skillopt-card"' not in safety
+    assert "max-width: min(1920px, calc(100vw - 48px))" in css
+    assert "max-width: min(1120px" not in css
+    assert "max-width: min(1180px" not in css
+    assert "@media (min-width: 1500px)" in css
+    assert ".skillopt-run-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in css
+    assert ".skillopt-settings-row { align-items: center !important; gap: 8px !important; margin: -14px 0 -12px" in css
+    assert ".skillopt-topbar .skillopt-safety-details { flex: 1 0 100%; }" in css
+
+
 def test_webui_light_ops_console_css_themes_real_gradio_surfaces():
     css = webui.WEBUI_CSS
     assert "--skillopt-bg: #f6f3ee" in css
@@ -306,7 +329,7 @@ def test_webui_does_not_style_generic_prose_as_card_panel():
         ".skillopt-status-md.prose, .skillopt-status-md .prose, .skillopt-result-md.prose, .skillopt-result-md .prose { border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.72) !important; border-radius: 16px !important; padding: 14px 16px !important; }"
     ]
     assert ".gradio-container .prose" not in panel_rules[0]
-    assert ".skillopt-hero {" in css and "background: linear-gradient" in css
+    assert ".skillopt-hero, .skillopt-topbar {" in css and "background: linear-gradient" in css
     assert ".skillopt-card {" in css and "background: var(--skillopt-panel)" in css
 
 
