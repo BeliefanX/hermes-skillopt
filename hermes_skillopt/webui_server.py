@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Optional
 
+from hermes_skillopt import core
 from hermes_skillopt import webui as pwa
 from hermes_skillopt import webui_api
 
@@ -51,6 +52,18 @@ def create_app(home_default: Any = None):
     StaticFiles = deps["StaticFiles"]
     BaseModel = deps["BaseModel"]
 
+    def safe_response(fn):
+        try:
+            return webui_api._safe_json(fn())
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=core.redact_secrets(str(exc))) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=core.redact_secrets(str(exc))) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: internal WebUI operation failed") from exc
+
     class RunRequest(BaseModel):
         skill: Optional[str] = None
         query: Optional[str] = None
@@ -90,46 +103,42 @@ def create_app(home_default: Any = None):
 
     @app.get("/api/status")
     def api_status(home: Optional[str] = None):
-        return webui_api.status(home or home_default)
+        return safe_response(lambda: webui_api.status(home or home_default))
 
     @app.post("/api/run")
     def api_run(req: RunRequest):
         data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
-        return webui_api.run_full(data)
+        if not data.get("home") and home_default:
+            data["home"] = str(home_default)
+        return safe_response(lambda: webui_api.run_full(data))
 
     @app.get("/api/review")
     def api_review(run_id: Optional[str] = "", home: Optional[str] = None):
-        return webui_api.review(run_id, home or home_default)
+        return safe_response(lambda: webui_api.review(run_id, home or home_default))
 
     @app.post("/api/adopt")
     def api_adopt(req: ConfirmRequest):
-        try:
-            return webui_api.adopt(req.run_id, req.confirmation, req.force)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return safe_response(lambda: webui_api.adopt(req.run_id, req.confirmation, req.force))
 
     @app.post("/api/rollback")
     def api_rollback(req: ConfirmRequest):
-        try:
-            return webui_api.rollback(req.run_id, req.confirmation, req.force)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return safe_response(lambda: webui_api.rollback(req.run_id, req.confirmation, req.force))
 
     @app.get("/api/upstream/status")
     def api_upstream_status(home: Optional[str] = None):
-        return webui_api.upstream_status(home or home_default)
+        return safe_response(lambda: webui_api.upstream_status(home or home_default))
 
     @app.get("/api/upstream/parity")
     def api_upstream_parity(home: Optional[str] = None):
-        return webui_api.upstream_parity(home or home_default)
+        return safe_response(lambda: webui_api.upstream_parity(home or home_default))
 
     @app.post("/api/upstream/update")
     def api_upstream_update(req: UpstreamUpdateRequest):
-        return webui_api.upstream_update(req.fetch_only)
+        return safe_response(lambda: webui_api.upstream_update(req.fetch_only))
+
+    @app.get("/manifest.json", include_in_schema=False)
+    def manifest_json_alias():
+        return JSONResponse(pwa.pwa_manifest(), media_type="application/manifest+json", headers=pwa.pwa_response_headers(static_asset=True))
 
     @app.get("/manifest.webmanifest", include_in_schema=False)
     def manifest():

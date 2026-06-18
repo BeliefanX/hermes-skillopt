@@ -161,11 +161,64 @@ def test_fastapi_routes_and_static_assets(monkeypatch, tmp_path):
     assert status.status_code == 200
     assert status.json()["hermes_home"] == str(tmp_path)
     assert client.get("/manifest.webmanifest").status_code == 200
+    manifest_json = client.get("/manifest.json")
+    assert manifest_json.status_code == 200
+    assert manifest_json.headers["content-type"].startswith("application/manifest+json")
     sw = client.get("/sw.js")
     assert sw.status_code == 200
     assert '"/api/"' in sw.text
     bad = client.post("/api/adopt", json={"run_id": "rid", "confirmation": "ADOPT wrong", "home": str(tmp_path)})
     assert bad.status_code == 403
+
+
+def test_fastapi_run_uses_create_app_home_default(monkeypatch, tmp_path):
+    fastapi = pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    calls = {}
+
+    def fake_full_run(payload):
+        calls.update(payload)
+        return {"success": True, "run_id": "rid", "token": "sk-abcdefghijklmnop"}
+
+    monkeypatch.setattr(webui_api, "run_full", fake_full_run)
+    client = TestClient(create_app(str(tmp_path)))
+    res = client.post("/api/run", json={"skill": "demo", "backend": "mock"})
+    assert res.status_code == 200
+    assert calls["home"] == str(tmp_path)
+    assert res.json()["token"] == "<REDACTED>"
+
+
+def test_fastapi_error_mapping_and_redaction(monkeypatch, tmp_path):
+    fastapi = pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app(str(tmp_path)))
+    monkeypatch.setattr(webui_api, "status", lambda home=None: (_ for _ in ()).throw(ValueError("bad token=sk-abcdefghijklmnop")))
+    bad = client.get("/api/status")
+    assert bad.status_code == 400
+    assert "sk-" not in bad.text
+    assert "<REDACTED>" in bad.text
+
+    monkeypatch.setattr(webui_api, "status", lambda home=None: (_ for _ in ()).throw(PermissionError("authorization: bearer-secret-abcdefghijklmnopqrstuvwxyz")))
+    denied = client.get("/api/status")
+    assert denied.status_code == 403
+    assert "bearer-secret" not in denied.text
+
+    monkeypatch.setattr(webui_api, "status", lambda home=None: (_ for _ in ()).throw(RuntimeError(f"boom at {tmp_path} token=sk-abcdefghijklmnop")))
+    err = client.get("/api/status")
+    assert err.status_code == 500
+    assert str(tmp_path) not in err.text
+    assert "sk-" not in err.text
+
+
+def test_web_package_build_contracts():
+    pkg = json.loads((Path(__file__).resolve().parents[1] / "web" / "package.json").read_text(encoding="utf-8"))
+    assert pkg["scripts"]["typecheck"] == "tsc --noEmit"
+    assert "typecheck" in pkg["scripts"]["build"]
+    for section in ("dependencies", "devDependencies"):
+        for name, version in pkg.get(section, {}).items():
+            assert version != "latest", name
 
 
 def test_cli_and_module_webui_help_smoke():

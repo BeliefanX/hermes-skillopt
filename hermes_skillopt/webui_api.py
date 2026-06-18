@@ -7,6 +7,7 @@ client for these functions and never bypasses staged-only runs or typed writebac
 confirmations.
 """
 
+import re
 from typing import Any
 
 from hermes_skillopt import core
@@ -14,13 +15,30 @@ from hermes_skillopt import webui as legacy
 
 
 def _safe_json(data: Any) -> Any:
-    """Round-trip through existing redaction for JSON-shaped responses."""
-    import json
+    """Return JSON-shaped data with secret-bearing fields redacted.
 
-    try:
-        return json.loads(legacy._json(data))
-    except Exception:
-        return data
+    This preserves useful status paths such as HERMES_HOME while removing
+    token/password/authorization-shaped fields and common credential values.
+    """
+    sensitive_key = re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|bearer)")
+    token_value = re.compile(r"(?i)(bearer\s+[-A-Za-z0-9._+/=]{8,}|\b(?:sk|ghp|gho|xox[baprs])-[-A-Za-z0-9_]{12,}\b|\b(api[_-]?key|token|secret|password|passwd|authorization)\s*[:=]\s*[^\s,;]+)")
+
+    def scrub(value: Any, key: str = "") -> Any:
+        if sensitive_key.search(key):
+            return "<REDACTED>"
+        if isinstance(value, dict):
+            return {str(k): scrub(v, str(k)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [scrub(v, key) for v in value]
+        if isinstance(value, tuple):
+            return [scrub(v, key) for v in value]
+        if isinstance(value, str):
+            return token_value.sub("<REDACTED>", value)
+        if isinstance(value, (bool, int, float)) or value is None:
+            return value
+        return token_value.sub("<REDACTED>", str(value))
+
+    return scrub(data)
 
 
 def status(home: str | None = None) -> dict[str, Any]:
