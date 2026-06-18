@@ -75,6 +75,7 @@ def create_app(home_default: Any = None):
         candidate_count: int = 1
         backend: str = "auto"
         optimizer_backend: Optional[str] = None
+        target_executor: str = "auto"
         target_backend: Optional[str] = None
         gate_mode: str = "soft"
         resume_run_id: Optional[str] = None
@@ -115,6 +116,18 @@ def create_app(home_default: Any = None):
     @app.get("/api/review")
     def api_review(run_id: Optional[str] = "", home: Optional[str] = None):
         return safe_response(lambda: webui_api.review(run_id, home or home_default))
+
+    @app.get("/api/fleet/report")
+    def api_fleet_report(home: Optional[str] = None, limit: int = Query(50, ge=1, le=200), skill: Optional[str] = None):
+        return safe_response(lambda: webui_api.fleet_report(home or home_default, limit=limit, skill=skill))
+
+    @app.get("/api/fleet/resume-plan")
+    def api_fleet_resume_plan(home: Optional[str] = None, limit: int = Query(50, ge=1, le=200), skill: Optional[str] = None):
+        return safe_response(lambda: webui_api.fleet_resume_plan(home or home_default, limit=limit, skill=skill))
+
+    @app.get("/api/fleet/rollback-plan")
+    def api_fleet_rollback_plan(home: Optional[str] = None, limit: int = Query(50, ge=1, le=200), skill: Optional[str] = None):
+        return safe_response(lambda: webui_api.fleet_rollback_plan(home or home_default, limit=limit, skill=skill))
 
     @app.post("/api/adopt")
     def api_adopt(req: ConfirmRequest):

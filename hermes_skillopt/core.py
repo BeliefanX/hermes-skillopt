@@ -260,15 +260,43 @@ def _mock_provenance_reasons(manifest: dict[str, Any]) -> list[str]:
     return reasons
 
 
-def _target_binding_payload(home: Path, target: Skill, original: str) -> dict[str, Any]:
-    return {
+def _target_binding_payload(home: Path, target: Skill, original: str, *, target_config: dict[str, Any] | None = None, target_execution_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = {
+        "classification": "frozen_hermes_target_execution_v1",
+        "required_fields": [
+            "frozen_target_config_id",
+            "frozen_target_fingerprint_sha256",
+            "provider_fingerprint",
+            "model_fingerprint",
+            "tool_policy_fingerprint",
+            "session_fingerprint",
+            "runtime_fingerprint",
+            "isolated_runtime_evidence",
+            "permissions.task_commands_allowed=false",
+            "permissions.profile_write_allowed=false",
+            "trajectory_or_transcript_artifact_fingerprint",
+            "execution_scoring_evidence",
+        ],
+        "missing_required_evidence_makes_production_eligible": False,
+        "live_profile_writes_allowed": False,
+        "task_commands_allowed": False,
+    }
+    payload = {
         "schema_version": "skillopt-target-binding-v1",
         "hermes_home": str(home),
         "skill_name": target.name,
         "skill_relpath": target.relpath,
         "skill_path": str(target.path),
         "original_sha256": sha256_text(original),
+        "target_backend_config": target_config or {},
+        "frozen_target_config_id": (target_config or {}).get("target_config_id"),
+        "frozen_target_fingerprint_sha256": (target_config or {}).get("fingerprint_sha256"),
+        "target_execution_evidence_contract": contract,
+        "target_execution_evidence": target_execution_evidence or {"available": False, "review_only_reason": "no target execution evidence supplied to binding"},
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
     }
+    payload["fingerprint_sha256"] = _stable_json_sha(payload)
+    return payload
 
 
 def _provenance_binding_payload(*, backend: str, optimizer_config: dict[str, Any], target_backend: str, target_config: dict[str, Any], target_executor: str, target_config_id: str, gate_policy: dict[str, Any]) -> dict[str, Any]:
@@ -1581,7 +1609,16 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     _jsonl_write(artifacts.rejected_edits, rejected)
     slow_meta = _slow_meta_artifact(original, evidence, rejected, candidate_summary)
     write_text(artifacts.slow_meta, json.dumps(slow_meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    target_binding = _target_binding_payload(home, target, original)
+    target_config_for_binding = executor.config.as_dict()
+    target_execution_evidence_for_binding = {
+        "validation_trajectory_fingerprint_sha256": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
+        "test_trajectory_fingerprint_sha256": test_results.get("trajectory_fingerprint_sha256") if isinstance(test_results, dict) else None,
+        "test_contract_checks": test_results.get("eval_execution_contract_checks") if isinstance(test_results, dict) else None,
+        "test_evidence_contract": test_results.get("target_execution_evidence_contract") if isinstance(test_results, dict) else None,
+        "execution_scoring_evidence_present": any(isinstance(r, dict) and isinstance(r.get("metadata"), dict) and isinstance(r["metadata"].get("execution_scoring_evidence"), dict) for r in (test_results.get("results") or []) if isinstance(test_results, dict)),
+        "review_only_unless_complete_contract_checks": True,
+    }
+    target_binding = _target_binding_payload(home, target, original, target_config=target_config_for_binding, target_execution_evidence=target_execution_evidence_for_binding)
     write_text(artifacts.target_binding, json.dumps(target_binding, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
     current_score = validation_summary.get("current_score") if validation_summary else None
@@ -1812,6 +1849,165 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
     return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs, "stale_or_incomplete_checkpoints": checkpoint_only[:20]}
 
 
+def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, warnings: list[str] | None = None, verified: bool = False) -> dict[str, Any]:
+    raw_gate_policy = manifest.get("gate_policy")
+    gate_policy: dict[str, Any] = raw_gate_policy if isinstance(raw_gate_policy, dict) else {}
+    raw_provenance = manifest.get("provenance_fingerprint")
+    provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
+    backup_dir = manifest.get("backup_dir")
+    rollback_available = False
+    rollback_reason = "run is not adopted"
+    if manifest.get("status") == "adopted":
+        if backup_dir and (Path(str(backup_dir)) / "SKILL.md").is_file() and (Path(str(backup_dir)) / "manifest.json").is_file():
+            rollback_available = True
+            rollback_reason = "adopted run has backup SKILL.md and backup manifest; use per-run rollback command only"
+        else:
+            rollback_reason = "adopted run lacks safely inferable backup artifacts"
+    cp_path = run_dir / "checkpoint.json"
+    checkpoint_status = None
+    checkpoint_input_sha256 = None
+    resume_safe = False
+    if cp_path.is_file():
+        try:
+            cp = json.loads(read_text(cp_path))
+            checkpoint_status = cp.get("status")
+            checkpoint_input_sha256 = cp.get("input_sha256")
+            resume_safe = checkpoint_status == "complete" and verified
+        except Exception as exc:
+            warnings = [*(warnings or []), f"checkpoint unreadable: {type(exc).__name__}: {exc}"]
+    return {
+        "run_id": manifest.get("run_id") or run_dir.name,
+        "run_dir": str(run_dir),
+        "kind": "batch_parent" if manifest.get("batch_id") else "single_run",
+        "batch_id": manifest.get("batch_id"),
+        "skill_name": manifest.get("skill_name"),
+        "skill_relpath": manifest.get("skill_relpath"),
+        "created_at": manifest.get("created_at") or manifest.get("started_at") or manifest.get("completed_at"),
+        "status": manifest.get("status") or ("batch_complete" if manifest.get("batch_id") else None),
+        "adoptable": manifest.get("adoptable") is True,
+        "production_eligible": manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict",
+        "test_eligible": manifest.get("test_gate_eligible") is True,
+        "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True,
+        "gate_mode": gate_policy.get("mode"),
+        "optimizer_backend": manifest.get("optimizer_backend") or manifest.get("backend"),
+        "target_executor": manifest.get("target_executor") or manifest.get("target_backend"),
+        "split_scores": manifest.get("split_scores") or {},
+        "score_summary": {"validation_current": manifest.get("validation_current_score"), "validation_candidate": manifest.get("validation_candidate_score"), "production_validation_current": manifest.get("production_validation_current_score"), "production_validation_candidate": manifest.get("production_validation_candidate_score"), "test": manifest.get("test_score")},
+        "not_adoptable_reasons": manifest.get("production_eligibility_reasons") or [],
+        "resume": {"checkpoint_present": cp_path.is_file(), "checkpoint_status": checkpoint_status, "checkpoint_input_sha256": checkpoint_input_sha256, "safe_completed_reuse": resume_safe, "partial_continuation_available": False},
+        "rollback": {"available": rollback_available, "reason": rollback_reason, "backup_dir": backup_dir},
+        "artifact_lineage": manifest.get("artifact_lineage") or _artifact_lineage_status(run_dir, manifest),
+        "fingerprints": {"provenance": provenance.get("fingerprint_sha256"), "eval": provenance.get("eval_fingerprint_sha256") or provenance.get("eval_file_sha256"), "task": provenance.get("task_sha256"), "optimizer": provenance.get("optimizer_fingerprint_sha256"), "target": provenance.get("target_fingerprint_sha256"), "profile": provenance.get("profile_fingerprint_sha256"), "manifest_artifacts_verified": verified},
+        "warnings": sorted(set(warnings or [])),
+    }
+
+
+def _fleet_checkpoint_row(run_dir: Path, checkpoint: dict[str, Any] | None, warnings: list[str]) -> dict[str, Any]:
+    cp = checkpoint or {}
+    lineage = _artifact_lineage_status(run_dir, {}, cp)
+    reasons = []
+    if cp.get("status") != "complete":
+        reasons.append("run is incomplete; partial-stage continuation is refused because replay could skip gates/adopt checks")
+    reasons.append("completed-run reuse unavailable until a manifest exists and artifact hashes verify")
+    return {"run_id": run_dir.name, "run_dir": str(run_dir), "kind": "checkpoint_only", "skill_name": lineage.get("skill_name"), "skill_relpath": lineage.get("skill_relpath"), "status": cp.get("status") or "checkpoint_only", "adoptable": False, "production_eligible": False, "test_eligible": False, "split_scores": {}, "resume": {"checkpoint_present": True, "checkpoint_status": cp.get("status"), "checkpoint_input_sha256": cp.get("input_sha256"), "safe_completed_reuse": False, "partial_continuation_available": False}, "rollback": {"available": False, "reason": "checkpoint-only run has no adopted manifest", "backup_dir": None}, "artifact_lineage": lineage, "fingerprints": {"manifest_artifacts_verified": False}, "refusal_reasons": sorted(set(reasons)), "cleanup_guidance": ["No automatic cleanup is performed. Inspect run_dir, ensure no process is writing it, then remove or retry with a new full-run if desired."], "warnings": sorted(set(warnings))}
+
+
+def _scan_fleet_runs(home: Path, limit: int = 50) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    dirs = skillopt_paths(home)
+    cap = max(1, min(int(limit or 50), 200))
+    rows: list[dict[str, Any]] = []
+    incomplete: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    run_dirs = sorted([p for p in dirs["staging"].iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True) if dirs["staging"].exists() else []
+    for run_dir in run_dirs[:cap]:
+        manifest_path = run_dir / "manifest.json"
+        checkpoint_path = run_dir / "checkpoint.json"
+        if manifest_path.is_file():
+            try:
+                manifest = load_manifest(run_dir)
+                verify_artifact_hashes(run_dir, manifest)
+                rows.append(_fleet_manifest_row(home, run_dir, manifest, verified=True))
+            except Exception as exc:
+                warning = f"manifest missing/tampered/unverified for {run_dir.name}: {type(exc).__name__}: {exc}"
+                warnings.append(warning)
+                try:
+                    raw = json.loads(read_text(manifest_path))
+                except Exception:
+                    raw = {"run_id": run_dir.name, "status": "manifest_unreadable"}
+                rows.append(_fleet_manifest_row(home, run_dir, raw, warnings=[warning], verified=False))
+            continue
+        if checkpoint_path.is_file():
+            cp_warnings: list[str] = []
+            try:
+                cp = json.loads(read_text(checkpoint_path))
+            except Exception as exc:
+                cp = None
+                cp_warnings.append(f"checkpoint unreadable: {type(exc).__name__}: {exc}")
+            row = _fleet_checkpoint_row(run_dir, cp, cp_warnings)
+            rows.append(row)
+            incomplete.append(row)
+    return rows, incomplete, warnings
+
+
+def fleet_report(hermes_home_path: str | None = None, *, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    """Read-only fleet report over recent single and batch SkillOpt runs."""
+    home = hermes_home(hermes_home_path)
+    rows, incomplete, warnings = _scan_fleet_runs(home, limit)
+    if skill:
+        rows = [r for r in rows if r.get("skill_name") == skill]
+        incomplete = [r for r in incomplete if r.get("skill_name") == skill]
+    by_skill: dict[str, dict[str, Any]] = {}
+    batch_children: dict[str, list[str]] = {}
+    for row in rows:
+        if row.get("kind") == "batch_parent":
+            try:
+                jobs = json.loads(read_text(Path(row["run_dir"]) / "jobs.json")) if (Path(row["run_dir"]) / "jobs.json").is_file() else []
+                batch_children[str(row.get("batch_id") or row.get("run_id"))] = [str(j.get("run_id")) for j in jobs if isinstance(j, dict) and j.get("run_id")]
+            except Exception as exc:
+                row.setdefault("warnings", []).append(f"batch jobs unreadable: {type(exc).__name__}: {exc}")
+        sk = row.get("skill_name") or "<unknown>"
+        bucket = by_skill.setdefault(sk, {"skill_name": sk, "runs": [], "latest_run": None, "adoptable_count": 0, "rollbackable_count": 0, "incomplete_count": 0})
+        bucket["runs"].append(row)
+        if bucket["latest_run"] is None:
+            bucket["latest_run"] = row
+        if row.get("adoptable"):
+            bucket["adoptable_count"] += 1
+        if (row.get("rollback") or {}).get("available"):
+            bucket["rollbackable_count"] += 1
+        if row.get("kind") == "checkpoint_only" or (row.get("resume") or {}).get("checkpoint_status") not in (None, "complete"):
+            bucket["incomplete_count"] += 1
+    return {"success": True, "schema_version": "hermes-skillopt-fleet-report-v1", "mode": "read_only_report_no_resume_no_rollback_no_writeback", "hermes_home": str(home), "limit": max(1, min(int(limit or 50), 200)), "run_count": len(rows), "latest_runs": rows, "skills": list(by_skill.values()), "batch_children": batch_children, "incomplete_or_checkpoint_only": incomplete, "warnings": sorted(set(warnings)), "read_only_guards": ["does not call full_run", "does not adopt", "does not rollback", "does not write skills or staging artifacts"]}
+
+
+def fleet_resume_plan(hermes_home_path: str | None = None, *, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    """Read-only resume plan. Completed exact-fingerprint runs may be reused; partial continuation is refused."""
+    report = fleet_report(hermes_home_path, limit=limit, skill=skill)
+    reusable = []
+    refused = []
+    for row in report["latest_runs"]:
+        resume = row.get("resume") or {}
+        if resume.get("safe_completed_reuse"):
+            reusable.append({"run_id": row.get("run_id"), "skill_name": row.get("skill_name"), "checkpoint_input_sha256": resume.get("checkpoint_input_sha256"), "guidance": "Pass this run_id to --resume-run-id only with identical input/config/provenance; core will re-verify exact fingerprint before reuse."})
+        elif resume.get("checkpoint_present"):
+            refused.append({"run_id": row.get("run_id"), "skill_name": row.get("skill_name"), "checkpoint_status": resume.get("checkpoint_status"), "partial_continuation_available": False, "refusal_reasons": row.get("refusal_reasons") or ["completed exact-fingerprint reuse is unavailable; partial continuation is refused"], "cleanup_guidance": row.get("cleanup_guidance") or ["Retry with a new full-run. Manually clean abandoned run dirs only after confirming no writer is active."]})
+    return {"success": True, "schema_version": "hermes-skillopt-fleet-resume-plan-v1", "mode": "read_only_plan_no_resume_execution", "hermes_home": report["hermes_home"], "completed_exact_fingerprint_reusable": reusable, "refused_incomplete_or_partial": refused, "partial_continuation_available": False, "cleanup_retry_guidance": ["No automatic cleanup or resume is performed.", "Completed-run reuse still requires exact input/config/provenance match enforced by full_run.", "Incomplete partial-stage continuation is refused; retry as a new run or manually remove abandoned artifacts after inspection."], "read_only_guards": report["read_only_guards"]}
+
+
+def fleet_rollback_plan(hermes_home_path: str | None = None, *, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    """Read-only rollback plan; actual rollback remains the per-run rollback command."""
+    report = fleet_report(hermes_home_path, limit=limit, skill=skill)
+    rollbackable = []
+    not_rollbackable = []
+    for row in report["latest_runs"]:
+        item = {"run_id": row.get("run_id"), "skill_name": row.get("skill_name"), "status": row.get("status"), "backup_dir": (row.get("rollback") or {}).get("backup_dir"), "reason": (row.get("rollback") or {}).get("reason")}
+        if (row.get("rollback") or {}).get("available"):
+            item["command"] = f"hermes-skillopt rollback {row.get('run_id')}"
+            rollbackable.append(item)
+        else:
+            not_rollbackable.append(item)
+    return {"success": True, "schema_version": "hermes-skillopt-fleet-rollback-plan-v1", "mode": "read_only_plan_no_bulk_rollback_no_writeback", "hermes_home": report["hermes_home"], "rollbackable_adopted_runs": rollbackable, "not_rollbackable_recent_runs": not_rollbackable, "bulk_rollback_available": False, "guidance": "Run the existing per-run rollback command for exactly one reviewed run_id; this plan never writes.", "read_only_guards": report["read_only_guards"]}
+
+
 def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars: int = 4000, slim: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
     run_dir = resolve_run_dir(home, run_id)
@@ -2022,12 +2218,14 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
     catalog = built_in_benchmarks()
     parity_manifest_schema = {
         "schema_version": "hermes-upstream-parity-pack-manifest-v1",
-        "safe_inputs": ["local JSON manifest", "Hermes eval pack JSON"],
-        "forbidden": ["import upstream Python", "execute benchmark commands", "network fetch", "write live skills"],
+        "safe_inputs": ["local JSON manifest", "canonical pinned upstream JSON manifest", "Hermes eval pack JSON"],
+        "forbidden": ["import upstream Python", "execute benchmark commands", "network fetch", "write live skills", "remote URLs", "path references outside canonical clone/guarded eval output"],
         "adapter_levels": {
-            "import_only_bridge": "supported: JSON-only manifest conversion to Hermes eval pack",
-            "true_upstream_execution": "unsupported: no upstream runner parity claim yet",
-            "frozen_hermes_target_execution": "future: requires eval_execution_contract=frozen_hermes_target_execution_v1 evidence",
+            "none": {"supported": True, "full_parity_claim": False, "description": "no adapter evidence"},
+            "json_import_only": {"supported": True, "full_parity_claim": False, "description": "JSON-only manifest conversion to Hermes eval pack"},
+            "pinned_manifest_replay": {"supported": True, "full_parity_claim": False, "description": "data-only manifest under canonical pinned clone converted to Hermes eval pack with provenance"},
+            "pinned_upstream_execution": {"supported": False, "full_parity_claim": False, "description": "unsupported: upstream execution is intentionally not run by this adapter"},
+            "parity_evidence_complete": {"supported": False, "full_parity_claim": False, "description": "unsupported until equivalent pinned upstream benchmark execution evidence exists"},
         },
     }
     builtin = {
@@ -2044,23 +2242,36 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
         "schema_version": "hermes-skillopt-benchmark-parity-status-v1",
         "mode": "read_only_report_only_no_rollout_no_adopt",
         "parity_label": "Hermes-native benchmark mode; not an upstream SkillOpt benchmark result",
+        "full_parity_claim": False,
+        "adapter_levels": parity_manifest_schema["adapter_levels"],
+        "evidence_files": {
+            "json_import_only": {"generated_by": "import-upstream-benchmark", "evidence_type": "Hermes eval pack JSON with upstream_bridge provenance"},
+            "pinned_manifest_replay": {"generated_by": "import-upstream-benchmark --from-pinned-manifest", "evidence_type": "Hermes eval pack JSON with pinned commit, manifest sha, conversion sha, unsupported fields"},
+            "pinned_upstream_execution": None,
+            "parity_evidence_complete": None,
+        },
         "reporting_boundary": "no Microsoft SkillOpt upstream benchmark parity is claimed; status/import are conservative Hermes-native report-only capabilities",
         "upstream_parity_claim": "no full upstream parity claimed; compare-upstream-pin reports pinned source status only",
         "supported_parity_levels": {
             "pinned_upstream_status": "supported_read_only_no_fetch",
+            "json_import_only": "supported_read_only_conversion_no_code_execution",
             "json_import_only_bridge": "supported_read_only_conversion_no_code_execution",
+            "pinned_manifest_replay": "supported_data_only_canonical_clone_manifest_conversion_no_code_execution",
             "hermes_eval_pack_replay": "supported_native_not_upstream_parity",
         },
         "unsupported_parity_levels": {
+            "pinned_upstream_execution": "unsupported_no_arbitrary_upstream_code_execution",
             "true_upstream_benchmark_execution": "unsupported_no_adapter_no_arbitrary_code_execution",
+            "parity_evidence_complete": "unsupported_no_equivalent_pinned_upstream_execution_evidence",
             "networked_upstream_fetch_during_status": "unsupported_status_is_offline_only",
             "upstream_result_equivalence_claim": "unsupported_no_claim_until adapters compare against pinned upstream outputs",
         },
         "upstream_benchmark_parity": {
             "upstream_pin": {k: upstream.get(k) for k in ("clone_exists", "pinned_commit", "current_commit", "semantic_status", "ahead", "behind", "dirty")},
             "local_clone_status": "available" if upstream.get("clone_exists") else "not_cloned",
-            "import_only_bridge": {"supported": True, "command": "import-upstream-benchmark", "schema_version": "hermes-upstream-benchmark-bridge-v1", "safe_read_only": True, "parity_label": "JSON/data-only import to Hermes eval pack; not upstream execution parity"},
-            "true_benchmark_execution": {"supported": False, "reason": "no upstream execution adapter; arbitrary code/network execution remains disabled"},
+            "import_only_bridge": {"supported": True, "adapter_level": "json_import_only", "command": "import-upstream-benchmark", "schema_version": "hermes-upstream-benchmark-bridge-v1", "safe_read_only": True, "full_parity_claim": False, "parity_label": "JSON/data-only import to Hermes eval pack; not upstream execution parity"},
+            "pinned_manifest_replay": {"supported": True, "adapter_level": "pinned_manifest_replay", "command": "import-upstream-benchmark --from-pinned-manifest", "requires": "manifest JSON under canonical pinned clone only", "safe_read_only": True, "full_parity_claim": False, "parity_label": "Data-only pinned manifest conversion; adapter-level evidence, not upstream execution parity"},
+            "true_benchmark_execution": {"supported": False, "adapter_level": "pinned_upstream_execution", "full_parity_claim": False, "reason": "no upstream execution adapter; arbitrary code/network execution remains disabled"},
             "required_next_adapter_steps": [
                 "define a read-only upstream benchmark manifest/adapter schema with pinned expected outputs",
                 "bind adapter to pinned upstream commit and local clone fingerprint",

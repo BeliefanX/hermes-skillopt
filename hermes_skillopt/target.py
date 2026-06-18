@@ -34,6 +34,21 @@ FROZEN_HERMES_CONTRACT = "frozen_hermes_target_execution_v1"
 FROZEN_TARGET_MODEL_ID = "no-live-model-deterministic-target-v1"
 FROZEN_PROFILE_POLICY = "isolated-or-readonly-profile-no-live-profile-writes"
 FROZEN_TOOL_POLICY = "task-commands-never-executed; fixture-tools-recorded-or-fixed-runner-only"
+FROZEN_REQUIRED_RUNTIME_EVIDENCE = (
+    "frozen_target_config_id",
+    "frozen_target_fingerprint_sha256",
+    "model_fingerprint",
+    "provider_fingerprint",
+    "tool_policy_fingerprint",
+    "session_fingerprint",
+    "runtime_fingerprint",
+    "isolated_runtime_evidence",
+    "permissions",
+    "trajectory",
+    "trace_fingerprint_sha256",
+    "transcript_preview",
+    "execution_scoring_evidence",
+)
 
 
 def _stable_json_sha(data: object) -> str:
@@ -50,6 +65,49 @@ def _safe_fixture_list(value: object, *, limit: int = 12) -> list[object]:
     if isinstance(value, (list, tuple)):
         return list(value)[:limit]
     return [value]
+
+
+def _fingerprint_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Return a copy of payload with a stable fingerprint_sha256 field."""
+
+    return {**payload, "fingerprint_sha256": _stable_json_sha(payload)}
+
+
+def frozen_hermes_runtime_probe(*, available: bool, reason: str | None = None, home: str | None = None, hermes_home: str | None = None, workdir: str | None = None) -> dict[str, object]:
+    """Evidence-only runtime probe for the bounded frozen-Hermes target.
+
+    The probe records only availability and path-policy/fingerprint evidence. It
+    never calls Hermes core/gateway, never restarts anything, and never writes a
+    live profile. HermesSandboxRunner fills concrete temp paths while they exist;
+    callers should treat those paths as isolation evidence, not reusable state.
+    """
+
+    payload: dict[str, object] = {
+        "schema_version": "frozen-hermes-runtime-probe-v1",
+        "available": bool(available),
+        "reason": reason,
+        "writes_live_profile": False,
+        "task_commands_allowed": False,
+        "profile_write_allowed": False,
+        "invokes_hermes_core_or_gateway": False,
+        "restarts_services": False,
+        "home_policy": "temp-isolated" if home else "unavailable-or-not-run",
+        "hermes_home_policy": "temp-isolated" if hermes_home else "unavailable-or-not-run",
+        "workdir_policy": "temp-isolated" if workdir else "unavailable-or-not-run",
+        "home_present": bool(home),
+        "hermes_home_present": bool(hermes_home),
+        "workdir_present": bool(workdir),
+    }
+    return _fingerprint_payload(payload)
+
+
+def frozen_hermes_permissions() -> dict[str, object]:
+    return _fingerprint_payload({
+        "task_commands_allowed": False,
+        "profile_write_allowed": False,
+        "live_profile_writes": False,
+        "arbitrary_shell_allowed": False,
+    })
 
 
 def _critical_keyword_missing(low_text: str, task: EvalTask) -> list[str]:
@@ -320,6 +378,16 @@ class HermesSandboxRunner:
                     "task_commands_executed": False,
                 },
             }
+            metadata.update({
+                "permissions": frozen_hermes_permissions(),
+                "provider_fingerprint": _fingerprint_payload({"provider": "local-subprocess", "available": False}),
+                "tool_policy_fingerprint": _fingerprint_payload({"policy": "fixed_runner_only_no_task_shell", "task_commands_allowed": False}),
+                "runtime_probe": frozen_hermes_runtime_probe(available=False, reason="task_provided_command_blocked_before_subprocess"),
+                "runtime_fingerprint": frozen_hermes_runtime_probe(available=False, reason="task_provided_command_blocked_before_subprocess"),
+                "isolated_runtime_evidence": _fingerprint_payload({"sandbox_isolated": True, "subprocess_started": False, "reason": "task_command_blocked"}),
+                "execution_scoring_evidence": _fingerprint_payload({"policy": "blocked task-provided command; no task shell executed", "score": 0.0, "passed": False}),
+                "trace_fingerprint_sha256": _stable_json_sha(metadata["trajectory"]),
+            })
             return EvalResult(task.id, 0.0, False, f"runner={self.mode}; exit=126; blocked=task_provided_command", metadata)
 
         runner = self.command_runner or subprocess_command_runner
@@ -349,6 +417,7 @@ class HermesSandboxRunner:
                 code, transcript = 124, f"TIMEOUT after {task.timeout}s\n{exc.stdout or ''}"
             except Exception as exc:  # pragma: no cover - defensive executor path
                 code, transcript = 125, f"SANDBOX_RUNNER_ERROR {type(exc).__name__}: {exc}"
+            runtime_probe = frozen_hermes_runtime_probe(available=code == 0, reason=None if code == 0 else f"sandbox_runner_exit_{code}", home=str(sandbox_home), hermes_home=str(profile), workdir=str(workspace))
         low_skill = skill_text.lower()
         low_transcript = transcript.lower()
         checks: list[tuple[str, bool, float]] = [("exit_zero", code == 0, 1.0)]
@@ -371,11 +440,18 @@ class HermesSandboxRunner:
         metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": hard_pass, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
         metadata.update({
             "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
-            "model_fingerprint": {"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner", "fingerprint_sha256": _stable_json_sha({"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner"})},
-            "profile_fingerprint": {"home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False, "fingerprint_sha256": _stable_json_sha({"home": "temp", "hermes_home": "temp", "workspace": "temp", "live_profile_writes": False})},
-            "toolset_fingerprint": {"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False, "fingerprint_sha256": _stable_json_sha({"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False})},
-            "session_fingerprint": {"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id, "fingerprint_sha256": _stable_json_sha({"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id})},
+            "permissions": frozen_hermes_permissions(),
+            "provider_fingerprint": _fingerprint_payload({"provider": "local-subprocess", "available": code == 0}),
+            "model_fingerprint": _fingerprint_payload({"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner"}),
+            "profile_fingerprint": _fingerprint_payload({"home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False}),
+            "toolset_fingerprint": _fingerprint_payload({"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False}),
+            "tool_policy_fingerprint": _fingerprint_payload({"policy": "fixed_runner_only_no_task_shell", "task_commands_allowed": False}),
+            "session_fingerprint": _fingerprint_payload({"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id}),
+            "runtime_probe": runtime_probe,
+            "runtime_fingerprint": runtime_probe,
+            "isolated_runtime_evidence": _fingerprint_payload({"sandbox_isolated": True, "home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False}),
             "execution_scoring": "exit_code + transcript required_markers/assertions + skill expected terms",
+            "execution_scoring_evidence": _fingerprint_payload({"policy": "exit_code + transcript required_markers/assertions + skill expected terms", "exit_code": code, "score": score, "hard_pass": hard_pass, "passed_checks": passed_names, "failed_checks": failed_names}),
             "passed_checks": passed_names,
             "failed_checks": failed_names,
         })
@@ -549,6 +625,10 @@ class TargetExecutor:
         splits = sorted({task.split for task in tasks})
         eligibility = [production_eligibility_for_task(task).as_dict() for task in tasks]
         target_config = self.config.as_dict()
+        for result in results:
+            if isinstance(result.metadata, dict):
+                result.metadata.setdefault("frozen_target_config_id", self.target_config_id)
+                result.metadata.setdefault("frozen_target_fingerprint_sha256", target_config.get("fingerprint_sha256"))
         contract_checks: list[dict[str, object]] = []
         for task, result in zip(tasks, results):
             contract_raw = (task.metadata or {}).get("eval_execution_contract")
@@ -559,12 +639,26 @@ class TargetExecutor:
             if classification == "frozen_hermes_target_execution_v1":
                 if not target_config.get("fingerprint_sha256"):
                     missing_runtime.append("target_config_fingerprint")
+                if metadata.get("frozen_target_config_id") != self.target_config_id:
+                    missing_runtime.append("frozen_target_config_id")
+                if metadata.get("frozen_target_fingerprint_sha256") != target_config.get("fingerprint_sha256"):
+                    missing_runtime.append("frozen_target_fingerprint_sha256")
                 if metadata.get("frozen_hermes_contract") != FROZEN_HERMES_CONTRACT:
                     missing_runtime.append("frozen_hermes_contract_marker")
-                for field_name in ("model_fingerprint", "profile_fingerprint", "toolset_fingerprint", "session_fingerprint"):
+                for field_name in ("model_fingerprint", "provider_fingerprint", "profile_fingerprint", "toolset_fingerprint", "tool_policy_fingerprint", "session_fingerprint", "runtime_fingerprint", "isolated_runtime_evidence", "permissions", "execution_scoring_evidence"):
                     value = metadata.get(field_name)
                     if not isinstance(value, dict) or not value.get("fingerprint_sha256"):
                         missing_runtime.append(field_name)
+                raw_permissions = metadata.get("permissions")
+                permissions = raw_permissions if isinstance(raw_permissions, dict) else {}
+                if permissions.get("task_commands_allowed") is not False:
+                    missing_runtime.append("task_commands_allowed_false")
+                if permissions.get("profile_write_allowed") is not False:
+                    missing_runtime.append("profile_write_allowed_false")
+                raw_runtime = metadata.get("runtime_fingerprint")
+                runtime = raw_runtime if isinstance(raw_runtime, dict) else {}
+                if runtime.get("available") is not True:
+                    missing_runtime.append("runtime_available_true")
                 if metadata.get("sandbox_isolated") is not True:
                     missing_runtime.append("isolated_runtime")
                 if not (metadata.get("trajectory") or metadata.get("trace")):
@@ -575,6 +669,8 @@ class TargetExecutor:
                     missing_runtime.append("transcript_preview")
                 if not metadata.get("execution_scoring"):
                     missing_runtime.append("execution_scoring")
+                if not isinstance(metadata.get("execution_scoring_evidence"), dict):
+                    missing_runtime.append("execution_scoring_evidence")
                 if metadata.get("live_profile_writes") is not False:
                     missing_runtime.append("live_profile_writes_false")
                 if metadata.get("task_commands_executed") is not False:
@@ -603,6 +699,7 @@ class TargetExecutor:
             "production_gate_eligible": production_gate_eligible,
             "evaluation_scope": evaluation_scope,
             "eval_execution_contract_checks": contract_checks,
+            "target_execution_evidence_contract": {"classification": FROZEN_HERMES_CONTRACT, "required_runtime_evidence": list(FROZEN_REQUIRED_RUNTIME_EVIDENCE), "required_permissions": {"task_commands_allowed": False, "profile_write_allowed": False}, "missing_required_evidence_makes_production_eligible": False},
             "adoption_policy": "production adoption allowed only when every task is explicit curated-pack production eligible and eval execution contract/runtime evidence gates pass; otherwise review-only evidence",
             "production_eligibility_reasons": eligibility,
             "regression_cases": regression_cases,

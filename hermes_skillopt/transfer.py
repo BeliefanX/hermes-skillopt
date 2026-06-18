@@ -26,11 +26,11 @@ def _profile_fingerprint(home: Path) -> dict[str, Any]:
 def _runner_for_target(target: str):
     if target == "scorecard":
         return DeterministicKeywordScorecard()
-    if target == "sandbox":
+    if target in {"sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1"}:
         return HermesSandboxRunner()
     if target == "replay":
         return HermesRolloutRunner()
-    raise ValueError(f"unsupported transfer target {target!r}; expected scorecard|replay|sandbox")
+    raise ValueError(f"unsupported transfer target {target!r}; expected scorecard|replay|sandbox|frozen-hermes|frozen_hermes_target_execution_v1")
 
 
 def _read_jsonl_tasks(path: Path) -> list[EvalTask]:

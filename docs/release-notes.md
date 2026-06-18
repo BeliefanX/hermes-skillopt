@@ -2,6 +2,14 @@
 
 ## 0.1.0 P0-P3 implementation snapshot
 
+- Documents latest batch/eval/fleet/WebUI/upstream status surfaces:
+  - batch preflight validates data-only plans, budget caps, backend/target/gate policy, production-intent requirements, and forbidden writeback fields before any job runs;
+  - batch run is staged-only, writes batch parent artifacts, and calls child `full_run` with `auto_adopt=false` and `force=false`;
+  - fleet report/resume-plan/rollback-plan are read-only planning surfaces; completed exact-fingerprint reuse remains opt-in, partial continuation is refused, and rollback remains per-run only;
+  - eval-pack inventory/scaffold exposes missing or review-only coverage instead of implying every skill has a curated pack; scaffold output is sample/review-only and not production evidence;
+  - React/FastAPI WebUI now exposes fleet/upstream parity surfaces while keeping runs staged-only and defaulting to review-oriented soft gating; production adoption still requires strict/non-mock/curated val-test proof plus explicit guarded adopt;
+  - upstream benchmark adapter levels are explicit: `json_import_only` and `pinned_manifest_replay` are supported data-only evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported/future.
+
 - Documents latest P0/P1/P2 hardening deltas:
   - shared `safety.py` report/eval output guard now covers benchmark import, transfer eval, and conformance reports, blocking live/runtime-sensitive profile/plugin/source paths and symlink escapes;
   - bounded edit validation now checks replacement/insert text for protected headings/markers and allowed-region marker boundary mutations;

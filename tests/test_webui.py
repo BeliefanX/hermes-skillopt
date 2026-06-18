@@ -44,11 +44,17 @@ def test_webui_run_api_forces_staged_only(monkeypatch, tmp_path):
         return {"success": True, "run_id": "rid", "status": "staged_best"}
 
     monkeypatch.setattr(core, "full_run", fake_full_run)
-    out = webui_api.run_full({"skill": "demo", "eval_file": "evals/demo.jsonl", "backend": "mock", "allow_mock": True, "home": str(tmp_path)})
+    out = webui_api.run_full({"skill": "demo", "eval_file": "evals/demo.jsonl", "backend": "mock", "optimizer_backend": "mock", "target_executor": "scorecard", "target_backend": "scorecard", "gate_mode": "mixed", "candidate_count": 2, "edit_budget": 4, "allow_mock": True, "home": str(tmp_path)})
     assert out["run_id"] == "rid"
     assert calls["auto_adopt"] is False
     assert calls["force"] is False
     assert calls["hermes_home_path"] == str(tmp_path)
+    assert calls["optimizer_backend"] == "mock"
+    assert calls["target_executor"] == "scorecard"
+    assert calls["target_backend"] == "scorecard"
+    assert calls["gate_mode"] == "mixed"
+    assert calls["candidate_count"] == 2
+    assert calls["edit_budget"] == 4
 
 
 def test_webui_adopt_and_rollback_require_exact_confirmation(tmp_path):
@@ -160,6 +166,11 @@ def test_fastapi_routes_and_static_assets(monkeypatch, tmp_path):
     status = client.get("/api/status", params={"home": str(tmp_path)})
     assert status.status_code == 200
     assert status.json()["hermes_home"] == str(tmp_path)
+    fleet = client.get("/api/fleet/report", params={"home": str(tmp_path), "limit": 5})
+    assert fleet.status_code == 200
+    assert fleet.json()["mode"].startswith("read_only_report")
+    assert client.get("/api/fleet/resume-plan", params={"home": str(tmp_path)}).status_code == 200
+    assert client.get("/api/fleet/rollback-plan", params={"home": str(tmp_path)}).status_code == 200
     assert client.get("/manifest.webmanifest").status_code == 200
     manifest_json = client.get("/manifest.json")
     assert manifest_json.status_code == 200

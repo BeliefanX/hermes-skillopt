@@ -11,13 +11,15 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 ## Main modules
 
 - `core.py`: orchestration, status/review/adopt/rollback, eval-only/benchmark fixed-skill reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, and held-out sensitivity reporting.
+- `batch.py`: data-only batch preflight and staged-only batch runner with budget enforcement and forbidden writeback field rejection.
 - `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
+- `eval_packs.py`: read-only eval-pack inventory plus safe review-only scaffold generation for missing skill coverage.
 - `trainer.py`: six-stage rollout/reflect/aggregate/select/update/evaluate loop and final held-out test evaluation.
 - `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
 - `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application, including protected heading/marker and allowed-region boundary checks on replacement/insert text.
 - `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, sandbox-backed `frozen-hermes` / `frozen_hermes_target_execution_v1` MVP, disabled/report-only `live-readonly` adapter interface, and frozen `TargetExecutor` wrapper.
 - `gate.py`: deterministic validation gate policies (`soft|hard|mixed|strict`) with score improvement and per-task regression checks depending on mode.
-- `webui.py`: optional Gradio UI for Hermes-specific status/full-run/review/adopt/rollback/upstream workflows.
+- `webui.py` / `webui_server.py` / `webui_api.py`: optional React/FastAPI WebUI plus PWA assets for status/full-run/review/fleet/adopt/rollback/upstream workflows; Python API keeps writeback confirmations and staged-only constraints server-side.
 - `multi_agent.py`: deterministic multi-agent handoff optimizer for `delegate_task` dispatcher→worker packages.
 - `benchmark_bridge.py`: safe JSON-only upstream-style benchmark manifest importer into Hermes eval-pack format.
 - `transfer.py`: read-only staged/proposed skill transfer evaluation across deterministic targets/profile homes.
@@ -46,6 +48,10 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 `full_run(dry_run=True)` is rejected by code; CLI has no `full-run --dry-run` option. Legacy `dry-run`/`run --mode legacy` remains review-only.
 
 `eval_only()`/CLI `eval-only` is a separate fixed-skill scoring path. CLI `benchmark` is an alias for the same read-only report generator. These commands require an explicit eval file, write `evaluated_SKILL.md`, `eval_report.json`, `benchmark_report.json`, `report.md`, and `manifest.json` under a staging run with `status == "eval_only_complete"`, and are always `adoptable: false`. They have no optimizer/training/candidate-selection side effects and cannot production-adopt. `benchmark_report.json` uses `hermes-native-benchmark-report-v1` with skill/eval/target fingerprints, read-only safety flags, and split scorecard summary; it is not an upstream benchmark parity report.
+
+`batch_preflight()` validates `hermes-skillopt-batch-plan-v1` without writes. It enforces budget caps (`max_jobs`, `max_total_iterations`, `max_total_candidates`), integer defaults, backend/target/gate enums, production-intent `skill`/`eval_file`, and forbidden writeback fields. `run_batch()` writes a batch parent staging directory only after preflight, then invokes child `full_run()` calls with `auto_adopt=False` and `force=False`; batch target enum validation currently accepts `auto|replay|sandbox|scorecard|live-readonly`, while explicit `frozen-hermes` aliases remain a normal full-run surface.
+
+Fleet functions (`fleet_report`, `fleet_resume_plan`, `fleet_rollback_plan`) inspect recent run dirs, batch parents/children, checkpoints, and backup state. They are read-only reporting/planning surfaces: no full-run invocation, no partial resume execution, no deletion/cleanup, no bulk rollback, and no skill writes.
 
 ## Artifact model
 
@@ -78,6 +84,8 @@ Gate modes are deterministic metric policies: `strict` is the default for adopti
 
 `EnvAdapter` is the contract between Hermes evidence and the trainer. It exposes task splits, rollout metadata, scorer metadata, and production eligibility decisions. Built-in benchmarks, bundled static review packs, and session-mined/synthetic tasks provide train/validation/test scaffolding and slow/sleep-style evidence, but they are non-production unless replaced by explicit curated eval-file scorecards with an adoption-eligible execution contract. The static seed packs in `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` are review-only despite their historical filenames; they use `static-review-eval-pack`/`sample_pack` policy and cannot production-adopt.
 
+`eval-pack-inventory` makes that coverage reality explicit by listing candidate eval paths, existing pack validity, split counts, production-eligible task counts, and missing reasons per skill. `eval-pack-scaffold` fills only the authoring gap: it writes a safe review-only `sample_pack` with complete sample splits and `static_review_only` execution contract, not curated production evidence.
+
 ## Sandbox executor safety
 
 `HermesSandboxRunner` is a production-safe MVP executor, not an arbitrary command executor. It also backs the current `frozen-hermes` / `frozen_hermes_target_execution_v1` target alias. It creates a temporary isolated HOME/HERMES_HOME/workspace, writes the candidate `SKILL.md` only into that sandbox, invokes a fixed internal runner, and records transcript/exit/timeout metadata plus provider/model/toolset/session fingerprints and trajectory/scoring evidence.
@@ -108,6 +116,7 @@ Current code closes the earlier architecture gaps in these bounded ways:
 - P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance writes local compile/pytest reports.
+- P4 orchestration/UX utilities: batch preflight/run adds staged-only multi-job execution with budgets; fleet report/resume/rollback-plan adds read-only operations dashboards; eval-pack inventory/scaffold exposes real curated-pack coverage gaps; React/FastAPI WebUI surfaces fleet/upstream parity while keeping `auto_adopt=false`.
 
 Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
 
@@ -118,11 +127,11 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 ## Current limitations
 
 - Replay/sandbox/scorecard scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
-- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports embedded JSON manifests only. Safe import-only conversion is supported, but true upstream benchmark execution remains unsupported. The sandbox-backed `frozen_hermes_target_execution_v1` MVP supplies local Hermes evidence, not Microsoft benchmark parity. It does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
+- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports embedded JSON manifests only. Safe `json_import_only` and canonical-clone `pinned_manifest_replay` conversion are supported, but `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. The sandbox-backed `frozen_hermes_target_execution_v1` MVP supplies local Hermes evidence, not Microsoft benchmark parity. It does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model performance.
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
-- WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts.
+- WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts. Its run API is staged-only (`auto_adopt=false`, `force=false`) and defaults to review-oriented soft gating; production adoption proof still requires strict/non-mock/curated val-test evidence and explicit guarded adopt.
 
 
 ## Current no-parity guardrails

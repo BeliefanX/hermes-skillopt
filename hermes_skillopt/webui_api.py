@@ -58,6 +58,7 @@ def run_full(payload: dict[str, Any]) -> dict[str, Any]:
         candidate_count=int(payload.get("candidate_count") or 1),
         backend=payload.get("backend") or "auto",
         optimizer_backend=payload.get("optimizer_backend") or None,
+        target_executor=payload.get("target_executor") or "auto",
         target_backend=payload.get("target_backend") or None,
         gate_mode=payload.get("gate_mode") or "soft",
         resume_run_id=payload.get("resume_run_id") or None,
@@ -82,6 +83,18 @@ def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]
         "rejected": rejected,
         "success": not summary.startswith("Review failed:"),
     }
+
+
+def fleet_report(home: str | None = None, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    return core.fleet_report(home or None, limit=limit, skill=skill or None)
+
+
+def fleet_resume_plan(home: str | None = None, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    return core.fleet_resume_plan(home or None, limit=limit, skill=skill or None)
+
+
+def fleet_rollback_plan(home: str | None = None, limit: int = 50, skill: str | None = None) -> dict[str, Any]:
+    return core.fleet_rollback_plan(home or None, limit=limit, skill=skill or None)
 
 
 def adopt(run_id: str, confirmation: str, force: bool = False) -> dict[str, Any]:

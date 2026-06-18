@@ -25,6 +25,8 @@ This is still not Microsoft’s official trainer package. Upstream changes must 
 
 ```bash
 python3 -m hermes_skillopt.cli upstream-status
+python3 -m hermes_skillopt.cli compare-upstream-pin
+python3 -m hermes_skillopt.cli benchmark-parity-status
 python3 -m hermes_skillopt.cli upstream-update --fetch-only
 python3 -m hermes_skillopt.cli upstream-update
 bash scripts/update_upstream.sh
@@ -33,6 +35,8 @@ bash scripts/update_upstream.sh
 Semantics:
 
 - `upstream-status` is local/status-only. It reads the canonical clone and lock, reports pin/dirty/ahead/behind/diverged style status when possible, and does not fetch from the network.
+- `compare-upstream-pin` is also read-only/no-fetch and compares the canonical local clone against `skillopt_upstream.lock` and already-fetched refs.
+- `benchmark-parity-status` is a label/report surface for adapter levels and Hermes-native benchmark coverage. It does not run rollouts, fetch, import upstream Python, execute benchmark commands, or write skills.
 - `upstream-update --fetch-only` refreshes the canonical clone without adopting upstream code.
 - `upstream-update` can refresh clone/lock metadata. It does not merge files into this plugin and does not adopt any Hermes skill.
 - The production tool/CLI/WebUI upstream surface does not accept arbitrary repo paths; it uses the canonical `$HERMES_HOME/skillopt/upstream/SkillOpt` location.
@@ -53,6 +57,17 @@ Semantics:
 - `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text, not live cross-model training or writeback.
 - `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
 - `safe_outputs`: import/transfer/conformance report writers share a safe output path guard that blocks live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular outputs, wrong suffixes, and symlink escapes.
+
+## Upstream benchmark adapter levels
+
+`benchmark-parity-status` and imported pack provenance use explicit adapter levels rather than a single parity claim:
+
+- `json_import_only` — supported today. Converts a local upstream-style JSON manifest with embedded `tasks`/`splits` into a Hermes eval pack. It is data-only, rejects executable/remote fields, and claims no upstream execution parity.
+- `pinned_manifest_replay` — supported today for JSON manifests under the canonical pinned upstream clone only. It records pinned commit/manifest/conversion provenance, but still performs data conversion only; no upstream code or benchmark runner is executed.
+- `pinned_upstream_execution` — unsupported/future. This would require a pinned, bounded, no-live-write execution adapter with evidence equivalent to the Hermes frozen-target contract.
+- `parity_evidence_complete` — unsupported/future. This would require comparable pinned upstream execution evidence plus mapped Hermes eval evidence; it is not available on this branch.
+
+Consequently, `benchmark`, `eval-only`, `import-upstream-benchmark`, transfer eval, and sandbox-backed `frozen-hermes` results are local Hermes evidence. They must not be described as Microsoft SkillOpt upstream benchmark parity or external performance results.
 
 ## Curated eval and gate alignment
 
@@ -86,7 +101,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - Production adoption is narrower than generic optimization: explicit curated validation plus held-out curated test gates are required, and static/keyword/sample/report-only packs cannot authorize adoption.
 - Sandbox/frozen-Hermes support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor or real upstream benchmark runner.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
-- `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; safe JSON import-only conversion is supported, but true upstream benchmark execution remains unsupported. Transfer eval does not create real cross-model claims. Reports distinguish production-curated scores from review-only scores and surface per-task deltas/ledger evidence rather than collapsing all evidence into a single benchmark claim.
+- `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; safe `json_import_only` and data-only `pinned_manifest_replay` conversion are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. Transfer eval does not create real cross-model claims. Reports distinguish production-curated scores from review-only scores and surface per-task deltas/ledger evidence rather than collapsing all evidence into a single benchmark claim.
 
 ## Upstream diff/status workflow
 
@@ -115,4 +130,4 @@ Do not replace the Hermes safety shell with upstream training paths, and do not 
 
 ## Current upstream pin/parity policy
 
-`compare-upstream-pin` compares the local canonical clone with `skillopt_upstream.lock` and locally fetched `origin/main` only. It does not fetch. `upstream-update --fetch-only` is the explicit refresh path. No upstream Microsoft SkillOpt code is vendored or blindly merged into this Hermes-native adapter. `benchmark-parity-status` deliberately reports **no full upstream parity claim**: JSON import-only bridge is supported, while true upstream benchmark execution remains unsupported. The local sandbox-backed frozen-Hermes MVP provides Hermes evidence only and does not certify Microsoft SkillOpt benchmark parity.
+`compare-upstream-pin` compares the local canonical clone with `skillopt_upstream.lock` and locally fetched `origin/main` only. It does not fetch. `upstream-update --fetch-only` is the explicit refresh path. No upstream Microsoft SkillOpt code is vendored or blindly merged into this Hermes-native adapter. `benchmark-parity-status` deliberately reports **no full upstream parity claim**: `json_import_only` and `pinned_manifest_replay` adapter levels are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. The local sandbox-backed frozen-Hermes MVP provides Hermes evidence only and does not certify Microsoft SkillOpt benchmark parity.

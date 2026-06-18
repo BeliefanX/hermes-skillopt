@@ -57,19 +57,28 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_status`: profile, skill count, recent staged runs, artifact lineage summaries, and stale/incomplete checkpoint rows with cleanup guidance.
 - `hermes_skillopt_run`: defaults to `mode="full"`; `mode="legacy"` calls the legacy review-only dry-run path.
 - `hermes_skillopt_full_run`: executes the current six-stage SkillOpt-inspired lifecycle.
+- `hermes_skillopt_batch_preflight`: read-only validation of an inline batch plan object; enforces schema, budget, gate/backend policy, required production-intent fields, and rejects adopt/writeback fields.
+- `hermes_skillopt_batch_run`: runs a preflighted batch in staging only; each child job calls `full_run(auto_adopt=false, force=false)` and writes a batch parent manifest/summary/report.
+- `hermes_skillopt_fleet_report`: read-only report over recent single and batch parent/child runs, with lineage, eligibility, resume, rollback, and tamper/incomplete warnings.
+- `hermes_skillopt_fleet_resume_plan`: read-only completed-run reuse plan; exact fingerprint reuse only, no partial-stage continuation.
+- `hermes_skillopt_fleet_rollback_plan`: read-only per-run rollback planning surface; no bulk rollback or writeback.
+- `hermes_skillopt_eval_pack_inventory`: read-only inventory of discovered skills and matching eval packs, surfacing split completeness, production eligibility, review-only status, and missing-pack gaps.
+- `hermes_skillopt_eval_pack_scaffold`: creates a review-only train/validation/test scaffold pack; it is a starter template, not production evidence.
 - `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay or unsafe partial continuation.
 - `hermes_skillopt_dry_run`: legacy staged proposal; review-only.
 - `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, lineage, report/diff paths, artifact refs, and previews; `slim=true` omits large previews and returns path/hash/byte references.
 - `hermes_skillopt_adopt`: explicit live writeback after all guards pass; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_rollback`: explicit restore from verified backup manifest/SKILL.md; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_upstream_status`: local pinned upstream clone/lock status; no network fetch.
+- `hermes_skillopt_compare_upstream_pin`: read-only lock/clone comparison; no fetch, merge, or write.
+- `hermes_skillopt_benchmark_parity_status`: read-only status labeling Hermes-native benchmark coverage vs upstream parity levels; no rollout/adopt/writeback.
 - `hermes_skillopt_upstream_update`: clone/fetch/pin Microsoft SkillOpt upstream metadata only; does not merge plugin code.
 - `hermes_skillopt_import_upstream_benchmark`: safe JSON-only upstream-style manifest import into a Hermes eval pack; rejects executable/remote fields and live/runtime-sensitive output paths.
 - `hermes_skillopt_transfer_eval`: read-only/report-only staged skill evaluation across deterministic target/profile configs; never writes live skills and uses the shared safe report output guard.
 - `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services; output uses the shared safe report path guard.
 - `hermes_skillopt_handoff_optimize`: deterministic multi-agent `delegate_task` dispatcher→worker handoff package optimizer; staged output only.
 
-P3 import/transfer/conformance surfaces are available both as Hermes plugin tools (`hermes_skillopt_import_upstream_benchmark`, `hermes_skillopt_transfer_eval`, `hermes_skillopt_conformance`) and as CLI/module commands (`import-upstream-benchmark`, `transfer-eval`, and `conformance`). `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
+Batch, fleet, eval-pack inventory/scaffold, upstream parity status, import/transfer/conformance surfaces are available as Hermes plugin tools and CLI/module commands. `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
 
 Important full-run parameters:
 
@@ -89,8 +98,40 @@ python3 -m hermes_skillopt.cli --help
 python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli eval-only --help
 python3 -m hermes_skillopt.cli benchmark --help
+python3 -m hermes_skillopt.cli batch-preflight --help
+python3 -m hermes_skillopt.cli batch-run --help
+python3 -m hermes_skillopt.cli fleet-report --help
+python3 -m hermes_skillopt.cli eval-pack-inventory --help
+python3 -m hermes_skillopt.cli import-upstream-benchmark --help
+python3 -m hermes_skillopt.cli benchmark-parity-status --help
 python3 -m hermes_skillopt.cli resume-inspect --help
 ```
+
+## Batch and fleet operations
+
+Batch plans are data-only JSON objects using `schema_version: hermes-skillopt-batch-plan-v1`:
+
+```json
+{
+  "schema_version": "hermes-skillopt-batch-plan-v1",
+  "plan_id": "review-small-fleet",
+  "defaults": {"iterations": 1, "candidate_count": 1, "gate_mode": "strict", "backend": "auto", "target_executor": "replay"},
+  "budget": {"max_jobs": 3, "max_total_iterations": 3, "max_total_candidates": 3},
+  "jobs": [
+    {"skill": "my-skill", "eval_file": "skillopt/evals/my-skill.json", "query": "tighten safety wording"}
+  ]
+}
+```
+
+```bash
+python3 -m hermes_skillopt.cli batch-preflight plan.json
+python3 -m hermes_skillopt.cli batch-run plan.json
+python3 -m hermes_skillopt.cli fleet-report --limit 50
+python3 -m hermes_skillopt.cli fleet-resume-plan --skill my-skill
+python3 -m hermes_skillopt.cli fleet-rollback-plan --limit 20
+```
+
+Preflight is read-only and rejects unsupported schema, budget overages, invalid backend/gate values, forbidden writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.), and production-intent jobs missing `skill` or `eval_file`. Current batch target validation accepts `auto|replay|sandbox|scorecard|live-readonly`; use normal `full-run` for explicit `frozen-hermes` aliases. `batch-run` always creates a batch parent staging directory and never adopts. Fleet commands are read-only planning/reporting surfaces: they inspect manifests/checkpoints/backups and emit guidance, but do not resume, delete, bulk rollback, or write skills.
 
 ## Full-run lifecycle
 
@@ -142,6 +183,16 @@ It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval
 ## Eval schema and production eligibility
 
 Curated evals may be JSONL, JSON (`[...]` or `{ "tasks": [...] }`), or a versioned eval pack (`{ "schema_version": "hermes-curated-eval-pack-v1", "pack_id": "...", "version": "...", "tasks": [...] }`). An explicit `eval_file` must resolve to a regular file inside the active `$HERMES_HOME`; default discovery checks `$HERMES_HOME/skillopt/evals/<skill-name>.jsonl` and then `evals/*.jsonl` under the skill directory.
+
+Use inventory/scaffold before assuming coverage exists:
+
+```bash
+python3 -m hermes_skillopt.cli eval-pack-inventory
+python3 -m hermes_skillopt.cli eval-pack-inventory --skill my-skill
+python3 -m hermes_skillopt.cli eval-pack-scaffold --skill my-skill --output skillopt/evals/my-skill-scaffold.json
+```
+
+`eval-pack-inventory` is read-only and reports candidate paths, existing packs, valid/invalid status, split counts, production-eligible task counts, review-only flags, and missing reasons. It deliberately surfaces gaps: most skills should be treated as lacking true curated train/validation/test packs until inventory shows a valid production-eligible pack. `eval-pack-scaffold` writes a safe `.json` starter with train/validation/test examples, `sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`, and `eval_execution_contract.classification: static_review_only`; replacing the sample tasks with curated evidence is required before any production claim.
 
 A sample Hermes-native pack template is bundled at `hermes_skillopt/eval_packs/hermes_native_core_v1.json` and covers tool-use correctness, delegation/handoff, file editing safety, research grounding/no fabrication, profile isolation, and adopt/rollback safety. That package-level sample pack is review-only.
 
@@ -248,7 +299,9 @@ python3 -m hermes_skillopt.webui --host 127.0.0.1 --port 7860
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Sections/actions: status, staged optimization run, artifact review, adopt, rollback, upstream. Artifact review reads only fixed allowlisted files in the selected staging directory. Adopt/rollback require exact typed confirmation server-side and still call the core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status operations and intentionally ignored for writeback/upstream update.
+Sections/actions: status, staged optimization run, artifact review, fleet report/resume-plan/rollback-plan, adopt, rollback, upstream status/parity/update. Artifact review reads only fixed allowlisted files in the selected staging directory. Adopt/rollback require exact typed confirmation server-side and still call the core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status/fleet/upstream-status operations and intentionally ignored for writeback/upstream update.
+
+WebUI runs are staged-only by construction: server-side `run_full` passes `auto_adopt=False` and `force=False`. Its default run form uses `gate_mode: soft` for review-oriented exploration, not adoption-capable proof; choose CLI/tool `full-run` with strict gates and curated evals for production intent. In all CLI/WebUI modes, LLM context and judge text are advisory/explanatory only. Strict gate mode plus non-mock optimizer provenance and eligible curated val/test evidence is the adoption-capable path; `soft`, `mixed`, mock, fallback/session/synthetic, and sample/scaffold evidence remain review-only.
 
 When served on a local/LAN origin, the WebUI advertises PWA/mobile standalone metadata (`manifest.webmanifest`, icons, viewport safe-area hints, Apple mobile tags, and a service worker) so browsers can offer “Add to Home Screen”. The service worker cache boundary is intentionally narrow: it only caches static PWA assets/icons plus the generic offline fallback, and treats `/`, API/run/file/result/status-style routes as network-only/no-store so staged run data, profile paths, artifacts, and operation results are not replayed from cache. The offline fallback is static safety copy only and contains no run/profile/status data.
 
@@ -260,11 +313,13 @@ Microsoft SkillOpt is tracked as a pinned external upstream clone/lock, not vend
 
 ```bash
 python3 -m hermes_skillopt.cli upstream-status
+python3 -m hermes_skillopt.cli compare-upstream-pin
+python3 -m hermes_skillopt.cli benchmark-parity-status
 python3 -m hermes_skillopt.cli upstream-update --fetch-only
 bash scripts/update_upstream.sh
 ```
 
-Updating upstream refreshes clone/lock metadata only. It does not merge upstream code, change plugin behavior, or adopt any skill.
+Updating upstream refreshes clone/lock metadata only. It does not merge upstream code, change plugin behavior, or adopt any skill. Upstream benchmark adapter levels are intentionally conservative: `json_import_only` and `pinned_manifest_replay` are supported data-conversion evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` are future/unsupported. Do not report `benchmark`, `eval-only`, frozen-Hermes sandbox evidence, or imported manifests as full Microsoft SkillOpt benchmark parity today.
 
 ## Multi-agent handoff optimizer
 
@@ -284,7 +339,12 @@ python3 -m pytest -q
 python3 -m compileall -q hermes_skillopt tests
 python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli benchmark --help
+python3 -m hermes_skillopt.cli batch-preflight --help
+python3 -m hermes_skillopt.cli fleet-report --help
+python3 -m hermes_skillopt.cli eval-pack-inventory --help
+python3 -m hermes_skillopt.cli import-upstream-benchmark --help
+python3 -m hermes_skillopt.cli benchmark-parity-status --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```
 
-Recent P0/P1/P2 hardening verification also includes targeted tests for safe report output paths, protected bounded-edit regions/headings, frozen-Hermes sandbox evidence, production-vs-review score ledgers, transfer/import/conformance safety, staged-only slow/rejected history, and held-out sensitivity warnings.
+Recent P0/P1/P2/P3/P4 hardening verification also includes targeted tests for safe report output paths, protected bounded-edit regions/headings, frozen-Hermes sandbox evidence, production-vs-review score ledgers, batch preflight/run budgets, eval-pack inventory/scaffold gaps, fleet read-only planning, transfer/import/conformance safety, WebUI staged-only/fleet/upstream APIs, staged-only slow/rejected history, and held-out sensitivity warnings.

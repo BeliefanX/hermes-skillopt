@@ -39,7 +39,25 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Score artifacts distinguish production-curated evidence from review-only evidence through `production_curated_score`, `review_only_score`, per-task delta rows, expected-term/assertion change details, and held-out test sensitivity warnings.
 - Resume tooling is inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
 
-## P0/P1/P3 commands/modules
+## P0/P1/P3/P4 commands/modules
+
+- `python3 -m hermes_skillopt.cli batch-preflight PLAN.json`
+  - Read-only validation of `hermes-skillopt-batch-plan-v1` data.
+  - Enforces budget (`max_jobs`, `max_total_iterations`, `max_total_candidates`), integer fields, backend/target/gate enums, production-intent `skill`+`eval_file`, and rejects writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.).
+  - Emits `hermes-skillopt-batch-run-v1` preflight data and does not write or run jobs.
+
+- `python3 -m hermes_skillopt.cli batch-run PLAN.json`
+  - Runs only after preflight; creates a batch parent staging directory with `preflight.json`, `jobs.json`, `summary.json`, `report.md`, and `manifest.json`.
+  - Child jobs call `full_run` with `auto_adopt=false` and `force=false`; no batch path adopts or writes live skills.
+
+- `python3 -m hermes_skillopt.cli fleet-report|fleet-resume-plan|fleet-rollback-plan`
+  - Read-only fleet inspection over recent single-run and batch parent/child artifacts.
+  - Resume plan reports only completed exact-fingerprint reuse guidance; partial-stage continuation is unavailable.
+  - Rollback plan lists per-run rollbackable backups and suggested single-run commands; there is no bulk rollback/writeback.
+
+- `python3 -m hermes_skillopt.cli eval-pack-inventory|eval-pack-scaffold`
+  - Inventory surfaces real coverage and gaps per skill: candidate eval paths, existing valid/invalid packs, split counts, production-eligible task counts, review-only status, and missing reasons.
+  - Scaffold creates a safe review-only `hermes-curated-eval-pack-v1` starter with complete train/validation/test samples, `sample_pack: true`, `allow_production_adoption: false`, and static-review-only execution contract. It is not curated evidence.
 
 - `python3 -m hermes_skillopt.cli benchmark --skill SKILL --eval-file PACK.json`
   - Alias for eval-only fixed-skill scoring.
@@ -85,8 +103,10 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 ## Known limitations
 
 - The bundled `examples/evals/*production_v1.json` files are static review fixtures, not production certification suites for any skill.
+- Eval-pack inventory/scaffold intentionally exposes that many skills have no true curated pack yet. Do not treat scaffold/sample/static packs as production evidence.
+- Batch/fleet surfaces are orchestration/reporting helpers only; batch never adopts, and fleet resume/rollback commands never perform resume/rollback/delete/writeback themselves.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.
-- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is import-only; true upstream benchmark execution is unsupported even though the Hermes-native frozen-Hermes sandbox MVP can produce local isolated runtime evidence.
+- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is `json_import_only` plus `pinned_manifest_replay` for data-only manifests under the canonical pinned clone; `pinned_upstream_execution` and `parity_evidence_complete` are unsupported/future. True upstream benchmark execution is unsupported even though the Hermes-native frozen-Hermes sandbox MVP can produce local isolated runtime evidence.
 - Split manifest support is embedded JSON only; file references are intentionally not followed in P3.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model results.
 - Conformance reports local adapter health only; they do not certify Microsoft SkillOpt parity or external benchmark performance.

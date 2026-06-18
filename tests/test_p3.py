@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hermes_skillopt import core
-from hermes_skillopt.benchmark_bridge import import_upstream_manifest
+from hermes_skillopt.benchmark_bridge import import_pinned_upstream_manifest, import_upstream_manifest
 from hermes_skillopt.conformance import run_conformance
 from hermes_skillopt.transfer import transfer_eval
 
@@ -208,6 +208,90 @@ def test_upstream_import_rejects_remote_network_fields_and_values(tmp_path):
         manifest.write_text(json.dumps(payload), encoding="utf-8")
         with pytest.raises(ValueError, match="executable/remote fields"):
             import_upstream_manifest(manifest)
+
+
+def test_benchmark_parity_status_reports_no_full_parity_claim(tmp_path):
+    status = core.benchmark_parity_status(str(tmp_path))
+
+    assert status["full_parity_claim"] is False
+    assert set(status["adapter_levels"]) == {
+        "none",
+        "json_import_only",
+        "pinned_manifest_replay",
+        "pinned_upstream_execution",
+        "parity_evidence_complete",
+    }
+    assert status["adapter_levels"]["pinned_manifest_replay"]["full_parity_claim"] is False
+    assert status["adapter_levels"]["pinned_upstream_execution"]["supported"] is False
+    assert status["evidence_files"]["pinned_manifest_replay"]["generated_by"] == "import-upstream-benchmark --from-pinned-manifest"
+
+
+def _write_pinned_manifest(home: Path, payload: dict) -> Path:
+    manifest = home / "skillopt" / "upstream" / "SkillOpt" / "benchmarks" / "safe.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest
+
+
+def test_pinned_manifest_replay_requires_canonical_clone_and_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    payload = {"benchmark_id": "pinned-demo", "version": "pin", "tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"], "notes": "kept as unsupported metadata"},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}
+    manifest = _write_pinned_manifest(tmp_path, payload)
+    out = tmp_path / "skillopt" / "evals" / "pinned-pack.json"
+
+    result = import_pinned_upstream_manifest(manifest, out, hermes_home=tmp_path)
+
+    assert result["report"]["adapter_level"] == "pinned_manifest_replay"
+    assert result["report"]["full_parity_claim"] is False
+    assert result["report"]["provenance"]["manifest_path_relative_to_clone"] == "benchmarks/safe.json"
+    assert result["report"]["provenance"]["manifest_sha256"]
+    assert result["report"]["provenance"]["conversion_sha256"]
+    payload_out = json.loads(out.read_text(encoding="utf-8"))
+    bridge = payload_out["upstream_bridge"]
+    assert bridge["adapter_level"] == "pinned_manifest_replay"
+    assert bridge["full_parity_claim"] is False
+    assert "$.tasks[1].notes" in bridge["unsupported_fields"]
+
+
+def test_pinned_manifest_replay_rejects_outside_canonical_clone(tmp_path):
+    manifest = tmp_path / "outside.json"
+    manifest.write_text(json.dumps({"tasks": []}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical clone"):
+        import_pinned_upstream_manifest(manifest, hermes_home=tmp_path)
+
+
+def test_pinned_manifest_replay_rejects_executable_remote_and_out_of_clone_paths(tmp_path):
+    base = {"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}
+    for field, value in [("command", "python run.py"), ("reference", "https://example.invalid/x.json"), ("data_path", "../../outside.json")]:
+        payload = json.loads(json.dumps(base))
+        payload["tasks"][0][field] = value
+        manifest = _write_pinned_manifest(tmp_path, payload)
+        with pytest.raises(ValueError, match="executable/remote|out-of-clone"):
+            import_pinned_upstream_manifest(manifest, hermes_home=tmp_path)
+
+
+def test_pinned_manifest_invalid_import_preserves_existing_output(tmp_path):
+    manifest = _write_pinned_manifest(tmp_path, {"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+    ]})
+    out = tmp_path / "skillopt" / "evals" / "existing.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("sentinel\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include train/val/test tasks"):
+        import_pinned_upstream_manifest(manifest, out, hermes_home=tmp_path)
+
+    assert out.read_text(encoding="utf-8") == "sentinel\n"
 
 
 def test_transfer_eval_is_read_only_and_fingerprinted(tmp_path):

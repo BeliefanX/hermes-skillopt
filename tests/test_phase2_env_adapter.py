@@ -18,7 +18,7 @@ from hermes_skillopt.env import (
     production_eligibility_for_task,
 )
 from hermes_skillopt.state import SkillState
-from hermes_skillopt.target import DeterministicKeywordScorecard, HermesRolloutRunner, HermesSandboxRunner, TargetExecutor
+from hermes_skillopt.target import DeterministicKeywordScorecard, HermesRolloutRunner, HermesSandboxRunner, LiveHermesReadOnlyRunner, TargetExecutor
 
 
 def make_skill(home: Path, name: str = "demo", body: str = "Use tools safely.") -> Path:
@@ -298,6 +298,12 @@ def test_eval_pack_metadata_flows_to_evidence_report_manifest_and_checkpoint(tmp
     assert "eval_pack_id: demo-hermes-pack" in report
     assert "validation_selects_candidates_test_is_heldout" in report
     assert evidence["split_governance"]["test"].startswith("held-out final gate")
+    target_binding = json.loads((run_dir / "target_binding.json").read_text(encoding="utf-8"))
+    assert target_binding["target_execution_evidence_contract"]["classification"] == "frozen_hermes_target_execution_v1"
+    assert target_binding["permissions"] == {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False}
+    assert target_binding["frozen_target_config_id"]
+    assert target_binding["frozen_target_fingerprint_sha256"] == target_binding["target_backend_config"]["fingerprint_sha256"]
+    assert "execution_scoring_evidence" in target_binding["target_execution_evidence_contract"]["required_fields"]
 
     stage_record = json.loads((run_dir / "stages" / "001_rollout.json").read_text(encoding="utf-8"))
     assert stage_record["deterministic_batch"]["seed"] == 0
@@ -373,6 +379,64 @@ def test_frozen_hermes_target_execution_v1_requires_runtime_evidence():
     assert result_meta["task_commands_executed"] is False
     assert result_meta["transcript_preview"]
     assert result_meta["execution_scoring"]
+    assert result_meta["permissions"]["task_commands_allowed"] is False
+    assert result_meta["permissions"]["profile_write_allowed"] is False
+    assert result_meta["runtime_fingerprint"]["available"] is True
+    assert result_meta["provider_fingerprint"]["fingerprint_sha256"]
+    assert result_meta["tool_policy_fingerprint"]["fingerprint_sha256"]
+    assert result_meta["execution_scoring_evidence"]["fingerprint_sha256"]
+    assert result_meta["frozen_target_config_id"] == sandbox_out["target_config_id"]
+    assert result_meta["frozen_target_fingerprint_sha256"] == sandbox_out["target_fingerprint_sha256"]
+
+
+def test_frozen_hermes_contract_blocks_task_commands_and_runtime_unavailable():
+    task = _production_real_target_task("real-target-injection")
+    task.fixtures["command"] = "touch /tmp/hermes-skillopt-should-not-run"
+
+    out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen-hermes").evaluate("verify", [task])
+    check = out["eval_execution_contract_checks"][0]
+    meta = out["results"][0]["metadata"]
+    assert isinstance(check, dict)
+    assert isinstance(meta, dict)
+
+    assert out["production_gate_eligible"] is False
+    assert check["runtime_evidence_complete"] is False
+    assert "runtime_available_true" in check["missing_runtime_evidence"]
+    assert meta["runtime_fingerprint"]["available"] is False
+    assert meta["sandbox_command_blocked"] is True
+    assert meta["task_commands_executed"] is False
+    assert meta["permissions"]["task_commands_allowed"] is False
+
+
+def test_live_readonly_contract_is_disabled_without_runtime_proof():
+    task = _production_real_target_task("live-readonly-disabled")
+
+    out = TargetExecutor(runner=LiveHermesReadOnlyRunner(profile_home="/tmp/not-live"), requested_executor="live-readonly").evaluate("verify", [task])
+    check = out["eval_execution_contract_checks"][0]
+    assert isinstance(check, dict)
+    results = out["results"]
+    assert isinstance(results, list)
+    live_meta = results[0]["metadata"]
+    assert isinstance(live_meta, dict)
+
+    assert out["production_gate_eligible"] is False
+    assert check["runtime_evidence_complete"] is False
+    assert "frozen_hermes_contract_marker" in check["missing_runtime_evidence"]
+    assert "isolated_runtime" in check["missing_runtime_evidence"]
+    assert live_meta["production_adopt_allowed"] is False
+
+
+def test_target_executor_frozen_hermes_evidence_contract_lists_required_fields():
+    task = _production_real_target_task("required-fields")
+
+    out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen_hermes_target_execution_v1").evaluate("verify", [task])
+    contract = out["target_execution_evidence_contract"]
+    assert isinstance(contract, dict)
+
+    assert contract["classification"] == "frozen_hermes_target_execution_v1"
+    assert contract["required_permissions"] == {"task_commands_allowed": False, "profile_write_allowed": False}
+    for field in ("frozen_target_config_id", "runtime_fingerprint", "isolated_runtime_evidence", "execution_scoring_evidence"):
+        assert field in contract["required_runtime_evidence"]
 
 
 def test_per_task_delta_surfaces_changed_terms_assertions_and_sensitivity():
