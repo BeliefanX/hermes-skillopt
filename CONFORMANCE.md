@@ -1,6 +1,6 @@
 # Hermes SkillOpt P3 Conformance Spec
 
-This document is the P3 conformance contract for the standalone Hermes SkillOpt plugin. It records where the adapter intentionally aligns with Microsoft SkillOpt concepts, where Hermes diverges for safety, and what remains out of scope.
+This document is the current P0/P1/P2/P3 conformance contract for the standalone Hermes SkillOpt plugin. It records where the adapter intentionally aligns with Microsoft SkillOpt concepts, where Hermes diverges for safety, and what remains out of scope.
 
 ## Scope
 
@@ -18,7 +18,7 @@ Hermes maps the core SkillOpt abstraction as follows:
 
 - Trainable state: a Hermes `SKILL.md` document.
 - Environment/benchmark: Hermes eval packs with explicit train/val/test split governance; bundled examples under `examples/evals/` are static review fixtures and cannot production-adopt.
-- Rollout/target model: frozen target executor (`scorecard`, `replay`, or `sandbox`) with backend config fingerprints.
+- Rollout/target model: frozen target executor (`scorecard`, `replay`, `sandbox`, or `frozen-hermes`/`frozen_hermes_target_execution_v1`) with backend config fingerprints. The frozen-Hermes path is currently a sandbox-backed MVP with isolated runtime/provider/model/toolset/session evidence, transcript/trajectory evidence, task commands disabled, and no live profile writes.
 - Reflection/update: optimizer proposes bounded edits; candidate text is staged.
 - Evaluation gate: validation/test scorecards decide whether a candidate is review-worthy or adoptable; any hard-failed production-eligible validation row blocks production gate acceptance/adoptability regardless of soft weighted-score improvement or gate mode. Critical `all_required_keywords`/`required_markers` and `forbidden_markers` are hard pass/fail constraints, not soft weights.
 - Artifacts/checkpoints: every staged run records manifest, task/eval, target, optimizer, profile, and provenance fingerprints; stage artifacts include deterministic batch metadata.
@@ -34,6 +34,9 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Transfer evaluation is report-only/read-only: it evaluates staged/proposed skill text or an explicit file and never writes live skills.
 - Cross-profile evaluation records profile fingerprints but does not mutate target profiles.
 - Conformance tooling runs local deterministic `compileall` plus pytest commands and does not depend on network, credentials, upstream checkout, or live Hermes services.
+- Import, transfer, and conformance report writers share `guard_safe_output_path`: `.json` outputs cannot target live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular files, wrong suffixes, or symlink escapes.
+- Bounded edit validation checks replacement/inserted text for protected headings/markers and allowed-region marker boundary mutations, not just the matched old text.
+- Score artifacts distinguish production-curated evidence from review-only evidence through `production_curated_score`, `review_only_score`, per-task delta rows, expected-term/assertion change details, and held-out test sensitivity warnings.
 - Resume tooling is inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
 
 ## P0/P1/P3 commands/modules
@@ -42,23 +45,24 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Alias for eval-only fixed-skill scoring.
   - Output: staging run with `eval_report.json`, `benchmark_report.json`, `report.md`, `manifest.json`, and `adoptable: false`.
   - Validates/records: explicit eval file, skill/eval/target fingerprints, split scorecard summary, and read-only safety flags (`optimizer_training: false`, `adoption_side_effects: false`, `task_provided_commands_allowed: false`).
+  - Reports production-curated and review-only score buckets separately; review-only evidence does not become a production benchmark claim.
   - Limitation: local Hermes-native report MVP only; no upstream benchmark parity claim.
 
 - `hermes_skillopt.benchmark_bridge.import_upstream_manifest(...)`
   - Inputs: upstream-style JSON manifest with embedded `tasks` or `splits`.
   - Output: Hermes `hermes-curated-eval-pack-v1` payload and optional output file.
-  - Validates: schema, no executable/remote fields, safe `.json` output path, validate-before-replace write flow, deterministic scorecard fields, split completeness, leakage, sample/prod eligibility, fingerprint.
+  - Validates: schema, no executable/remote fields, shared safe `.json` output path guard, validate-before-replace write flow, deterministic scorecard fields, split completeness, leakage, sample/prod eligibility, fingerprint.
 
 - `hermes_skillopt.transfer.transfer_eval(...)`
   - Inputs: staged `run_id` or explicit staged `skill_file`, eval pack/staged task artifacts, target list, profile list.
-  - Output: `hermes-skillopt-transfer-eval-v1` report with profile/backend/target fingerprints.
+  - Output: `hermes-skillopt-transfer-eval-v1` report with profile/backend/target fingerprints, written only through the shared safe report path guard when an output file is requested.
   - Default posture: staged/report-only/read-only; no live skill writeback and no external/live model performance claim.
 
 - `hermes_skillopt.conformance.run_conformance(...)`
   - Modes: `quick` (default deterministic smoke/regression suite) and `full` (all local pytest tests).
   - Important: quick mode is not a full repository health check and must not be reported as one.
   - Runs: `python -m compileall -q hermes_skillopt tests` plus mode-selected/custom pytest args.
-  - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`.
+  - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`, written only through the shared safe report path guard when an output file is requested.
 
 - `hermes_skillopt.core.review(..., slim=True)`
   - Verifies staged artifact hashes before returning run data.
@@ -82,7 +86,7 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 
 - The bundled `examples/evals/*production_v1.json` files are static review fixtures, not production certification suites for any skill.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.
-- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is import-only; true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist.
+- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is import-only; true upstream benchmark execution is unsupported even though the Hermes-native frozen-Hermes sandbox MVP can produce local isolated runtime evidence.
 - Split manifest support is embedded JSON only; file references are intentionally not followed in P3.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model results.
 - Conformance reports local adapter health only; they do not certify Microsoft SkillOpt parity or external benchmark performance.
@@ -95,7 +99,7 @@ Each six-stage trainer artifact under `stages/` records `schema_version: skillop
 ## Additional current conformance points
 
 - P0 status surfaces: `compare-upstream-pin` and `benchmark-parity-status` are read-only/report-only.
-- P1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. Future `frozen_hermes_target_execution_v1` adoption evidence must include frozen target config, provider/model/toolset/session fingerprints, isolated runtime, permissions, transcript/trajectory artifact, and execution-based scoring.
+- P1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. `frozen_hermes_target_execution_v1` is currently implemented only through the constrained sandbox MVP and must include frozen target config, provider/model/toolset/session fingerprints, isolated runtime, permissions, transcript/trajectory artifact, and execution-based scoring. It is not upstream parity or arbitrary live agent command execution.
 - P1 benchmark adapter: `JsonEvalPackBenchmarkAdapter` owns safe JSON eval-pack loading plus governance diagnostics.
 - P1 writeback safety: adopt/rollback use `skillopt/writeback.lock` and audit JSONL events.
 - P2 governance/UX: manifests/reports/WebUI expose eval pack governance, parity labels, gate/provenance/lineage, and remain staged/read-only by default.

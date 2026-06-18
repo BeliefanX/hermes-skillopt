@@ -930,17 +930,53 @@ def _per_task_delta(current_eval: dict[str, Any] | None, candidate_eval: dict[st
     for cand in ((candidate_eval or {}).get("results") or []):
         if not isinstance(cand, dict):
             continue
-        cur = current_rows.get(cand.get("task_id"), {})
+        raw_cur = current_rows.get(cand.get("task_id"))
+        cur = raw_cur if isinstance(raw_cur, dict) else {}
+        cur_meta = cur.get("metadata") if isinstance(cur.get("metadata"), dict) else {}
+        cand_meta = cand.get("metadata") if isinstance(cand.get("metadata"), dict) else {}
+        cur_traj = cur_meta.get("trajectory") if isinstance(cur_meta.get("trajectory"), dict) else {}
+        cand_traj = cand_meta.get("trajectory") if isinstance(cand_meta.get("trajectory"), dict) else {}
+        cur_scores = cur_traj.get("scores") if isinstance(cur_traj.get("scores"), dict) else {}
+        cand_scores = cand_traj.get("scores") if isinstance(cand_traj.get("scores"), dict) else {}
+        cur_failed = set(cur_meta.get("failed_checks") or cur_scores.get("failed_checks") or [])
+        cand_failed = set(cand_meta.get("failed_checks") or cand_scores.get("failed_checks") or [])
+        cur_passed = set(cur_meta.get("passed_checks") or cur_scores.get("passed_checks") or [])
+        cand_passed = set(cand_meta.get("passed_checks") or cand_scores.get("passed_checks") or [])
+        changed_failed = sorted(cur_failed ^ cand_failed)
+        changed_passed = sorted(cur_passed ^ cand_passed)
+        changed_checks = sorted(set(changed_failed + changed_passed))
+        expected_term_changes = [c for c in changed_checks if c.startswith("expected_keyword:") or c.startswith("all_required_keyword:")]
+        assertion_changes = [c for c in changed_checks if c.startswith("assertion:")]
+        delta = round(float(cand.get("score", 0.0)) - float(cur.get("score", 0.0)), 6)
+        pass_changed = cur.get("passed") != cand.get("passed")
         out.append({
             "task_id": cand.get("task_id"),
             "current_score": cur.get("score"),
             "candidate_score": cand.get("score"),
-            "delta": round(float(cand.get("score", 0.0)) - float(cur.get("score", 0.0)), 6),
+            "delta": delta,
             "current_passed": cur.get("passed"),
             "candidate_passed": cand.get("passed"),
-            "production_gate_eligible": bool((cand.get("metadata") or {}).get("production_gate_eligible")),
+            "regressed": delta < 0 or (cur.get("passed") is True and cand.get("passed") is False),
+            "candidate_vs_current_sensitive": bool(delta or pass_changed or changed_checks),
+            "sensitivity_warning": None if (delta or pass_changed or changed_checks) else "no score/pass/check delta; this task may not distinguish candidate from current",
+            "changed_checks": changed_checks,
+            "changed_expected_terms": expected_term_changes,
+            "changed_assertions": assertion_changes,
+            "production_gate_eligible": bool(cand_meta.get("production_gate_eligible")),
         })
     return out
+
+
+def _heldout_test_sensitivity(current_test_eval: dict[str, Any] | None, candidate_test_eval: dict[str, Any] | None) -> dict[str, Any]:
+    rows = _per_task_delta(current_test_eval, candidate_test_eval)
+    insensitive = [row.get("task_id") for row in rows if row.get("candidate_vs_current_sensitive") is False]
+    return {
+        "schema_version": "skillopt-heldout-test-sensitivity-v1",
+        "candidate_vs_current_sensitive": bool(rows) and not insensitive,
+        "insensitive_task_ids": insensitive,
+        "warnings": ["heldout test has no candidate-vs-current sensitivity for: " + ", ".join(str(x) for x in insensitive)] if insensitive else [],
+        "per_task_delta": rows,
+    }
 
 
 def _production_eval_policy(evidence: dict[str, Any], production_gate_available: bool, test_gate_eligible: bool) -> dict[str, Any]:
@@ -1313,7 +1349,7 @@ def eval_only(skill: str | None = None, *, skill_file: str | None = None, eval_f
         tasks.setdefault(split, []).append(task)
 
     requested_target = target_backend or target_executor
-    if requested_target == "sandbox":
+    if requested_target in {"sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1"}:
         runner = HermesSandboxRunner()
     elif requested_target == "scorecard":
         runner = DeterministicKeywordScorecard()
@@ -1464,7 +1500,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     production_gate_available = bool(production_val_tasks) and bool(evidence.get("production_gate_eligible"))
     evidence["production_gate_task_count"] = len(production_val_tasks)
     evidence["production_gate_eligible"] = production_gate_available
-    if target_backend == "sandbox":
+    if target_backend in {"sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1"}:
         runner = HermesSandboxRunner()
     elif target_backend == "scorecard":
         runner = DeterministicKeywordScorecard()
@@ -1505,6 +1541,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     validation_summary = best_gate or (all_gates[-1] if all_gates else None)
     production_validation_summary = trainer_result.production_best_gate
     test_results = trainer_result.test_results
+    current_test_results = executor.evaluate(original, tasks["test"], label="original_test_sensitivity") if tasks["test"] else {"results": [], "score": 0.0}
+    heldout_test_sensitivity = _heldout_test_sensitivity(current_test_results, test_results)
     production_test_results = [r for r in (test_results.get("results") or []) if isinstance(r, dict) and isinstance(r.get("metadata"), dict) and r["metadata"].get("production_gate_eligible")]
     test_gate_eligible = bool(production_test_results) and all(float(r.get("score", 0.0)) >= 0.55 and bool(r.get("passed")) for r in production_test_results)
     production_gate_eligible = production_gate_available and bool(
@@ -1555,7 +1593,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     split_scores = {
         "validation": {"current": current_score, "candidate": candidate_score},
         "production_validation": {"current": production_current_score, "candidate": production_candidate_score},
-        "heldout_test": {"best": test_results.get("split_score", test_results.get("score"))},
+        "heldout_test": {"best": test_results.get("split_score", test_results.get("score")), "current": current_test_results.get("split_score", current_test_results.get("score")), "candidate_vs_current_sensitive": heldout_test_sensitivity.get("candidate_vs_current_sensitive")},
     }
     candidate_comparison = candidate_summary[-1]["ranked_candidates"] if candidate_summary else []
     regression_cases = sorted(set((test_results.get("regression_cases") or []) + [d.get("task_id") for d in per_task_delta if isinstance(d, dict) and d.get("regressed") and d.get("task_id")]))
@@ -1604,10 +1642,10 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         optimizer_prompt_fingerprints=optimizer_prompt_fingerprints,
         algorithm_version=ALGORITHM_VERSION,
     )
-    write_text(artifacts.candidate_summary, json.dumps({"candidate_count": max(1, int(candidate_count)), "rounds": candidate_summary, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "production_eligibility_reasons": adoptability_reasons, "selection_policy": "rank candidates on same validation set; when production gates exist, prefer candidates with both generic and production strict improvement"}, ensure_ascii=False, indent=2) + "\n")
+    write_text(artifacts.candidate_summary, json.dumps({"candidate_count": max(1, int(candidate_count)), "rounds": candidate_summary, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "heldout_test_sensitivity": heldout_test_sensitivity, "production_eligibility_reasons": adoptability_reasons, "selection_policy": "rank candidates on same validation set; when production gates exist, prefer candidates with both generic and production strict improvement"}, ensure_ascii=False, indent=2) + "\n")
     history = _history_artifact(run_id=rid, original_sha256=sha256_text(original), proposed_sha256=sha256_text(proposed), candidate_summary=candidate_summary, gates=all_gates, production_gates=all_production_gates, rejected=rejected, stage_records=trainer_result.stage_records)
     write_text(artifacts.history, json.dumps(history, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- optimizer_backend: {optimizer_config['backend']}\n- optimizer_requested_backend: {optimizer_config['requested_backend']}\n- target_executor: {executor.mode}\n- target_backend_requested: {target_config['requested_executor']}\n- target_config_id: {executor.target_config_id}\n- gate_policy: {gate_policy['mode']}\n- eval_file: {eval_file_used or 'none'}\n- eval_pack_id: {evidence.get('eval_pack_id') or 'none'}\n- eval_pack_version: {evidence.get('eval_pack_version') or 'none'}\n- eval_pack_fingerprint: {evidence.get('eval_pack_fingerprint_sha256') or 'none'}\n- split_governance: validation_selects_candidates_test_is_heldout\n- benchmark_parity_label: {benchmark_parity['parity_label']}\n- benchmark_parity_mode: {benchmark_parity['mode']}\n- provenance_fingerprint: {provenance['fingerprint_sha256']}\n- eval_fingerprint: {provenance.get('eval_file_sha256') or 'none'}\n- task_fingerprint: {provenance['task_sha256']}\n- production_eval_policy: {production_eval_policy['policy_version']}\n- production_eval_policy_fingerprint: {production_eval_policy['policy_fingerprint_sha256']}\n- optimizer_fingerprint: {provenance['optimizer_fingerprint_sha256']}\n- optimizer_prompt_fingerprint: {provenance['optimizer_prompt_fingerprint_sha256']}\n- algorithm_version: {provenance['algorithm_version']}\n- target_fingerprint: {provenance['target_fingerprint_sha256']}\n- profile_fingerprint: {provenance['profile_fingerprint_sha256']}\n- skill_fingerprint: {provenance['skill_fingerprint_sha256']}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- production_gate_task_count: {len(production_val_tasks)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- baseline/current/candidate/best/test: original_sha={sha256_text(original)[:12]}, current_sha={sha256_text(current)[:12]}, candidate_sha={sha256_text(proposed)[:12]}, best_sha={sha256_text(best)[:12]}, test_score={test_results.get('score')}\n- iterations: {max(1, int(iterations))}\n- candidate_count_per_iteration: {max(1, int(candidate_count))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- production_validation_scores: current={production_current_score}, candidate={production_candidate_score}\n- heldout_test_score: {test_results.get('score')}\n- split_scores: {json.dumps(split_scores, ensure_ascii=False)}\n- regression_cases: {json.dumps(regression_cases, ensure_ascii=False)}\n- production_eligibility_reasons: {', '.join(adoptability_reasons) or 'eligible'}\n- test_gate_eligible: {test_gate_eligible}\n- not_adoptable_reasons: {', '.join(adoptability_reasons) or 'none'}\n- not_adoptable_checklist: production_validation={production_gate_eligible}; heldout_test={test_gate_eligible}; staged_best={final_status == 'staged_best'}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate production curated validation score must strictly improve for adoptable; session/fallback/synthetic validation is review-only evidence\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- production_best_gate: {json.dumps(production_validation_summary, ensure_ascii=False) if production_validation_summary else 'none'}\n- per_task_delta: {json.dumps(per_task_delta, ensure_ascii=False)}\n- changed: {bool(diff)}\n\n## Multi-candidate rank/select\n\n```json\n{json.dumps(candidate_summary, ensure_ascii=False, indent=2)[:4000]}\n```\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
+    report = f"# Hermes SkillOpt full run\n\n- abstraction: SkillOpt-inspired Hermes adapter (trainable skill state, frozen scorecard/replay target, optimizer bounded edit, benchmark env, validation gate)\n- run_id: {rid}\n- status: {final_status}\n- adoptable: {adoptable}\n- skill: {target.name}\n- backend: {llm.mode}\n- optimizer_backend: {optimizer_config['backend']}\n- optimizer_requested_backend: {optimizer_config['requested_backend']}\n- target_executor: {executor.mode}\n- target_backend_requested: {target_config['requested_executor']}\n- target_config_id: {executor.target_config_id}\n- gate_policy: {gate_policy['mode']}\n- eval_file: {eval_file_used or 'none'}\n- eval_pack_id: {evidence.get('eval_pack_id') or 'none'}\n- eval_pack_version: {evidence.get('eval_pack_version') or 'none'}\n- eval_pack_fingerprint: {evidence.get('eval_pack_fingerprint_sha256') or 'none'}\n- split_governance: validation_selects_candidates_test_is_heldout\n- benchmark_parity_label: {benchmark_parity['parity_label']}\n- benchmark_parity_mode: {benchmark_parity['mode']}\n- provenance_fingerprint: {provenance['fingerprint_sha256']}\n- eval_fingerprint: {provenance.get('eval_file_sha256') or 'none'}\n- task_fingerprint: {provenance['task_sha256']}\n- production_eval_policy: {production_eval_policy['policy_version']}\n- production_eval_policy_fingerprint: {production_eval_policy['policy_fingerprint_sha256']}\n- optimizer_fingerprint: {provenance['optimizer_fingerprint_sha256']}\n- optimizer_prompt_fingerprint: {provenance['optimizer_prompt_fingerprint_sha256']}\n- algorithm_version: {provenance['algorithm_version']}\n- target_fingerprint: {provenance['target_fingerprint_sha256']}\n- profile_fingerprint: {provenance['profile_fingerprint_sha256']}\n- skill_fingerprint: {provenance['skill_fingerprint_sha256']}\n- curated_task_count: {evidence.get('curated_task_count', 0)}\n- production_gate_eligible: {production_gate_eligible}\n- production_gate_task_count: {len(production_val_tasks)}\n- harvested_fragments: {len(evidence.get('snippets', []))}\n- train/val/test: {len(tasks['train'])}/{len(tasks['val'])}/{len(tasks['test'])}\n- baseline/current/candidate/best/test: original_sha={sha256_text(original)[:12]}, current_sha={sha256_text(current)[:12]}, candidate_sha={sha256_text(proposed)[:12]}, best_sha={sha256_text(best)[:12]}, test_score={test_results.get('score')}\n- iterations: {max(1, int(iterations))}\n- candidate_count_per_iteration: {max(1, int(candidate_count))}\n- six_stage_trainer_artifacts: stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json\n- rejected_history_count: {len(rejected_history)}\n- validation_scores: current={current_score}, candidate={candidate_score}\n- production_validation_scores: current={production_current_score}, candidate={production_candidate_score}\n- heldout_test_score: {test_results.get('score')}\n- split_scores: {json.dumps(split_scores, ensure_ascii=False)}\n- regression_cases: {json.dumps(regression_cases, ensure_ascii=False)}\n- production_eligibility_reasons: {', '.join(adoptability_reasons) or 'eligible'}\n- test_gate_eligible: {test_gate_eligible}\n- not_adoptable_reasons: {', '.join(adoptability_reasons) or 'none'}\n- not_adoptable_checklist: production_validation={production_gate_eligible}; heldout_test={test_gate_eligible}; staged_best={final_status == 'staged_best'}\n- gate_reason: {gate_reason}\n- acceptance_gate: candidate production curated validation score must strictly improve for adoptable; session/fallback/synthetic validation is review-only evidence\n- best_gate: {json.dumps(best_gate, ensure_ascii=False) if best_gate else 'none'}\n- production_best_gate: {json.dumps(production_validation_summary, ensure_ascii=False) if production_validation_summary else 'none'}\n- score_ledger: production_curated={production_candidate_score}; review_only_validation={candidate_score}; heldout_test={test_results.get('score')}\n- heldout_test_sensitivity: {json.dumps(heldout_test_sensitivity, ensure_ascii=False)}\n- per_task_delta: {json.dumps(per_task_delta, ensure_ascii=False)}\n- changed: {bool(diff)}\n\n## Multi-candidate rank/select\n\n```json\n{json.dumps(candidate_summary, ensure_ascii=False, indent=2)[:4000]}\n```\n\n## Diff preview\n\n```diff\n{diff[:4000]}\n```\n"
     write_text(artifacts.report, report)
     manifest = {
         "run_id": rid,
@@ -1645,6 +1683,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "provenance_fingerprint": provenance,
         "production_eval_policy": production_eval_policy,
         "per_task_delta": per_task_delta,
+        "heldout_test_sensitivity": heldout_test_sensitivity,
         "split_scores": split_scores,
         "candidate_comparison": candidate_comparison,
         "regression_cases": regression_cases,
@@ -1678,7 +1717,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     manifest["artifact_lineage"] = _artifact_lineage_status(run_dir, manifest)
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "heldout_test_sensitivity": heldout_test_sensitivity, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
     return result
 
 
@@ -1789,7 +1828,7 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
         "diff": {"path": str(diff_path), "sha256": sha256_text(diff) if diff else None, "bytes": len(diff.encode("utf-8")), "preview_chars": 0 if slim else min(len(diff), include_diff_chars)},
         "report": {"path": str(report_path), "sha256": sha256_text(report) if report else None, "bytes": len(report.encode("utf-8")), "preview_chars": 0 if slim else min(len(report), 1200)},
     }
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
 
 
 def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
@@ -1951,6 +1990,8 @@ def compare_upstream_pin(hermes_home_path: str | None = None) -> dict[str, Any]:
     return {
         "success": True,
         "mode": "read_only_report_only_no_fetch_no_merge",
+        "parity_label": "Upstream pin status only; no Microsoft SkillOpt upstream benchmark parity/result is claimed",
+        "true_upstream_execution_supported": False,
         "upstream_url": status.get("upstream_url"),
         "clone_path": status.get("clone_path"),
         "clone_exists": status.get("clone_exists"),
@@ -1967,6 +2008,7 @@ def compare_upstream_pin(hermes_home_path: str | None = None) -> dict[str, Any]:
             "standalone Hermes adapter; upstream code is not vendored or merged automatically",
             "status uses locally fetched origin/main only and performs no network access",
             "benchmark/parity modes are report-only unless explicitly staged as artifacts",
+            "no upstream benchmark code is executed by compare/status reporting",
         ],
     }
 
@@ -2002,6 +2044,7 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
         "schema_version": "hermes-skillopt-benchmark-parity-status-v1",
         "mode": "read_only_report_only_no_rollout_no_adopt",
         "parity_label": "Hermes-native benchmark mode; not an upstream SkillOpt benchmark result",
+        "reporting_boundary": "no Microsoft SkillOpt upstream benchmark parity is claimed; status/import are conservative Hermes-native report-only capabilities",
         "upstream_parity_claim": "no full upstream parity claimed; compare-upstream-pin reports pinned source status only",
         "supported_parity_levels": {
             "pinned_upstream_status": "supported_read_only_no_fetch",
@@ -2016,7 +2059,7 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
         "upstream_benchmark_parity": {
             "upstream_pin": {k: upstream.get(k) for k in ("clone_exists", "pinned_commit", "current_commit", "semantic_status", "ahead", "behind", "dirty")},
             "local_clone_status": "available" if upstream.get("clone_exists") else "not_cloned",
-            "import_only_bridge": {"supported": True, "command": "import-upstream-benchmark", "schema_version": "hermes-upstream-benchmark-bridge-v1", "safe_read_only": True},
+            "import_only_bridge": {"supported": True, "command": "import-upstream-benchmark", "schema_version": "hermes-upstream-benchmark-bridge-v1", "safe_read_only": True, "parity_label": "JSON/data-only import to Hermes eval pack; not upstream execution parity"},
             "true_benchmark_execution": {"supported": False, "reason": "no upstream execution adapter; arbitrary code/network execution remains disabled"},
             "required_next_adapter_steps": [
                 "define a read-only upstream benchmark manifest/adapter schema with pinned expected outputs",
@@ -2036,7 +2079,7 @@ def benchmark_parity_status(hermes_home_path: str | None = None) -> dict[str, An
         },
         "builtin_benchmarks": builtin,
         "upstream_pin": {k: upstream.get(k) for k in ("clone_exists", "pinned_commit", "current_commit", "semantic_status", "ahead", "behind", "dirty")},
-        "read_only_guards": ["does not call full_run", "does not adopt", "does not write skills", "does not fetch network"],
+        "read_only_guards": ["does not call full_run", "does not adopt", "does not write skills", "does not fetch network", "does not execute upstream benchmark code"],
     }
 
 def _git(args: list[str], cwd: Path | None = None, timeout: int = 120) -> tuple[int, str]:
@@ -2082,7 +2125,7 @@ def upstream_status(
                 ahead, behind = int(parts[0]), int(parts[1])
                 semantic = "up_to_date" if ahead == 0 and behind == 0 else ("behind_origin" if ahead == 0 else "ahead_of_origin" if behind == 0 else "diverged")
         upstream_diff = {"semantic_status": semantic, "ahead": ahead, "behind": behind, "dirty": bool(dirty.strip()) if code == 0 else None, "note": "Compared against locally fetched origin/main only; status does not fetch or require network."}
-    return {"success": True, "upstream_url": UPSTREAM_URL, "clone_path": str(clone), "clone_exists": exists, "current_commit": commit, "lock": lock_data, "current_lock_pin": lock_data.get("pinned_commit"), "last_reviewed_upstream_commit": lock_data.get("last_reviewed_upstream_commit") or lock_data.get("pinned_commit"), "feature_matrix": UPSTREAM_SEAM_MATRIX, "delta_checklist": UPSTREAM_SEAM_MATRIX, "upstream_diff": upstream_diff}
+    return {"success": True, "mode": "offline_status_only_no_fetch_no_benchmark_execution", "parity_label": "Pinned upstream source status only; no Microsoft SkillOpt upstream benchmark parity/result is claimed", "supported_parity_level": "pinned_upstream_status_only", "unsupported_true_upstream_execution": {"supported": False, "reason": "status is offline/report-only and never imports or runs upstream benchmark code"}, "upstream_url": UPSTREAM_URL, "clone_path": str(clone), "clone_exists": exists, "current_commit": commit, "lock": lock_data, "current_lock_pin": lock_data.get("pinned_commit"), "last_reviewed_upstream_commit": lock_data.get("last_reviewed_upstream_commit") or lock_data.get("pinned_commit"), "feature_matrix": UPSTREAM_SEAM_MATRIX, "delta_checklist": UPSTREAM_SEAM_MATRIX, "upstream_diff": upstream_diff}
 
 
 def upstream_update(hermes_home_path: str | None = None, repo_path: str | None = None, fetch_only: bool = False) -> dict[str, Any]:

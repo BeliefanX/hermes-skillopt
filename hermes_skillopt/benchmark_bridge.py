@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_skillopt.env import EVAL_PACK_SCHEMA_VERSION, load_eval_pack
+from hermes_skillopt.safety import guard_safe_output_path
 
 UPSTREAM_BRIDGE_SCHEMA_VERSION = "hermes-upstream-benchmark-bridge-v1"
 FORBIDDEN_EXECUTION_FIELDS = {
@@ -47,14 +48,6 @@ FORBIDDEN_EXECUTION_FIELDS = {
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test", "dev": "val", "eval": "val"}
 
 
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
-
-
 def guard_eval_pack_output_path(output_path: str | Path, *, hermes_home: str | Path | None = None) -> Path:
     """Resolve a benchmark-bridge output path that is safe for eval-pack staging.
 
@@ -64,31 +57,7 @@ def guard_eval_pack_output_path(output_path: str | Path, *, hermes_home: str | P
     output areas are accepted.
     """
 
-    out = Path(output_path).expanduser().resolve()
-    if out.exists() and (out.is_symlink() or not out.is_file()):
-        raise ValueError("benchmark bridge output_path must be a regular eval-pack file")
-    if out.suffix.lower() != ".json":
-        raise ValueError("benchmark bridge output_path must be a .json eval-pack file")
-
-    home_raw = hermes_home or os.environ.get("HERMES_HOME")
-    if home_raw:
-        home = Path(home_raw).expanduser().resolve()
-        if _is_relative_to(out, home):
-            allowed_roots = [home / "skillopt" / "evals", home / "skillopt" / "staging", home / "skillopt" / "reports"]
-            if not any(_is_relative_to(out, root.resolve()) for root in allowed_roots):
-                raise ValueError("benchmark bridge output_path under HERMES_HOME must be an explicit skillopt eval/staging/report output path")
-            return out
-
-    repo_root = Path(__file__).resolve().parents[1]
-    repo_blocked_roots = [repo_root / "hermes_skillopt", repo_root / "skills", repo_root / "plugins", repo_root / "cron", repo_root / "memories"]
-    if any(_is_relative_to(out, root.resolve()) for root in repo_blocked_roots) or out in {repo_root / "__init__.py", repo_root / "plugin.yaml"}:
-        raise ValueError("benchmark bridge output_path may not target plugin/repo source or runtime-sensitive paths")
-
-    blocked_names = {"SKILL.md", "plugin.yaml", "config.json", "memory.json", "memories.json", "cron.json"}
-    blocked_parts = {"skills", "plugins", "plugin", "cron", "memory", "memories", "config", "runtime", "runs"}
-    if out.name in blocked_names or any(part in blocked_parts for part in out.parts):
-        raise ValueError("benchmark bridge output_path may not target live skills, plugins, config, memory, cron, or runtime-sensitive paths")
-    return out
+    return guard_safe_output_path(output_path, kind="benchmark bridge", hermes_home=hermes_home, required_suffix=".json")
 
 
 @dataclass(frozen=True)
@@ -104,6 +73,16 @@ class UpstreamImportReport:
     production_eligible_task_count: int
     sample_pack: bool
     warnings: tuple[str, ...]
+    mode: str = "import_only_data_conversion_no_upstream_execution"
+    parity_label: str = "Hermes import-only eval pack; not an upstream SkillOpt benchmark execution/result"
+    true_upstream_execution_supported: bool = False
+    safety_invariants: tuple[str, ...] = (
+        "local JSON/data-only input",
+        "no upstream Python import",
+        "no network fetch",
+        "no benchmark/task command execution",
+        "no live skill writes",
+    )
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -218,10 +197,12 @@ def import_upstream_manifest(input_path: str | Path, output_path: str | Path | N
         "upstream_bridge": {
             "schema_version": UPSTREAM_BRIDGE_SCHEMA_VERSION,
             "parity_level": "import_only_bridge_no_upstream_execution",
+            "parity_label": "Hermes import-only eval pack; not an upstream SkillOpt benchmark execution/result",
             "source_path": str(path),
             "source_fingerprint_sha256": source_fp,
             "safe_adapter": "json-only-no-code-execution",
             "true_benchmark_execution_supported": False,
+            "unsupported_true_upstream_execution_reason": "importer accepts data-only JSON and never imports upstream Python, fetches network data, executes task commands, or writes live skills",
         },
         "eval_execution_contract": {"classification": "deterministic_replay_report_only", "reason": "upstream import bridge is read-only and does not execute upstream benchmark code"},
         "tasks": tasks,

@@ -39,6 +39,8 @@ def test_benchmark_parity_status_is_read_only_labelled(tmp_path: Path):
     assert out["success"] is True
     assert out["mode"] == "read_only_report_only_no_rollout_no_adopt"
     assert "not an upstream SkillOpt benchmark result" in out["parity_label"]
+    assert "no Microsoft SkillOpt upstream benchmark parity" in out["reporting_boundary"]
+    assert "not upstream execution parity" in out["upstream_benchmark_parity"]["import_only_bridge"]["parity_label"]
     assert out["hermes_benchmark_mode"]["production_gate"].startswith("only explicit curated")
 
 
@@ -46,7 +48,17 @@ def test_compare_upstream_pin_reports_without_claiming_merge(tmp_path: Path):
     out = core.compare_upstream_pin(str(tmp_path / "home"))
     assert out["success"] is True
     assert out["mode"] == "read_only_report_only_no_fetch_no_merge"
+    assert out["true_upstream_execution_supported"] is False
+    assert "no Microsoft SkillOpt upstream benchmark parity" in out["parity_label"]
     assert any("not vendored" in item for item in out["safety_invariants"])
+
+
+def test_upstream_status_boundary_is_offline_status_only(tmp_path: Path):
+    out = core.upstream_status(str(tmp_path / "home"))
+    assert out["success"] is True
+    assert out["mode"] == "offline_status_only_no_fetch_no_benchmark_execution"
+    assert out["unsupported_true_upstream_execution"]["supported"] is False
+    assert "no Microsoft SkillOpt upstream benchmark parity" in out["parity_label"]
 
 
 def test_json_benchmark_adapter_and_live_readonly_eval(tmp_path: Path):

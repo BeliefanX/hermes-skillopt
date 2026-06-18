@@ -60,9 +60,42 @@ def test_upstream_manifest_imports_to_hermes_eval_pack(tmp_path):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "hermes-curated-eval-pack-v1"
     assert payload["upstream_bridge"]["safe_adapter"] == "json-only-no-code-execution"
+    assert payload["upstream_bridge"]["parity_label"] == "Hermes import-only eval pack; not an upstream SkillOpt benchmark execution/result"
+    assert payload["upstream_bridge"]["true_benchmark_execution_supported"] is False
+    assert result["report"]["mode"] == "import_only_data_conversion_no_upstream_execution"
+    assert result["report"]["true_upstream_execution_supported"] is False
+    assert "no benchmark/task command execution" in result["report"]["safety_invariants"]
     assert result["report"]["split_counts"] == {"train": 1, "val": 1, "test": 1}
     assert result["report"]["sample_pack"] is True
     assert result["report"]["production_eligible_task_count"] == 0
+
+
+def test_upstream_import_pilot_is_data_only_no_network_or_command_execution(tmp_path, monkeypatch):
+    import os
+    import socket
+    import subprocess
+
+    manifest = tmp_path / "valid-upstream.json"
+    manifest.write_text(json.dumps({"tasks": [
+        {"id": "train", "split": "train", "prompt": "Train task", "expected_terms": ["train"]},
+        {"id": "val", "split": "val", "prompt": "Val task", "expected_terms": ["val"]},
+        {"id": "test", "split": "test", "prompt": "Test task", "expected_terms": ["test"]},
+    ]}), encoding="utf-8")
+    calls: list[str] = []
+
+    def blocked(*args, **kwargs):
+        calls.append("blocked")
+        raise AssertionError("import-only bridge must not execute commands or open network sockets")
+
+    monkeypatch.setattr(os, "system", blocked)
+    monkeypatch.setattr(subprocess, "run", blocked)
+    monkeypatch.setattr(socket, "socket", blocked)
+
+    result = import_upstream_manifest(manifest, tmp_path / "out.json")
+
+    assert result["success"] is True
+    assert calls == []
+    assert result["report"]["parity_label"].startswith("Hermes import-only")
 
 
 def test_upstream_import_invalid_manifest_does_not_create_output(tmp_path):
@@ -183,7 +216,7 @@ def test_transfer_eval_is_read_only_and_fingerprinted(tmp_path):
     eval_pack = write_eval_pack(tmp_path)
     staged = tmp_path / "staged_SKILL.md"
     staged.write_text(original + "\n- Always verify and report blocker status.\n", encoding="utf-8")
-    report_path = tmp_path / "transfer-report.json"
+    report_path = tmp_path / "skillopt" / "reports" / "transfer-report.json"
 
     result = transfer_eval(
         hermes_home_path=str(tmp_path),
@@ -198,6 +231,12 @@ def test_transfer_eval_is_read_only_and_fingerprinted(tmp_path):
     assert skill.read_text(encoding="utf-8") == original
     report = result["report"]
     assert report["mode"] == "report-only-read-only"
+    assert "not a Microsoft SkillOpt upstream benchmark parity/result" in report["parity_label"]
+    assert report["upstream_execution"] == {
+        "supported": False,
+        "performed": False,
+        "reason": "transfer_eval evaluates staged text with Hermes target adapters only and never runs upstream benchmark code",
+    }
     assert report["live_skill_writeback"] is False
     assert report["report_fingerprint_sha256"]
     assert len(report["evaluations"]) == 4
@@ -214,16 +253,51 @@ def test_transfer_eval_defaults_to_staged_input(tmp_path):
         transfer_eval(hermes_home_path=str(tmp_path), eval_file=str(eval_pack), skill_file=None)
 
 
-def test_transfer_eval_report_output_cannot_target_live_skills(tmp_path):
+def test_transfer_eval_report_output_cannot_target_live_runtime_paths(tmp_path):
     skill = make_skill(tmp_path)
     eval_pack = write_eval_pack(tmp_path)
     staged = tmp_path / "staged_SKILL.md"
     staged.write_text(skill.read_text(encoding="utf-8"), encoding="utf-8")
-    with pytest.raises(ValueError, match="report-only"):
-        transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(skill), staged_only=False)
 
-    with pytest.raises(ValueError, match="report-only"):
-        transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(tmp_path / "skills" / "demo" / "transfer-report.json"), staged_only=False)
+    blocked = [
+        skill,
+        tmp_path / "skills" / "demo" / "transfer-report.json",
+        tmp_path / "plugins" / "tool.json",
+        tmp_path / "config" / "settings.json",
+        tmp_path / "memories" / "memory.json",
+        tmp_path / "cron" / "job.json",
+    ]
+    for out in blocked:
+        with pytest.raises(ValueError, match="output_path"):
+            transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(out), staged_only=False)
+
+
+def test_transfer_eval_report_output_allows_explicit_reports_dir(tmp_path):
+    skill = make_skill(tmp_path)
+    eval_pack = write_eval_pack(tmp_path)
+    staged = tmp_path / "staged_SKILL.md"
+    staged.write_text(skill.read_text(encoding="utf-8"), encoding="utf-8")
+    report_path = tmp_path / "skillopt" / "reports" / "transfer-report.json"
+
+    result = transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(report_path), staged_only=False)
+
+    assert result["success"] is True
+    assert report_path.exists()
+
+
+def test_transfer_eval_report_output_rejects_allowed_dir_symlink_escape(tmp_path):
+    skill = make_skill(tmp_path)
+    eval_pack = write_eval_pack(tmp_path)
+    staged = tmp_path / "staged_SKILL.md"
+    staged.write_text(skill.read_text(encoding="utf-8"), encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    reports = tmp_path / "skillopt" / "reports"
+    reports.parent.mkdir(parents=True, exist_ok=True)
+    reports.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="output_path"):
+        transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(reports / "escaped.json"), staged_only=False)
 
 
 def test_benchmark_parity_status_does_not_claim_true_upstream_execution(tmp_path):
@@ -289,7 +363,7 @@ def test_conformance_report_output_cannot_target_live_runtime_paths(tmp_path, mo
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr(conformance, "_run", lambda cmd, cwd, timeout: {"cmd": cmd, "returncode": 0, "passed": True, "output_tail": "", "output_tail_sha256": hashlib.sha256(b"").hexdigest()})
 
-    with pytest.raises(ValueError, match="report-only"):
+    with pytest.raises(ValueError, match="report-only|output_path"):
         conformance.run_conformance(repo_root=Path(__file__).resolve().parents[1], output_path=tmp_path / "skills" / "demo" / "conformance.json")
 
 

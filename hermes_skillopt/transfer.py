@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from hermes_skillopt.env import EvalTask, load_eval_pack
+from hermes_skillopt.safety import guard_safe_output_path
 from hermes_skillopt.target import DeterministicKeywordScorecard, HermesRolloutRunner, HermesSandboxRunner, TargetExecutor
 
 TRANSFER_REPORT_SCHEMA_VERSION = "hermes-skillopt-transfer-eval-v1"
@@ -108,24 +109,10 @@ def _resolve_skill_text(*, home: Path, run_id: str | None, skill_file: str | Non
     return text, {"source": "skill_file", "path": str(path), "sha256": hashlib.sha256(text.encode()).hexdigest()}, None
 
 
-def _is_relative_to(path: Path, base: Path) -> bool:
-    try:
-        path.relative_to(base)
-        return True
-    except ValueError:
-        return False
-
-
 def _safe_report_output_path(output_path: str, *, home: Path) -> Path:
     """Resolve a report output path without allowing live skill writeback targets."""
 
-    out = Path(output_path).expanduser().resolve()
-    skills_dir = (home / "skills").resolve()
-    if out.name == "SKILL.md" or _is_relative_to(out, skills_dir):
-        raise ValueError("transfer_eval output_path is report-only and may not target live skills or HERMES_HOME/skills")
-    if out.exists() and (out.is_symlink() or not out.is_file()):
-        raise ValueError("transfer_eval output_path must be a regular report file")
-    return out
+    return guard_safe_output_path(output_path, kind="transfer_eval", hermes_home=home, required_suffix=".json")
 
 
 def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = None, skill_file: str | None = None, eval_file: str | None = None, targets: Iterable[str] | None = None, profile_homes: Iterable[str] | None = None, output_path: str | None = None, staged_only: bool = True) -> dict[str, Any]:
@@ -172,6 +159,8 @@ def transfer_eval(*, hermes_home_path: str | None = None, run_id: str | None = N
     payload = {
         "schema_version": TRANSFER_REPORT_SCHEMA_VERSION,
         "mode": "report-only-read-only",
+        "parity_label": "Hermes-native transfer report only; not a Microsoft SkillOpt upstream benchmark parity/result",
+        "upstream_execution": {"supported": False, "performed": False, "reason": "transfer_eval evaluates staged text with Hermes target adapters only and never runs upstream benchmark code"},
         "live_skill_writeback": False,
         "staged_only": bool(staged_only),
         "hermes_home": str(home),

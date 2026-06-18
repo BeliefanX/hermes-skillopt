@@ -5,11 +5,11 @@
 ## What it is
 
 - **Trainable state:** one Hermes skill document (`$HERMES_HOME/skills/.../SKILL.md`).
-- **Frozen target executor:** evaluates the current skill and each candidate under the same replay/scorecard/sandbox target config. A disabled-by-default `live-readonly` interface exists for future real Hermes target evidence, but live Hermes benchmark execution is not implemented.
+- **Frozen target executor:** evaluates the current skill and each candidate under the same replay/scorecard/sandbox target config. `frozen-hermes` / `frozen_hermes_target_execution_v1` is an MVP alias for the isolated sandbox runner with frozen-target evidence fingerprints; it is not true upstream benchmark parity or arbitrary live Hermes command execution. A disabled-by-default `live-readonly` interface remains report-only unless a future real Hermes runtime adapter supplies the required proof.
 - **Optimizer:** reflects on rollout evidence and proposes bounded skill edits only. It does not write the live profile.
 - **Environment/benchmark:** builds train/validation/test tasks from explicit curated eval files, bundled static review eval packs, session-mined snippets, and fallback synthetic tasks.
 - **Gate:** validation defaults to strict mode. Production adoption additionally requires explicit curated validation and held-out test eligibility; soft/mixed gates and static/keyword packs are review-only/non-production.
-- **Safety shell:** full runs write only staged artifacts; live writes require explicit `adopt`; `rollback` restores from guarded backups.
+- **Safety shell:** full runs write only staged artifacts; live writes require explicit `adopt`; `rollback` restores from guarded backups. Report/eval outputs share a safe path guard that rejects live/runtime-sensitive profile/plugin/source paths and symlink escapes.
 
 ## What it is not
 
@@ -52,9 +52,9 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_rollback`: explicit restore from verified backup manifest/SKILL.md; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_upstream_status`: local pinned upstream clone/lock status; no network fetch.
 - `hermes_skillopt_upstream_update`: clone/fetch/pin Microsoft SkillOpt upstream metadata only; does not merge plugin code.
-- `hermes_skillopt_import_upstream_benchmark`: safe JSON-only upstream-style manifest import into a Hermes eval pack; rejects executable/remote fields.
-- `hermes_skillopt_transfer_eval`: read-only/report-only staged skill evaluation across deterministic target/profile configs; never writes live skills.
-- `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services.
+- `hermes_skillopt_import_upstream_benchmark`: safe JSON-only upstream-style manifest import into a Hermes eval pack; rejects executable/remote fields and live/runtime-sensitive output paths.
+- `hermes_skillopt_transfer_eval`: read-only/report-only staged skill evaluation across deterministic target/profile configs; never writes live skills and uses the shared safe report output guard.
+- `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services; output uses the shared safe report path guard.
 - `hermes_skillopt_handoff_optimize`: deterministic multi-agent `delegate_task` dispatcher→worker handoff package optimizer; staged output only.
 
 P3 import/transfer/conformance surfaces are available both as Hermes plugin tools (`hermes_skillopt_import_upstream_benchmark`, `hermes_skillopt_transfer_eval`, `hermes_skillopt_conformance`) and as CLI/module commands (`import-upstream-benchmark`, `transfer-eval`, and `conformance`). `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
@@ -65,7 +65,7 @@ Important full-run parameters:
 - `backend`: `auto|hermes|mock` back-compat alias for the optimizer backend
 - `optimizer_backend`: `auto|hermes|mock`; controls reflection/bounded edit proposal generation
 - `allow_mock`: required before `backend=auto` may fall back to mock outside Hermes.
-- `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard|live-readonly`; controls the frozen evaluator, separate from the optimizer backend (`live-readonly` is disabled/report-only without future real-target evidence)
+- `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard|frozen-hermes|frozen_hermes_target_execution_v1|live-readonly`; controls the frozen evaluator, separate from the optimizer backend. `frozen-hermes` currently routes to the constrained sandbox MVP and records frozen-target evidence; `live-readonly` is disabled/report-only without future real-target evidence.
 - `gate_mode`: `soft|hard|mixed|strict`; default `strict` for adoption-capable full runs. `strict` requires soft improvement plus hard pass-rate/per-task non-regression, with LLM/judge text kept explanation-only. `soft`/`mixed` are explicit review/non-production choices and cannot override production hard-fail/test gates.
 - `resume_run_id`: opt-in reuse of a completed checkpointed run only when the stored input/config/provenance fingerprint matches
 - `force`: only affects adopt/rollback current-sha guard behavior where exposed; it does not bypass artifact, profile, validation, production, or test gates.
@@ -102,7 +102,7 @@ Core artifacts include:
 - `checkpoint.json` with `skillopt-checkpoint-v1` input fingerprint; resume currently reuses only completed runs and refuses partial-stage replay
 - `stages/NNN_rollout|reflect|aggregate|select|update|evaluate.json`, each with `schema_version: skillopt-stage-v1` and deterministic batch metadata (`skillopt-deterministic-batch-v1`, stable `batch_id`, seed `0`, stable-order note, input/output fingerprints)
 
-`manifest.json` records SHA-256 hashes for staged artifacts plus `skillopt-provenance-v2`: plugin repo/commit, upstream lock, eval/task fingerprint, optimizer_backend/target_backend configs, gate policy, profile/skill fingerprints, and production eval policy fingerprint. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
+`manifest.json` records SHA-256 hashes for staged artifacts plus `skillopt-provenance-v2`: plugin repo/commit, upstream lock, eval/task fingerprint, optimizer_backend/target_backend configs, gate policy, profile/skill fingerprints, and production eval policy fingerprint. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable. Candidate summaries/manifests also preserve a score ledger that separates `production_curated_score` from `review_only_score`, per-task score deltas, expected-term/assertion changes, and held-out test sensitivity warnings.
 
 `history.json` is an audit artifact, not a training database. It records each ranked candidate's parent skill hash, selected/accepted/rejected status, gate summaries, production-gate summaries, and rejection reasons so later reflection can inspect lineage without silently applying rejected edits. `status`, `resume-inspect`, and `review` surface `artifact_lineage` with skill/eval/target path and hash summaries so reviewers can see which staged artifacts back a run without opening every file.
 
@@ -174,6 +174,7 @@ Production adoption gates are intentionally narrow:
 - `auto`: chooses sandbox when tasks request `metadata.executor == "sandbox"` or `judge == "hermes_sandbox"`; otherwise replay.
 - `replay`: declarative Hermes replay/assertion runner.
 - `sandbox`: production-safe sandbox executor MVP.
+- `frozen-hermes` / `frozen_hermes_target_execution_v1`: alias for the current sandbox-based frozen Hermes target execution MVP. It records isolated runtime evidence, provider/model/toolset/session fingerprints, trajectory/transcript scoring evidence, blocks task-provided commands, and never writes the live profile. It is still not true external upstream benchmark execution/parity and not arbitrary live agent command execution.
 - `scorecard`: deterministic keyword scorecard.
 - `live-readonly`: disabled-by-default interface that returns report-only disabled evidence unless a future Hermes runtime adapter supplies the required frozen-target proof; it is not a live runner today and cannot production-adopt.
 
@@ -182,9 +183,9 @@ Eval execution contracts classify whether evidence may ever contribute to adopti
 - `static_keyword_scorecard` / `static_review_only`: review-only; never adoption-eligible.
 - `deterministic_replay_report_only`: report-only; not adoption-eligible.
 - `deterministic_replay_contract_compliant`: eligible only when packaged as an explicit curated v1 pack with complete split/policy/task provenance and passing runtime checks.
-- `frozen_hermes_target_execution_v1`: future real-target classification; adoption requires target config fingerprint, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions with task-provided commands disabled, transcript/trajectory artifact or fingerprint, and scoring from execution output rather than only static `SKILL.md` text. The current adapter exposes the evidence contract but does not implement true live Hermes execution.
+- `frozen_hermes_target_execution_v1`: current sandbox-backed MVP classification plus evidence contract. It requires target config fingerprint, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions with task-provided commands disabled, transcript/trajectory artifact or fingerprint, and scoring from execution output rather than only static `SKILL.md` text. The current implementation satisfies this through the constrained local sandbox runner only; it does not implement true live Hermes or upstream benchmark execution.
 
-Sandbox mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SKILL.md` inside that sandbox, runs a fixed internal runner, captures transcript/exit/timeout, and does not write the live profile. Task-provided commands in `fixtures.command` or `metadata.command` are blocked with `SANDBOX_COMMAND_BLOCKED` and are not production-gate eligible. Do not document or rely on sandbox as an arbitrary shell executor.
+Sandbox/frozen-Hermes MVP mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SKILL.md` inside that sandbox, runs a fixed internal runner, captures transcript/exit/timeout, and does not write the live profile. Task-provided commands in `fixtures.command` or `metadata.command` are blocked with `SANDBOX_COMMAND_BLOCKED` and are not production-gate eligible. Do not document or rely on sandbox as an arbitrary shell executor or live agent command path.
 
 ## EnvAdapter, benchmarks, sessions, and sleep foundation
 
@@ -200,12 +201,12 @@ python3 -m hermes_skillopt.cli transfer-eval --run-id RUN_ID --target scorecard 
 python3 -m hermes_skillopt.cli conformance --output conformance.json
 ```
 
-- `import-upstream-benchmark` converts common upstream-style JSON manifests with embedded `tasks` or `splits` into a Hermes `hermes-curated-eval-pack-v1` JSON pack. It rejects executable/remote fields such as commands, code, entrypoints, modules, URLs, containers, and images. Output paths must be `.json` eval/report/staging-safe paths and cannot target live skills/plugins/config/memory/cron or plugin source. The importer validates through a sibling temporary file before atomically replacing the requested output, so failed validation does not clobber an existing pack. Imported packs are sample/review-only unless `--curated` is explicitly supplied and individual tasks still satisfy the production eval policy.
-- `transfer-eval` evaluates a staged run's proposed skill (or, with `--allow-live-skill-file`, an explicit skill file) across selected deterministic target executors and optional profile homes. It is read-only/report-only and records target/profile fingerprints; it does not adopt or mutate skills.
-- `conformance` runs local deterministic checks (`compileall` and pytest args) and writes a `hermes-skillopt-conformance-v1` JSON report. It does not contact upstream, run external benchmark code, or require live Hermes services.
+- `import-upstream-benchmark` converts common upstream-style JSON manifests with embedded `tasks` or `splits` into a Hermes `hermes-curated-eval-pack-v1` JSON pack. It rejects executable/remote fields such as commands, code, entrypoints, modules, URLs, containers, and images. Output paths must be `.json` eval/report/staging-safe paths and cannot target live skills/plugins/config/memory/cron/runtime directories or plugin/repo source; symlink escapes and non-regular outputs are rejected. The importer validates through a sibling temporary file before atomically replacing the requested output, so failed validation does not clobber an existing pack. Imported packs are sample/review-only unless `--curated` is explicitly supplied and individual tasks still satisfy the production eval policy.
+- `transfer-eval` evaluates a staged run's proposed skill (or, with `--allow-live-skill-file`, an explicit skill file) across selected deterministic target executors and optional profile homes. It is read-only/report-only and records target/profile fingerprints; it does not adopt or mutate skills. Report output uses the same safe path guard and may not be aimed at live skill/plugin/profile runtime files.
+- `conformance` runs local deterministic checks (`compileall` and pytest args) and writes a `hermes-skillopt-conformance-v1` JSON report. It does not contact upstream, run external benchmark code, or require live Hermes services. Report output uses the same safe path guard and cannot overwrite plugin source or live profile/runtime files.
 - Default `conformance` mode is `quick`, a deterministic smoke/regression subset. Use `--mode full` when you need all local pytest tests; do not report quick mode as full repository health.
 
-These utilities are useful for local regression evidence. Upstream benchmark bridge status is **import-only / no-execution**: safe JSON manifest conversion is available, but true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist. They do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
+These utilities are useful for local regression evidence. Upstream benchmark bridge status is **import-only / no-execution**: safe JSON manifest conversion is available, but true upstream benchmark execution remains unsupported. The sandbox-backed frozen-Hermes MVP supplies local Hermes evidence only; it does not turn imported upstream-style manifests into Microsoft SkillOpt benchmark parity. These utilities do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
 
 ## Adopt and rollback
 
@@ -271,3 +272,5 @@ python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```
+
+Recent P0/P1/P2 hardening verification also includes targeted tests for safe report output paths, protected bounded-edit regions/headings, frozen-Hermes sandbox evidence, production-vs-review score ledgers, transfer/import/conformance safety, staged-only slow/rejected history, and held-out sensitivity warnings.

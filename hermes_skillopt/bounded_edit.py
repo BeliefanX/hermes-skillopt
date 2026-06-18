@@ -21,6 +21,12 @@ PROTECTED_REGION_START = "<!-- skillopt:protected:start -->"
 PROTECTED_REGION_END = "<!-- skillopt:protected:end -->"
 ALLOWED_REGION_START = "<!-- skillopt:allowed:start -->"
 ALLOWED_REGION_END = "<!-- skillopt:allowed:end -->"
+BOUNDARY_MARKERS = (
+    PROTECTED_REGION_START,
+    PROTECTED_REGION_END,
+    ALLOWED_REGION_START,
+    ALLOWED_REGION_END,
+)
 ALLOWED_OPS = {"append", "replace", "delete", "insert_after"}
 
 
@@ -116,6 +122,19 @@ def _protected_heading_in_text(text: str) -> str | None:
     return None
 
 
+def _unsafe_new_text_reason(text: str) -> tuple[str, str | None] | None:
+    protected_heading = _protected_heading_in_text(text)
+    if protected_heading is not None or PROTECTED_REGION_START in text or PROTECTED_REGION_END in text:
+        return "protected_heading_or_marker", protected_heading
+    if ALLOWED_REGION_START in text or ALLOWED_REGION_END in text:
+        return "allowed_region_marker_mutation", None
+    return None
+
+
+def _contains_boundary_marker(text: str) -> bool:
+    return any(marker in text for marker in BOUNDARY_MARKERS)
+
+
 def _apply_one(body: str, edit: dict[str, Any]) -> str:
     op = edit.get("op")
     if op == "append":
@@ -181,12 +200,12 @@ def validate_bounded_edits(
                 errors.append(f"edit {idx} append text is empty")
                 rejected.append({"index": idx, "reason": "empty_text", "edit": edit})
                 continue
-            protected_heading = _protected_heading_in_text(text)
-            if protected_heading is not None or PROTECTED_REGION_START in text or PROTECTED_REGION_END in text:
+            unsafe = _unsafe_new_text_reason(text)
+            if unsafe and unsafe[0] == "protected_heading_or_marker":
                 errors.append(f"edit {idx} append text targets protected heading/region")
-                rejected.append({"index": idx, "reason": "protected_append", "protected_heading": protected_heading, "edit": edit})
+                rejected.append({"index": idx, "reason": "protected_append", "protected_heading": unsafe[1], "edit": edit})
                 continue
-            if ALLOWED_REGION_START in text or ALLOWED_REGION_END in text:
+            if unsafe and unsafe[0] == "allowed_region_marker_mutation":
                 errors.append(f"edit {idx} append text attempts to create/move allowed-region markers")
                 rejected.append({"index": idx, "reason": "allowed_region_marker_mutation", "edit": edit})
                 continue
@@ -196,9 +215,23 @@ def validate_bounded_edits(
                 continue
         elif op == "replace":
             old = str(edit.get("old") or "")
+            new = str(edit.get("new") or "")
             if not old or "\n---" in old or old.startswith("---"):
                 errors.append(f"edit {idx} invalid/protected replace anchor")
                 rejected.append({"index": idx, "reason": "protected_frontmatter", "edit": edit})
+                continue
+            if _contains_boundary_marker(old):
+                errors.append(f"edit {idx} replace anchor attempts to mutate boundary markers")
+                rejected.append({"index": idx, "reason": "boundary_marker_mutation", "edit": edit})
+                continue
+            unsafe = _unsafe_new_text_reason(new)
+            if unsafe and unsafe[0] == "protected_heading_or_marker":
+                errors.append(f"edit {idx} replace text targets protected heading/region")
+                rejected.append({"index": idx, "reason": "protected_replace", "protected_heading": unsafe[1], "edit": edit})
+                continue
+            if unsafe and unsafe[0] == "allowed_region_marker_mutation":
+                errors.append(f"edit {idx} replace text attempts to create/move allowed-region markers")
+                rejected.append({"index": idx, "reason": "allowed_region_marker_mutation", "edit": edit})
                 continue
             if body.count(old) != 1:
                 errors.append(f"edit {idx} replace anchor must be unique")
@@ -218,6 +251,10 @@ def validate_bounded_edits(
                 errors.append(f"edit {idx} invalid/protected delete anchor")
                 rejected.append({"index": idx, "reason": "protected_frontmatter", "edit": edit})
                 continue
+            if _contains_boundary_marker(old):
+                errors.append(f"edit {idx} delete anchor attempts to mutate boundary markers")
+                rejected.append({"index": idx, "reason": "boundary_marker_mutation", "edit": edit})
+                continue
             if body.count(old) != 1:
                 errors.append(f"edit {idx} delete anchor must be unique")
                 rejected.append({"index": idx, "reason": "non_unique_anchor", "edit": {"op": op, "old": old[:200]}})
@@ -232,9 +269,23 @@ def validate_bounded_edits(
                 continue
         elif op == "insert_after":
             anchor = str(edit.get("anchor") or "")
+            text = str(edit.get("text") or "")
             if not anchor or "\n---" in anchor or anchor.startswith("---"):
                 errors.append(f"edit {idx} invalid/protected insert anchor")
                 rejected.append({"index": idx, "reason": "protected_frontmatter", "edit": edit})
+                continue
+            if _contains_boundary_marker(anchor):
+                errors.append(f"edit {idx} insert_after anchor attempts to mutate boundary markers")
+                rejected.append({"index": idx, "reason": "boundary_marker_mutation", "edit": edit})
+                continue
+            unsafe = _unsafe_new_text_reason(text)
+            if unsafe and unsafe[0] == "protected_heading_or_marker":
+                errors.append(f"edit {idx} insert_after text targets protected heading/region")
+                rejected.append({"index": idx, "reason": "protected_insert", "protected_heading": unsafe[1], "edit": edit})
+                continue
+            if unsafe and unsafe[0] == "allowed_region_marker_mutation":
+                errors.append(f"edit {idx} insert_after text attempts to create/move allowed-region markers")
+                rejected.append({"index": idx, "reason": "allowed_region_marker_mutation", "edit": edit})
                 continue
             if body.count(anchor) != 1:
                 errors.append(f"edit {idx} insert_after anchor must be unique")

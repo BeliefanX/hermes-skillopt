@@ -10,18 +10,19 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 ## Main modules
 
-- `core.py`: orchestration, status/review/adopt/rollback, eval-only/benchmark fixed-skill reports, artifact hashing, upstream status/update wrappers, profile/path guards.
+- `core.py`: orchestration, status/review/adopt/rollback, eval-only/benchmark fixed-skill reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, and held-out sensitivity reporting.
 - `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
 - `trainer.py`: six-stage rollout/reflect/aggregate/select/update/evaluate loop and final held-out test evaluation.
 - `optimizer.py`: LLM/mock reflection and bounded edit proposal generation.
-- `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application.
-- `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, disabled/report-only `live-readonly` adapter interface, and frozen `TargetExecutor` wrapper.
+- `bounded_edit.py`: bounded `append`/`replace`/`delete`/`insert_after` edit validation and application, including protected heading/marker and allowed-region boundary checks on replacement/insert text.
+- `target.py`: deterministic scorecard, replay runner, production-safe sandbox executor, sandbox-backed `frozen-hermes` / `frozen_hermes_target_execution_v1` MVP, disabled/report-only `live-readonly` adapter interface, and frozen `TargetExecutor` wrapper.
 - `gate.py`: deterministic validation gate policies (`soft|hard|mixed|strict`) with score improvement and per-task regression checks depending on mode.
 - `webui.py`: optional Gradio UI for Hermes-specific status/full-run/review/adopt/rollback/upstream workflows.
 - `multi_agent.py`: deterministic multi-agent handoff optimizer for `delegate_task` dispatcher→worker packages.
 - `benchmark_bridge.py`: safe JSON-only upstream-style benchmark manifest importer into Hermes eval-pack format.
 - `transfer.py`: read-only staged/proposed skill transfer evaluation across deterministic targets/profile homes.
 - `conformance.py`: local compile/pytest conformance runner that writes machine-readable reports.
+- `safety.py`: shared report/eval output path guard used by benchmark import, transfer eval, and conformance report writers; blocks live profile/runtime/plugin/source paths and symlink escapes.
 
 ## Full-run flow
 
@@ -29,7 +30,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 1. Resolve active `HERMES_HOME`, discover target skill, read original `SKILL.md`.
 2. Build train/validation/test tasks from curated evals, session-mined evidence, or fallback tasks.
-3. Select separate optimizer and target backends: `optimizer_backend=auto|hermes|mock`; `target_backend`/`target_executor=auto|replay|sandbox|scorecard`.
+3. Select separate optimizer and target backends: `optimizer_backend=auto|hermes|mock`; `target_backend`/`target_executor=auto|replay|sandbox|scorecard|frozen-hermes|frozen_hermes_target_execution_v1|live-readonly`.
 4. Write initial staged artifacts.
 5. Run the six trainer stages:
    - rollout current skill
@@ -50,7 +51,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, candidate rank/select summary, rejected edits, `slow_meta.json`, `target_binding.json`, `provenance_binding.json`, `history.json`, gate results, report, diff, manifest, `checkpoint.json`, and per-stage JSON under `stages/`. Stage records use `skillopt-stage-v1` and include deterministic batch metadata (`skillopt-deterministic-batch-v1`, stable `batch_id`, seed `0`, stable input ordering/ranking note, input/output fingerprints).
 
-The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, per-task deltas, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
+The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, production-curated vs review-only score ledgers, per-task deltas including expected-term/assertion changes, held-out test sensitivity warnings, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
 
 Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed. `status` and `resume-inspect` also expose stale/incomplete checkpoint rows, tracked artifact path/hash state, lineage summaries, and cleanup guidance only; no code auto-deletes or resumes partial stage output.
 
@@ -69,7 +70,7 @@ Production adoption is intentionally stricter than generic validation:
 - Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
 - LLM judge text is explanatory evidence only and cannot bypass gates.
 
-Eval execution contract classifications are part of this policy: `static_keyword_scorecard`/`static_review_only` and `deterministic_replay_report_only` are non-adoption evidence; `deterministic_replay_contract_compliant` can be adoption-eligible only inside an explicit curated v1 pack with passing provenance/runtime checks; future `frozen_hermes_target_execution_v1` additionally requires frozen target config, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions, transcript/trajectory evidence, and execution-based scoring. The current `live-readonly` surface is an interface/disabled report path, not a true live Hermes runner.
+Eval execution contract classifications are part of this policy: `static_keyword_scorecard`/`static_review_only` and `deterministic_replay_report_only` are non-adoption evidence; `deterministic_replay_contract_compliant` can be adoption-eligible only inside an explicit curated v1 pack with passing provenance/runtime checks; `frozen_hermes_target_execution_v1` is currently a sandbox-backed MVP requiring frozen target config, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions with task commands disabled, transcript/trajectory evidence, and execution-based scoring. It is Hermes-native local evidence only, not upstream benchmark execution/parity or arbitrary live agent command execution. The current `live-readonly` surface is an interface/disabled report path, not a true live Hermes runner.
 
 Gate modes are deterministic metric policies: `strict` is the default for adoption-capable full runs and requires a non-no-op soft improvement, hard weighted pass-rate non-regression, and no previously passing task failures unless `hard_regression_allowed` is explicitly set. `soft`, `hard`, and `mixed` remain explicit review/non-production policy choices (`soft` requires weighted-score improvement, `hard` requires pass-rate improvement, `mixed` requires soft improvement with hard non-regression). All modes keep LLM/judge output explanation-only and none can override production hard-fail/test/evidence gates.
 
@@ -79,7 +80,7 @@ Gate modes are deterministic metric policies: `strict` is the default for adopti
 
 ## Sandbox executor safety
 
-`HermesSandboxRunner` is a production-safe MVP executor, not an arbitrary command executor. It creates a temporary isolated HOME/HERMES_HOME/workspace, writes the candidate `SKILL.md` only into that sandbox, invokes a fixed internal runner, and records transcript/exit/timeout metadata.
+`HermesSandboxRunner` is a production-safe MVP executor, not an arbitrary command executor. It also backs the current `frozen-hermes` / `frozen_hermes_target_execution_v1` target alias. It creates a temporary isolated HOME/HERMES_HOME/workspace, writes the candidate `SKILL.md` only into that sandbox, invokes a fixed internal runner, and records transcript/exit/timeout metadata plus provider/model/toolset/session fingerprints and trajectory/scoring evidence.
 
 Task-provided commands in `fixtures.command` or `metadata.command` are deliberately blocked with exit code 126 and `SANDBOX_COMMAND_BLOCKED`. Blocked command tasks are not production-gate eligible. The sandbox never writes the live profile.
 
@@ -105,7 +106,7 @@ Current code closes the earlier architecture gaps in these bounded ways:
 
 - P0/P1 core abstraction: `SKILL.md` is explicit trainable state; optimizer and target executor are separate; candidate edits are bounded and staged; curated production eval packs and validation/test gates drive adoption status.
 - P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
-- P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only.
+- P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance writes local compile/pytest reports.
 
 Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
@@ -117,7 +118,7 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 ## Current limitations
 
 - Replay/sandbox/scorecard scoring is deterministic and assertion-oriented; it is not a full Hermes gateway/session simulator.
-- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports embedded JSON manifests only. Safe import-only conversion is supported, but true upstream benchmark execution is unsupported until dedicated adapters and `frozen_hermes_target_execution_v1` evidence exist. It does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
+- `benchmark`/`eval-only` reports are local fixed-skill reports only; benchmark bridge imports embedded JSON manifests only. Safe import-only conversion is supported, but true upstream benchmark execution remains unsupported. The sandbox-backed `frozen_hermes_target_execution_v1` MVP supplies local Hermes evidence, not Microsoft benchmark parity. It does not execute upstream benchmark loaders, follow file references, clone repositories, or validate parity with Microsoft benchmark suites.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model performance.
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
@@ -126,4 +127,4 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 
 ## Current no-parity guardrails
 
-The remaining upstream gap is explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented only by a safe disabled-by-default read-only adapter interface until credentials/service hooks, sandbox policy, transcript artifacts, and frozen-target evidence are available. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.
+The remaining upstream gap is explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented by a safe disabled-by-default read-only adapter interface; the implemented frozen-Hermes path is a sandbox MVP with local isolated runtime evidence only. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.

@@ -30,6 +30,7 @@ class ScorecardRunner(Protocol):
 
 
 TRACE_SCHEMA_VERSION = "hermes-target-trace-v1"
+FROZEN_HERMES_CONTRACT = "frozen_hermes_target_execution_v1"
 FROZEN_TARGET_MODEL_ID = "no-live-model-deterministic-target-v1"
 FROZEN_PROFILE_POLICY = "isolated-or-readonly-profile-no-live-profile-writes"
 FROZEN_TOOL_POLICY = "task-commands-never-executed; fixture-tools-recorded-or-fixed-runner-only"
@@ -277,6 +278,11 @@ class HermesSandboxRunner:
             "review_only_unless_curated_pack": True,
             "isolated_home": True,
             "live_profile_writes": False,
+            "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
+            "provider": "local-subprocess",
+            "model": "fixed-internal-sandbox-runner",
+            "toolset": ["hermes_skillopt.sandbox_runner"],
+            "session_policy": "ephemeral_temp_session_per_task",
             "path": os.defpath,
         }
 
@@ -290,6 +296,12 @@ class HermesSandboxRunner:
                 "sandbox_isolated": True,
                 "sandbox_command_blocked": True,
                 "live_profile_writes": False,
+                "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
+                "model_fingerprint": {"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner", "fingerprint_sha256": _stable_json_sha({"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner"})},
+                "profile_fingerprint": {"policy": "temp-isolated-deleted-after-run", "live_profile_writes": False, "fingerprint_sha256": _stable_json_sha({"policy": "temp-isolated-deleted-after-run", "live_profile_writes": False})},
+                "toolset_fingerprint": {"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False, "fingerprint_sha256": _stable_json_sha({"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False})},
+                "session_fingerprint": {"session_policy": "blocked-before-subprocess", "task_id": task.id, "fingerprint_sha256": _stable_json_sha({"task_id": task.id, "blocked": True})},
+                "execution_scoring": "blocked task-provided command; no task shell executed",
                 "production_gate_eligible": False,
                 "trace_schema": TRACE_SCHEMA_VERSION,
                 "failure_tags": ["task_provided_command_blocked"],
@@ -357,6 +369,16 @@ class HermesSandboxRunner:
         score, passed_names, failed_names = _score_checks(checks, penalties)
         hard_pass = code == 0 and score >= 0.55 and not penalties and not missing_required_keywords and not missing_required_markers
         metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": hard_pass, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
+        metadata.update({
+            "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
+            "model_fingerprint": {"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner", "fingerprint_sha256": _stable_json_sha({"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner"})},
+            "profile_fingerprint": {"home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False, "fingerprint_sha256": _stable_json_sha({"home": "temp", "hermes_home": "temp", "workspace": "temp", "live_profile_writes": False})},
+            "toolset_fingerprint": {"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False, "fingerprint_sha256": _stable_json_sha({"toolset": ["hermes_skillopt.sandbox_runner"], "task_commands_allowed": False})},
+            "session_fingerprint": {"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id, "fingerprint_sha256": _stable_json_sha({"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id})},
+            "execution_scoring": "exit_code + transcript required_markers/assertions + skill expected terms",
+            "passed_checks": passed_names,
+            "failed_checks": failed_names,
+        })
         metadata["trace_fingerprint_sha256"] = _stable_json_sha(metadata["trajectory"])
         return EvalResult(task.id, score, hard_pass, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}; critical_failures={critical_failures}", metadata)
 
@@ -537,10 +559,22 @@ class TargetExecutor:
             if classification == "frozen_hermes_target_execution_v1":
                 if not target_config.get("fingerprint_sha256"):
                     missing_runtime.append("target_config_fingerprint")
+                if metadata.get("frozen_hermes_contract") != FROZEN_HERMES_CONTRACT:
+                    missing_runtime.append("frozen_hermes_contract_marker")
+                for field_name in ("model_fingerprint", "profile_fingerprint", "toolset_fingerprint", "session_fingerprint"):
+                    value = metadata.get(field_name)
+                    if not isinstance(value, dict) or not value.get("fingerprint_sha256"):
+                        missing_runtime.append(field_name)
+                if metadata.get("sandbox_isolated") is not True:
+                    missing_runtime.append("isolated_runtime")
                 if not (metadata.get("trajectory") or metadata.get("trace")):
                     missing_runtime.append("trajectory_or_transcript")
                 if not metadata.get("trace_fingerprint_sha256"):
                     missing_runtime.append("trace_fingerprint_sha256")
+                if not metadata.get("transcript_preview"):
+                    missing_runtime.append("transcript_preview")
+                if not metadata.get("execution_scoring"):
+                    missing_runtime.append("execution_scoring")
                 if metadata.get("live_profile_writes") is not False:
                     missing_runtime.append("live_profile_writes_false")
                 if metadata.get("task_commands_executed") is not False:
@@ -574,7 +608,10 @@ class TargetExecutor:
             "regression_cases": regression_cases,
             "trajectory_index": trajectory_index,
             "trajectory_fingerprint_sha256": trajectory_index["fingerprint_sha256"],
-            "result_summary": [{"task_id": r.task_id, "score": r.score, "soft_score": r.score, "passed": r.passed, "hard_pass": r.passed, "failure_tags": list((r.metadata or {}).get("failure_tags") or []), "trace_fingerprint_sha256": (r.metadata or {}).get("trace_fingerprint_sha256")} for r in results],
+            "production_score": mean if production_gate_eligible else None,
+            "review_only_score": None if production_gate_eligible else mean,
+            "score_ledger": {"production_curated_score": mean if production_gate_eligible else None, "review_only_score": None if production_gate_eligible else mean, "production_gate_eligible": production_gate_eligible, "evaluation_scope": evaluation_scope},
+            "result_summary": [{"task_id": r.task_id, "score": r.score, "soft_score": r.score, "passed": r.passed, "hard_pass": r.passed, "failure_tags": list((r.metadata or {}).get("failure_tags") or []), "passed_checks": list((r.metadata or {}).get("passed_checks") or (((r.metadata or {}).get("trajectory") or {}).get("scores", {}) if isinstance((r.metadata or {}).get("trajectory"), dict) else {}).get("passed_checks") or []), "failed_checks": list((r.metadata or {}).get("failed_checks") or (((r.metadata or {}).get("trajectory") or {}).get("scores", {}) if isinstance((r.metadata or {}).get("trajectory"), dict) else {}).get("failed_checks") or []), "trace_fingerprint_sha256": (r.metadata or {}).get("trace_fingerprint_sha256")} for r in results],
             "results": [r.__dict__ for r in results],
         }
 

@@ -3,13 +3,14 @@ from __future__ import annotations
 """Local deterministic conformance/regression runner."""
 
 import json
-import os
 import subprocess
 import sys
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from hermes_skillopt.safety import guard_safe_output_path
 
 CONFORMANCE_SCHEMA_VERSION = "hermes-skillopt-conformance-v1"
 CONFORMANCE_MODES = ("quick", "full")
@@ -31,30 +32,10 @@ def _run(cmd: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
     }
 
 
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
-
-
 def _safe_conformance_report_path(output_path: str | Path, *, repo_root: Path) -> Path:
     """Resolve a conformance report path without allowing live/runtime writeback targets."""
 
-    out = Path(output_path).expanduser().resolve()
-    if out.exists() and (out.is_symlink() or not out.is_file()):
-        raise ValueError("conformance output_path must be a regular report file")
-    if out.name == "SKILL.md":
-        raise ValueError("conformance output_path is report-only and may not target live skills")
-    blocked_roots = [repo_root / "skills", repo_root / "plugins", repo_root / "cron", repo_root / "memories", repo_root / "config"]
-    home_raw = os.environ.get("HERMES_HOME")
-    if home_raw:
-        home = Path(home_raw).expanduser().resolve()
-        blocked_roots.extend([home / "skills", home / "plugins", home / "cron", home / "memories", home / "config"])
-    if any(_is_relative_to(out, root.resolve()) for root in blocked_roots):
-        raise ValueError("conformance output_path is report-only and may not target live skills/plugins/config/memories/cron")
-    return out
+    return guard_safe_output_path(output_path, kind="conformance", repo_root=repo_root, required_suffix=".json")
 
 
 def run_conformance(*, repo_root: str | Path | None = None, output_path: str | Path | None = None, pytest_args: Iterable[str] | None = None, timeout: int = 180, mode: str = "quick") -> dict[str, Any]:

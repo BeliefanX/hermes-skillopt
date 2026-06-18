@@ -322,3 +322,79 @@ def test_eval_only_benchmark_report_is_reproducible_and_read_only(tmp_path):
     assert report["safety"]["task_provided_commands_allowed"] is False
     assert report["reproducibility"]["eval_pack_fingerprint_sha256"] == manifest["eval_pack"]["fingerprint_sha256"]
     assert report["reproducibility"]["target_fingerprint_sha256"] == report["target_backend_config"]["fingerprint_sha256"]
+
+
+def _production_real_target_task(task_id: str = "real-target") -> EvalTask:
+    contract = {"classification": "frozen_hermes_target_execution_v1", "adoption_eligible": True, "reasons": ["unit-test contract"], "required_evidence": {}}
+    return EvalTask(
+        task_id,
+        "real target execution",
+        source="/tmp/pack.json",
+        split="test",
+        expected_terms=("verify",),
+        required_markers=("SANDBOX_OK",),
+        metadata={
+            "task_origin": "curated",
+            "scorecard_explicit": True,
+            "production_gate_eligible": True,
+            "eval_pack_schema_version": "hermes-curated-eval-pack-v1",
+            "explicit_curated_eval_pack": True,
+            "eval_pack_production_allowed": True,
+            "eval_pack_fingerprint_sha256": "f" * 64,
+            "eval_pack_policy_fingerprint_sha256": "p" * 64,
+            "eval_execution_contract": contract,
+        },
+    )
+
+
+def test_frozen_hermes_target_execution_v1_requires_runtime_evidence():
+    task = _production_real_target_task()
+
+    replay_out = TargetExecutor(runner=HermesRolloutRunner(), requested_executor="replay").evaluate("verify", [task])
+    replay_check = replay_out["eval_execution_contract_checks"][0]
+    assert replay_out["production_gate_eligible"] is False
+    assert replay_check["runtime_evidence_complete"] is False
+    assert "model_fingerprint" in replay_check["missing_runtime_evidence"]
+    assert replay_out["score_ledger"]["review_only_score"] == replay_out["score"]
+    assert replay_out["production_score"] is None
+
+    sandbox_out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen-hermes").evaluate("verify", [task])
+    sandbox_check = sandbox_out["eval_execution_contract_checks"][0]
+    result_meta = sandbox_out["results"][0]["metadata"]
+    assert sandbox_check["runtime_evidence_complete"] is True
+    assert sandbox_check["missing_runtime_evidence"] == []
+    assert sandbox_out["production_gate_eligible"] is True
+    assert sandbox_out["production_score"] == sandbox_out["score"]
+    assert sandbox_out["review_only_score"] is None
+    for key in ("model_fingerprint", "profile_fingerprint", "toolset_fingerprint", "session_fingerprint"):
+        assert result_meta[key]["fingerprint_sha256"]
+    assert result_meta["sandbox_isolated"] is True
+    assert result_meta["live_profile_writes"] is False
+    assert result_meta["task_commands_executed"] is False
+    assert result_meta["transcript_preview"]
+    assert result_meta["execution_scoring"]
+
+
+def test_per_task_delta_surfaces_changed_terms_assertions_and_sensitivity():
+    task = EvalTask(
+        "delta",
+        "prompt",
+        split="val",
+        expected_terms=("verify",),
+        assertions=({"type": "contains", "value": "guard"},),
+        metadata={"scorecard_explicit": True},
+    )
+    executor = TargetExecutor(runner=HermesRolloutRunner())
+    current_eval = executor.evaluate("plain", [task])
+    candidate_eval = executor.evaluate("verify guard", [task])
+
+    rows = core._per_task_delta(current_eval, candidate_eval)
+    assert rows[0]["candidate_vs_current_sensitive"] is True
+    assert "expected_keyword:verify" in rows[0]["changed_expected_terms"]
+    assert "assertion:contains:guard" in rows[0]["changed_assertions"]
+    assert rows[0]["sensitivity_warning"] is None
+
+    insensitive = core._heldout_test_sensitivity(candidate_eval, candidate_eval)
+    assert insensitive["candidate_vs_current_sensitive"] is False
+    assert insensitive["insensitive_task_ids"] == ["delta"]
+    assert insensitive["warnings"]
