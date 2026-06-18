@@ -206,6 +206,10 @@ def test_webui_mobile_polish_css_covers_settings_tabs_and_light_markdown():
     assert ".skillopt-settings-row { flex-direction: column !important; }" in css
     assert ".gradio-container .tabs [role=\"tablist\"]" in css
     assert ".gradio-container div[role=\"tablist\"]" in css
+    assert ".tabs [role=\"tablist\"]" in css
+    assert ".tabs .tab-container[role=\"tablist\"]" in css
+    assert ".tab-wrapper [role=\"tablist\"]" in css
+    assert "div[role=\"tablist\"]" in css
     assert ".tab-nav" in css
     assert "display: flex !important" in css
     assert "overflow-x: auto !important" in css
@@ -220,12 +224,38 @@ def test_webui_mobile_polish_css_covers_settings_tabs_and_light_markdown():
     assert "white-space: nowrap !important" in css
     assert "text-overflow: clip !important" in css
     assert "overflow: visible !important" in css
+    assert "justify-content: flex-start !important" in css
     assert ".gradio-container [role=\"tab\"] *" in css
     assert ".skillopt-status-md" in css
     assert ".skillopt-result-md" in css
     assert "--skillopt-code-bg: #f1eee8" in css
     assert "background: var(--skillopt-code-bg) !important" in css
     assert "word-break: break-word !important" in css
+
+
+def test_webui_mobile_tab_override_beats_desktop_segmented_grid_compression():
+    css = webui.WEBUI_CSS
+    desktop_tab_rule = '.gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"] { width: 100% !important; min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; }'
+    assert desktop_tab_rule in css
+    media_start = css.index("@media (max-width: 640px)")
+    assert media_start > css.index(desktop_tab_rule)
+    mobile_css = css[media_start : css.index("@media (max-width: 520px)")]
+    assert "display: flex !important" in mobile_css
+    assert "grid-template-columns: none !important" in mobile_css
+    assert "overflow-x: auto !important" in mobile_css
+    assert "flex-wrap: nowrap !important" in mobile_css
+    assert "justify-content: flex-start !important" in mobile_css
+    assert '.gradio-container button[role="tab"]' in mobile_css
+    assert '.gradio-container [role="tab"]' in mobile_css
+    assert '} button[role="tab"], [role="tab"],' in mobile_css
+    assert ' } [role="tab"] *, .gradio-container [role="tab"] * {' in mobile_css
+    assert "flex: 0 0 auto !important" in mobile_css
+    assert "width: auto !important" in mobile_css
+    assert "min-width: max-content !important" in mobile_css
+    assert "max-width: none !important" in mobile_css
+    assert "overflow: visible !important" in mobile_css
+    assert "text-overflow: clip !important" in mobile_css
+    assert '.gradio-container [role="tab"] * { min-width: max-content !important; max-width: none !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; }' in mobile_css
 
 
 def test_webui_light_ops_console_css_themes_real_gradio_surfaces():
