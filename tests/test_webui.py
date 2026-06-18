@@ -128,8 +128,13 @@ def test_webui_i18n_helpers_cover_primary_safety_copy():
     assert webui.ui_text("zh", "run_button") == "运行完整周期（仅暂存）"
     assert "安全模型" in webui.safety_cards_markdown("zh")
     assert "typed confirmations" in webui.safety_cards_markdown("en")
+    hero = webui.hero_markdown("en")
+    assert '<h1>Hermes SkillOpt</h1>' in hero
+    assert "skillopt-subtitle" in hero
+    assert "# Hermes SkillOpt" not in hero
     updates = webui.language_updates(type("FakeGr", (), {})(), "zh")
     assert "用于审查暂存" in updates[0]
+    assert "# Hermes SkillOpt" not in updates[0]
     assert updates[23]["placeholder"] == "Type: ADOPT <run_id>"
     assert updates[27]["placeholder"] == "Type: ROLLBACK <run_id>"
 
@@ -194,7 +199,7 @@ def test_webui_mobile_css_clamps_real_gradio_widths_without_only_hiding_overflow
     assert "overflow-wrap: anywhere !important" in css
 
 
-def test_webui_mobile_polish_css_covers_settings_tabs_and_dark_markdown():
+def test_webui_mobile_polish_css_covers_settings_tabs_and_light_markdown():
     css = webui.WEBUI_CSS
     assert ".skillopt-settings-row" in css
     assert "@media (max-width: 640px)" in css
@@ -218,9 +223,61 @@ def test_webui_mobile_polish_css_covers_settings_tabs_and_dark_markdown():
     assert ".gradio-container [role=\"tab\"] *" in css
     assert ".skillopt-status-md" in css
     assert ".skillopt-result-md" in css
-    assert "--skillopt-code-bg: #171a21" in css
+    assert "--skillopt-code-bg: #f1eee8" in css
     assert "background: var(--skillopt-code-bg) !important" in css
     assert "word-break: break-word !important" in css
+
+
+def test_webui_light_ops_console_css_themes_real_gradio_surfaces():
+    css = webui.WEBUI_CSS
+    assert "--skillopt-bg: #f6f3ee" in css
+    assert "color-scheme: light" in css
+    assert "--skillopt-bg: #0b0c0f" not in css
+    assert "color-scheme: dark" not in css
+    for selector in (
+        ".gradio-container .wrap",
+        ".gradio-container .form",
+        ".gradio-container .block",
+        ".gradio-container .panel",
+        ".gradio-container .tabs",
+        ".gradio-container .tabitem",
+        ".gradio-container textarea",
+        ".gradio-container input",
+        ".gradio-container select",
+        ".gradio-container .cm-editor",
+    ):
+        assert selector in css
+    assert "--skillopt-panel: rgba(255,255,255,.76)" in css
+    assert ".gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel { background: transparent !important" in css
+    assert "background: var(--skillopt-panel-solid) !important" in css
+    assert "background: var(--skillopt-accent-soft) !important" in css
+
+
+def test_webui_polish_avoids_generic_wrap_panels_and_hides_loader_shells():
+    css = webui.WEBUI_CSS
+    assert ".gradio-container .wrap.center.full.hide" in css
+    assert ".gradio-container .hide" in css
+    assert ".gradio-container .loader-container" in css
+    assert "display: none !important" in css
+    assert ".gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel { background: transparent !important" in css
+    assert ".gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel { background: var(--skillopt-panel)" not in css
+    assert "textarea, input, .wrap" not in css
+
+
+def test_webui_does_not_style_generic_prose_as_card_panel():
+    css = webui.WEBUI_CSS
+    panel_rules = [
+        rule for rule in css.splitlines()
+        if "border: 1px solid var(--skillopt-border)" in rule
+        and "background: rgba(255,255,255,.72)" in rule
+        and "border-radius: 16px" in rule
+    ]
+    assert panel_rules == [
+        ".skillopt-status-md.prose, .skillopt-status-md .prose, .skillopt-result-md.prose, .skillopt-result-md .prose { border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.72) !important; border-radius: 16px !important; padding: 14px 16px !important; }"
+    ]
+    assert ".gradio-container .prose" not in panel_rules[0]
+    assert ".skillopt-hero {" in css and "background: linear-gradient" in css
+    assert ".skillopt-card {" in css and "background: var(--skillopt-panel)" in css
 
 
 def test_webui_blocks_kwargs_injects_pwa_head_when_supported():

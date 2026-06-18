@@ -22,8 +22,8 @@ INSTALL_HINT = (
     "python3 -m pip install gradio"
 )
 MAX_TEXT_CHARS = 20_000
-PWA_THEME_COLOR = "#0b0c0f"
-PWA_BACKGROUND_COLOR = "#0b0c0f"
+PWA_THEME_COLOR = "#f6f3ee"
+PWA_BACKGROUND_COLOR = "#f6f3ee"
 PWA_CACHE_NAME = "hermes-skillopt-pwa-static-v1"
 PWA_ASSET_PATHS = (
     "/manifest.webmanifest",
@@ -51,7 +51,8 @@ UI_TEXT: dict[str, dict[str, str]] = {
     "en": {
         "title": "Hermes SkillOpt",
         "eyebrow": "Local safety operations console",
-        "hero": "# Hermes SkillOpt\nA calm review surface for staged SKILL.md optimization runs.",
+        "hero_title": "Hermes SkillOpt",
+        "hero_subtitle": "A calm review surface for staged SKILL.md optimization runs.",
         "intro": "SkillOpt treats SKILL.md as trainable state while keeping the Hermes executor, staged artifacts, profile isolation, and adopt/rollback guards outside the optimizer. WebUI runs are staged-only unless a separate guarded writeback action is explicitly confirmed.",
         "card_safety_title": "Safety model",
         "card_safety_body": "Optimizer backends only propose bounded edits. Adoption and rollback stay behind typed confirmations and core integrity checks.",
@@ -108,7 +109,8 @@ UI_TEXT: dict[str, dict[str, str]] = {
     "zh": {
         "title": "Hermes SkillOpt",
         "eyebrow": "本地安全运维控制台",
-        "hero": "# Hermes SkillOpt\n用于审查暂存 SKILL.md 优化运行的冷静界面。",
+        "hero_title": "Hermes SkillOpt",
+        "hero_subtitle": "用于审查暂存 SKILL.md 优化运行的冷静界面。",
         "intro": "SkillOpt 将 SKILL.md 视为可训练状态，同时把 Hermes 执行器、暂存产物、Profile 隔离以及采用/回滚保护保留在优化器之外。WebUI 默认只写入暂存区；实时写回必须通过单独的受保护确认操作完成。",
         "card_safety_title": "安全模型",
         "card_safety_body": "优化后端只提出有边界的编辑。采用与回滚仍需精确输入确认，并经过核心完整性检查。",
@@ -165,43 +167,58 @@ UI_TEXT: dict[str, dict[str, str]] = {
 }
 
 WEBUI_CSS = """
-:root { --skillopt-bg: #0b0c0f; --skillopt-panel: #111318; --skillopt-border: #272a32; --skillopt-muted: #a1a1aa; --skillopt-text: #f4f4f5; --skillopt-accent: #9ca3af; --skillopt-code-bg: #171a21; --skillopt-code-border: #343844; color-scheme: dark; }
+:root { --skillopt-bg: #f6f3ee; --skillopt-surface: #fbfaf8; --skillopt-panel: rgba(255,255,255,.76); --skillopt-panel-solid: #ffffff; --skillopt-border: #ded7cc; --skillopt-border-strong: #cfc6b8; --skillopt-muted: #6f6a61; --skillopt-text: #25211b; --skillopt-heading: #181510; --skillopt-accent: #b7612c; --skillopt-accent-soft: #f2dfd1; --skillopt-code-bg: #f1eee8; --skillopt-code-border: #d8d0c2; --skillopt-shadow: 0 18px 55px rgba(54,45,31,.10); color-scheme: light; }
 html, body { min-height: 100%; width: 100%; max-width: 100vw; overflow-x: hidden !important; }
 body { margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 gradio-app, .gradio-container { display: block; width: 100% !important; max-width: min(1180px, 100vw) !important; min-width: 0 !important; box-sizing: border-box !important; }
-.gradio-container { margin: 0 auto !important; padding-left: max(8px, env(safe-area-inset-left)) !important; padding-right: max(8px, env(safe-area-inset-right)) !important; padding-bottom: max(10px, env(safe-area-inset-bottom)) !important; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
-body, .gradio-container { background: radial-gradient(circle at top left, rgba(156, 163, 175, 0.12), transparent 32rem), var(--skillopt-bg) !important; color: var(--skillopt-text) !important; }
-.skillopt-shell { width: 100%; max-width: 100%; min-width: 0; padding: max(18px, env(safe-area-inset-top)) 8px 10px; box-sizing: border-box; }
-.skillopt-eyebrow { color: var(--skillopt-accent); letter-spacing: .14em; text-transform: uppercase; font-size: 12px; font-weight: 700; margin-bottom: 10px; }
-.skillopt-hero { width: 100%; max-width: 100%; min-width: 0; border: 1px solid var(--skillopt-border); background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025)); border-radius: 22px; padding: 28px; box-shadow: 0 24px 70px rgba(0,0,0,.28); }
-.skillopt-hero h1 { letter-spacing: -.04em; font-size: 42px; margin-bottom: 6px; }
-.skillopt-hero p, .skillopt-card p { color: var(--skillopt-muted); line-height: 1.6; }
-.skillopt-cards { display: grid; width: 100%; max-width: 100%; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
-.skillopt-card { width: 100%; max-width: 100%; min-width: 0; border: 1px solid var(--skillopt-border); background: rgba(17,19,24,.76); border-radius: 16px; padding: 16px; }
-.skillopt-card h3 { margin: 0 0 6px; font-size: 15px; }
+.gradio-container { margin: 0 auto !important; padding-left: max(10px, env(safe-area-inset-left)) !important; padding-right: max(10px, env(safe-area-inset-right)) !important; padding-bottom: max(14px, env(safe-area-inset-bottom)) !important; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
+body, .gradio-container, .gradio-container .main, .gradio-container main.contain, .gradio-container .contain { background: radial-gradient(circle at top left, rgba(183,97,44,.10), transparent 28rem), linear-gradient(180deg, #faf8f4 0%, var(--skillopt-bg) 46%, #f1eee8 100%) !important; color: var(--skillopt-text) !important; }
+.skillopt-shell { width: 100%; max-width: 100%; min-width: 0; padding: max(18px, env(safe-area-inset-top)) 8px 12px; box-sizing: border-box; }
+.skillopt-hero { width: 100%; max-width: 100%; min-width: 0; border: 1px solid rgba(222,215,204,.88); background: linear-gradient(180deg, rgba(255,255,255,.82), rgba(255,255,255,.58)); border-radius: 22px; padding: 26px 28px; box-shadow: 0 16px 48px rgba(54,45,31,.09); }
+.skillopt-hero .skillopt-eyebrow { color: var(--skillopt-accent); letter-spacing: .14em; text-transform: uppercase; font-size: 12px; font-weight: 750; margin-bottom: 10px; }
+.skillopt-hero h1 { color: var(--skillopt-heading) !important; letter-spacing: -.045em; font-size: clamp(34px, 4.4vw, 50px); line-height: 1.02; margin: 0 0 8px; }
+.skillopt-hero .skillopt-subtitle { color: #4b4338; font-size: clamp(17px, 2vw, 21px); line-height: 1.4; margin: 0 0 14px; font-weight: 620; }
+.skillopt-hero .skillopt-intro, .skillopt-card p { color: var(--skillopt-muted); line-height: 1.58; margin: 0; }
+.skillopt-cards { display: grid; width: 100%; max-width: 100%; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 16px; }
+.skillopt-card { width: 100%; max-width: 100%; min-width: 0; border: 1px solid var(--skillopt-border); background: var(--skillopt-panel); border-radius: 16px; padding: 14px 15px; box-shadow: 0 10px 32px rgba(54,45,31,.06); }
+.skillopt-card h3 { color: var(--skillopt-heading) !important; margin: 0 0 5px; font-size: 15px; }
 .skillopt-note { color: var(--skillopt-muted); font-size: 13px; }
 .gradio-container *, .skillopt-card, .skillopt-hero, textarea, input, pre, code { box-sizing: border-box; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .gradio-container pre, .gradio-container code, .cm-content, .cm-line { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
 .gradio-container .main, .gradio-container main.contain, .gradio-container .contain, .gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel, .gradio-container .tabs, .gradio-container .tabitem, .gradio-container .column, .gradio-container .row, .gradio-container .prose { width: 100%; max-width: 100% !important; min-width: 0 !important; box-sizing: border-box !important; }
-.gradio-container textarea, .gradio-container input, .gradio-container select, .gradio-container label, .gradio-container .input, .gradio-container .output { max-width: 100% !important; min-width: 0 !important; }
-.skillopt-settings-row { align-items: stretch !important; gap: 12px !important; }
+.gradio-container .wrap, .gradio-container .form, .gradio-container .block, .gradio-container .panel { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+.gradio-container .wrap.center.full.hide, .gradio-container .hide, .gradio-container [hidden], .gradio-container .loader-container, .gradio-container .loading { display: none !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
+.gradio-container .tabs { background: rgba(255,255,255,.46) !important; border: 1px solid rgba(222,215,204,.78) !important; border-radius: 18px !important; padding: 10px !important; box-shadow: 0 12px 34px rgba(54,45,31,.055); }
+.gradio-container .tabitem { padding: 14px !important; background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+.gradio-container .row { gap: 12px !important; }
+.gradio-container textarea, .gradio-container input, .gradio-container select, .gradio-container label, .gradio-container .input, .gradio-container .output { max-width: 100% !important; min-width: 0 !important; color: var(--skillopt-text) !important; }
+.gradio-container textarea, .gradio-container input, .gradio-container select { background: var(--skillopt-panel-solid) !important; border: 1px solid var(--skillopt-border-strong) !important; border-radius: 12px !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.72) !important; }
+.gradio-container label, .gradio-container .label-wrap, .gradio-container .info { color: var(--skillopt-muted) !important; }
+.gradio-container input::placeholder, .gradio-container textarea::placeholder { color: #9a9286 !important; }
+.gradio-container input[type="range"], .gradio-container .slider input { accent-color: var(--skillopt-accent) !important; }
+.gradio-container input[type="checkbox"] { accent-color: var(--skillopt-accent) !important; }
+.skillopt-settings-row { align-items: stretch !important; gap: 12px !important; margin-bottom: 14px !important; }
 .skillopt-settings-row > * { min-width: 0 !important; }
-.gradio-container .tabs [role="tablist"], .gradio-container .tab-nav, .gradio-container div[role="tablist"], .tab-nav { display: flex !important; flex-wrap: nowrap !important; gap: 8px !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; overflow-x: auto !important; overflow-y: hidden !important; overscroll-behavior-x: contain; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; padding: 4px 2px 8px !important; scrollbar-width: none; }
+.skillopt-settings-row .block { background: transparent !important; border-color: transparent !important; }
+.gradio-container .tabs [role="tablist"], .gradio-container .tab-nav, .gradio-container div[role="tablist"], .tab-nav { display: flex !important; flex-wrap: nowrap !important; gap: 8px !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; overflow-x: auto !important; overflow-y: hidden !important; overscroll-behavior-x: contain; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; padding: 2px 2px 10px !important; scrollbar-width: none; background: transparent !important; }
 .gradio-container .tabs [role="tablist"]::-webkit-scrollbar, .gradio-container .tab-nav::-webkit-scrollbar, .gradio-container div[role="tablist"]::-webkit-scrollbar, .tab-nav::-webkit-scrollbar { display: none; }
-.gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"], .gradio-container button[role="tab"], .gradio-container [role="tab"], .tab-nav button { flex: 0 0 auto !important; width: auto !important; min-width: max-content !important; max-width: none !important; font-weight: 650 !important; white-space: nowrap !important; border-radius: 999px !important; padding: 9px 14px !important; line-height: 1.2 !important; text-overflow: clip !important; overflow: visible !important; scroll-snap-align: start; }
+.gradio-container .tabs [role="tablist"] > button[role="tab"], .gradio-container .tab-nav button[role="tab"], .gradio-container div[role="tablist"] > button[role="tab"], .gradio-container button[role="tab"], .gradio-container [role="tab"], .tab-nav button { flex: 0 0 auto !important; width: auto !important; min-width: max-content !important; max-width: none !important; font-weight: 650 !important; white-space: nowrap !important; border-radius: 999px !important; padding: 9px 14px !important; line-height: 1.2 !important; text-overflow: clip !important; overflow: visible !important; scroll-snap-align: start; color: var(--skillopt-muted) !important; background: rgba(255,255,255,.62) !important; border: 1px solid var(--skillopt-border) !important; }
+.gradio-container [role="tab"][aria-selected="true"], .gradio-container button[role="tab"][aria-selected="true"], .tab-nav button.selected { color: #7a3518 !important; background: var(--skillopt-accent-soft) !important; border-color: #e4b895 !important; }
 .gradio-container [role="tab"] * { white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; }
 .skillopt-status-md, .skillopt-result-md, .gradio-container .prose { color: var(--skillopt-text) !important; line-height: 1.58 !important; }
-.skillopt-status-md .prose, .skillopt-result-md .prose { border: 1px solid rgba(255,255,255,.08); background: rgba(17,19,24,.68); border-radius: 16px; padding: 14px 16px; }
-.skillopt-status-md p, .skillopt-status-md li, .skillopt-result-md p, .skillopt-result-md li, .gradio-container .prose p, .gradio-container .prose li { color: #e4e4e7 !important; }
+.skillopt-status-md.prose, .skillopt-status-md .prose, .skillopt-result-md.prose, .skillopt-result-md .prose { border: 1px solid var(--skillopt-border) !important; background: rgba(255,255,255,.72) !important; border-radius: 16px !important; padding: 14px 16px !important; }
+.skillopt-status-md p, .skillopt-status-md li, .skillopt-result-md p, .skillopt-result-md li, .gradio-container .prose p, .gradio-container .prose li { color: var(--skillopt-text) !important; }
 .skillopt-status-md ul, .skillopt-status-md ol, .skillopt-result-md ul, .skillopt-result-md ol, .gradio-container .prose ul, .gradio-container .prose ol { padding-left: 1.15rem !important; margin: .45rem 0 .75rem !important; }
-.skillopt-status-md h1, .skillopt-status-md h2, .skillopt-status-md h3, .skillopt-result-md h1, .skillopt-result-md h2, .skillopt-result-md h3, .gradio-container .prose h1, .gradio-container .prose h2, .gradio-container .prose h3 { color: #fafafa !important; letter-spacing: -.02em; }
-.skillopt-status-md code, .skillopt-result-md code, .gradio-container .prose code { color: #f4f4f5 !important; background: var(--skillopt-code-bg) !important; border: 1px solid var(--skillopt-code-border) !important; border-radius: 7px !important; padding: .12rem .36rem !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; word-break: break-word !important; }
-.skillopt-status-md pre, .skillopt-result-md pre, .gradio-container .prose pre { color: #f4f4f5 !important; background: #0f1117 !important; border: 1px solid var(--skillopt-code-border) !important; border-radius: 12px !important; padding: 12px !important; overflow-x: auto !important; white-space: pre-wrap !important; }
+.skillopt-status-md h1, .skillopt-status-md h2, .skillopt-status-md h3, .skillopt-result-md h1, .skillopt-result-md h2, .skillopt-result-md h3, .gradio-container .prose h1, .gradio-container .prose h2, .gradio-container .prose h3 { color: var(--skillopt-heading) !important; letter-spacing: -.02em; }
+.skillopt-status-md code, .skillopt-result-md code, .gradio-container .prose code { color: #35291f !important; background: var(--skillopt-code-bg) !important; border: 1px solid var(--skillopt-code-border) !important; border-radius: 7px !important; padding: .12rem .36rem !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; word-break: break-word !important; }
+.skillopt-status-md pre, .skillopt-result-md pre, .gradio-container .prose pre, .gradio-container .cm-editor, .gradio-container .cm-scroller { color: #2d2822 !important; background: #f3f0ea !important; border: 1px solid var(--skillopt-code-border) !important; border-radius: 12px !important; padding: 12px !important; overflow-x: auto !important; white-space: pre-wrap !important; }
 .skillopt-status-md pre code, .skillopt-result-md pre code, .gradio-container .prose pre code { border: 0 !important; padding: 0 !important; background: transparent !important; }
-button.primary, .primary button { border-radius: 12px !important; }
-textarea, input, .wrap { border-radius: 12px !important; }
+.gradio-container button, button.primary, .primary button { border-radius: 12px !important; border: 1px solid var(--skillopt-border-strong) !important; box-shadow: none !important; }
+.gradio-container button.primary, .primary button, .gradio-container button[variant="primary"] { background: #9d4f24 !important; color: #fffaf5 !important; border-color: #9d4f24 !important; }
+.gradio-container button.stop, .stop button { background: #fff7ed !important; color: #8a2f18 !important; border-color: #f0c4a4 !important; }
+textarea, input { border-radius: 12px !important; }
 @media (max-width: 860px) { gradio-app, .gradio-container, .gradio-container .main, .gradio-container main.contain, .gradio-container .wrap, .gradio-container .column, .gradio-container .block, .skillopt-shell, .skillopt-hero, .skillopt-cards, .skillopt-card { width: min(100%, 100vw) !important; max-width: 100vw !important; min-width: 0 !important; } .gradio-container { margin-inline: 0 !important; padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right)) !important; } .skillopt-cards { grid-template-columns: minmax(0, 1fr); } .skillopt-hero { padding: 20px; border-radius: 18px; } .skillopt-hero h1 { font-size: 32px; } }
-@media (max-width: 640px) { .skillopt-settings-row { flex-direction: column !important; } .skillopt-settings-row > *, .skillopt-settings-row .form, .skillopt-settings-row .block { width: 100% !important; max-width: 100% !important; flex: 1 1 auto !important; } .tab-nav button { padding-inline: 12px !important; font-size: 14px !important; } .skillopt-status-md .prose, .skillopt-result-md .prose { padding: 12px; border-radius: 14px; } }
+@media (max-width: 640px) { .skillopt-settings-row { flex-direction: column !important; } .skillopt-settings-row > *, .skillopt-settings-row .form, .skillopt-settings-row .block { width: 100% !important; max-width: 100% !important; flex: 1 1 auto !important; } .tab-nav button { padding-inline: 12px !important; font-size: 14px !important; } .skillopt-status-md .prose, .skillopt-result-md .prose { padding: 12px !important; border-radius: 14px !important; } }
 @media (max-width: 520px) { .skillopt-shell { padding-top: max(14px, env(safe-area-inset-top)); padding-inline: 0; } .skillopt-hero { padding: 16px; } .skillopt-hero h1 { font-size: clamp(24px, 7vw, 28px); } button { min-height: 42px; } }
 """
 
@@ -302,7 +319,7 @@ def pwa_manifest() -> dict[str, Any]:
 
 
 def offline_html() -> str:
-    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#0b0c0f"><title>Hermes SkillOpt offline</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c0f;color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px}main{max-width:560px;border:1px solid #272a32;border-radius:20px;padding:24px;background:#111318}p{color:#a1a1aa;line-height:1.6}</style></head><body><main><h1>Hermes SkillOpt is offline</h1><p>This fallback is static and contains no run IDs, profile paths, status, artifacts, or cached operation results. Reconnect to the local WebUI to review staged runs.</p></main></body></html>"""
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#f6f3ee"><title>Hermes SkillOpt offline</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#25211b;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px}main{max-width:560px;border:1px solid #ded7cc;border-radius:20px;padding:24px;background:rgba(255,255,255,.76);box-shadow:0 18px 55px rgba(54,45,31,.10)}p{color:#6f6a61;line-height:1.6}</style></head><body><main><h1>Hermes SkillOpt is offline</h1><p>This fallback is static and contains no run IDs, profile paths, status, artifacts, or cached operation results. Reconnect to the local WebUI to review staged runs.</p></main></body></html>"""
 
 
 def service_worker_js() -> str:
@@ -425,7 +442,14 @@ def ui_text(lang: str | None, key: str) -> str:
 
 
 def hero_markdown(lang: str | None = "en") -> str:
-    return f"""<div class=\"skillopt-shell\"><div class=\"skillopt-eyebrow\">{ui_text(lang, 'eyebrow')}</div><div class=\"skillopt-hero\">{ui_text(lang, 'hero')}\n\n{ui_text(lang, 'intro')}</div></div>"""
+    return (
+        '<div class="skillopt-shell"><section class="skillopt-hero">'
+        f'<div class="skillopt-eyebrow">{ui_text(lang, "eyebrow")}</div>'
+        f'<h1>{ui_text(lang, "hero_title")}</h1>'
+        f'<p class="skillopt-subtitle">{ui_text(lang, "hero_subtitle")}</p>'
+        f'<p class="skillopt-intro">{ui_text(lang, "intro")}</p>'
+        "</section></div>"
+    )
 
 
 def safety_cards_markdown(lang: str | None = "en") -> str:
