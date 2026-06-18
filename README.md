@@ -2,6 +2,18 @@
 
 `hermes-skillopt` is a standalone Hermes plugin for safe, staged optimization of a Hermes profile `SKILL.md`. It is **not** a fork or full port of Microsoft SkillOpt; it is a Hermes-native adapter that keeps Hermes core unchanged and keeps all candidate changes reviewable and rollbackable.
 
+## Diagrams
+
+The README diagrams are deterministic SVG/vector assets with large text and high-contrast labels so they stay sharp in GitHub rendering and can be opened directly for zooming.
+
+![hermes-skillopt architecture: plugin and CLI entrypoints, staged orchestrator, bounded optimizer, sandbox-backed target execution, review gates, and explicit adopt or rollback](docs/assets/hermes-skillopt-architecture.svg)
+
+[Open high-resolution architecture SVG](docs/assets/hermes-skillopt-architecture.svg)
+
+![hermes-skillopt full-run flow: six staged phases, immutable artifacts, strict production gate, read-only review, explicit adopt, and rollback](docs/assets/hermes-skillopt-flow.svg)
+
+[Open high-resolution flow SVG](docs/assets/hermes-skillopt-flow.svg)
+
 ## What it is
 
 - **Trainable state:** one Hermes skill document (`$HERMES_HOME/skills/.../SKILL.md`).

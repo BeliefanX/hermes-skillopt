@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">hermes-skillopt full-run flow diagram</title>
+  <desc id="desc">Clear vector flow diagram for hermes-skillopt full-run: six staged phases create and evaluate candidate SKILL.md edits, strict gates decide adoptability, review is read-only, adopt is explicit, and rollback restores a guarded backup.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#1f2937"/>
+    </marker>
+    <marker id="green-arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#047857"/>
+    </marker>
+    <marker id="red-arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#b91c1c"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 3; rx: 24; }
+      .step { fill: #eff6ff; stroke: #2563eb; stroke-width: 3; rx: 20; }
+      .artifact { fill: #f1f5f9; stroke: #64748b; stroke-width: 3; rx: 20; }
+      .gate { fill: #fffbeb; stroke: #d97706; stroke-width: 3; rx: 20; }
+      .good { fill: #ecfdf5; stroke: #059669; stroke-width: 3; rx: 20; }
+      .stop { fill: #fef2f2; stroke: #dc2626; stroke-width: 3; rx: 20; }
+      .profile { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 3; rx: 20; }
+      .title { font: 800 40px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .num { font: 900 30px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #1d4ed8; }
+      .h { font: 800 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .body { font: 500 19px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #1e293b; }
+      .small { font: 600 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .warn { font: 800 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #991b1b; }
+      .arrow { stroke: #1f2937; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .greenArrow { stroke: #047857; stroke-width: 4; fill: none; marker-end: url(#green-arrow); }
+      .redArrow { stroke: #b91c1c; stroke-width: 4; fill: none; marker-end: url(#red-arrow); }
+      .dash { stroke-dasharray: 12 10; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1040"/>
+  <text x="70" y="72" class="title">hermes-skillopt full-run flow</text>
+  <text x="70" y="112" class="subtitle">All optimization is staged first; live SKILL.md changes require explicit adopt after strict gates.</text>
+
+  <rect x="55" y="150" width="1490" height="760" class="panel"/>
+
+  <rect x="90" y="205" width="230" height="145" class="step"/>
+  <text x="120" y="250" class="num">1</text>
+  <text x="168" y="250" class="h">Rollout</text>
+  <text x="120" y="292" class="body">Evaluate current skill</text>
+  <text x="120" y="323" class="small">same frozen target config</text>
+
+  <rect x="390" y="205" width="230" height="145" class="step"/>
+  <text x="420" y="250" class="num">2</text>
+  <text x="468" y="250" class="h">Reflect</text>
+  <text x="420" y="292" class="body">Summarize evidence</text>
+  <text x="420" y="323" class="small">include rejected edits</text>
+
+  <rect x="690" y="205" width="230" height="145" class="step"/>
+  <text x="720" y="250" class="num">3</text>
+  <text x="768" y="250" class="h">Aggregate</text>
+  <text x="720" y="292" class="body">Create bounded edits</text>
+  <text x="720" y="323" class="small">candidate_count + budget</text>
+
+  <rect x="990" y="205" width="230" height="145" class="step"/>
+  <text x="1020" y="250" class="num">4</text>
+  <text x="1068" y="250" class="h">Select</text>
+  <text x="1020" y="292" class="body">Validate candidates</text>
+  <text x="1020" y="323" class="small">rank strict improvements</text>
+
+  <rect x="990" y="455" width="230" height="145" class="step"/>
+  <text x="1020" y="500" class="num">5</text>
+  <text x="1068" y="500" class="h">Update</text>
+  <text x="1020" y="542" class="body">Apply selected edit</text>
+  <text x="1020" y="573" class="small">candidate SKILL.md only</text>
+
+  <rect x="690" y="455" width="230" height="145" class="step"/>
+  <text x="720" y="500" class="num">6</text>
+  <text x="768" y="500" class="h">Evaluate / gate</text>
+  <text x="720" y="542" class="body">Validation + test</text>
+  <text x="720" y="573" class="small">no LLM/judge override</text>
+
+  <rect x="390" y="455" width="230" height="145" class="artifact"/>
+  <text x="420" y="500" class="h">Run artifacts</text>
+  <text x="420" y="542" class="body">manifest, hashes</text>
+  <text x="420" y="573" class="small">report, diff, evidence, lineage</text>
+
+  <rect x="90" y="455" width="230" height="145" class="profile"/>
+  <text x="120" y="500" class="h">Original skill</text>
+  <text x="120" y="542" class="body">active profile SKILL.md</text>
+  <text x="120" y="573" class="small">read for evaluation</text>
+
+  <path class="arrow" d="M320 277 H375"/>
+  <path class="arrow" d="M620 277 H675"/>
+  <path class="arrow" d="M920 277 H975"/>
+  <path class="arrow" d="M1105 350 V440"/>
+  <path class="arrow" d="M990 528 H935"/>
+  <path class="arrow" d="M690 528 H635"/>
+  <path class="arrow" d="M390 528 H335"/>
+  <path class="arrow dash" d="M205 455 V365 C205 345 205 345 205 350"/>
+
+  <rect x="1295" y="205" width="200" height="145" class="stop"/>
+  <text x="1325" y="250" class="h">Rejected edits</text>
+  <text x="1325" y="292" class="body">Buffered history</text>
+  <text x="1325" y="323" class="small">never silently applied</text>
+  <path class="redArrow dash" d="M1220 278 H1280"/>
+
+  <rect x="90" y="690" width="310" height="145" class="gate"/>
+  <text x="120" y="735" class="h">Review</text>
+  <text x="120" y="777" class="body">Read-only integrity check</text>
+  <text x="120" y="808" class="small">surfaces adoptability + paths</text>
+
+  <rect x="515" y="690" width="360" height="145" class="gate"/>
+  <text x="545" y="735" class="h">Strict production gate</text>
+  <text x="545" y="777" class="body">explicit curated validation + held-out test</text>
+  <text x="545" y="808" class="small">fallback/static/session evidence is review-only</text>
+
+  <rect x="990" y="690" width="230" height="145" class="good"/>
+  <text x="1020" y="735" class="h">Explicit adopt</text>
+  <text x="1020" y="777" class="body">guarded live writeback</text>
+  <text x="1020" y="808" class="small">no auto-adopt path</text>
+
+  <rect x="1295" y="690" width="200" height="145" class="profile"/>
+  <text x="1325" y="735" class="h">Rollback</text>
+  <text x="1325" y="777" class="body">verified backup</text>
+  <text x="1325" y="808" class="small">current-sha guard</text>
+
+  <path class="arrow" d="M390 600 C280 620 245 650 245 675"/>
+  <path class="arrow" d="M400 763 H500"/>
+  <path class="greenArrow" d="M875 763 H975"/>
+  <path class="arrow" d="M1220 763 H1280"/>
+  <path class="redArrow dash" d="M695 690 C695 645 760 625 890 615"/>
+
+  <rect x="90" y="930" width="1405" height="58" class="artifact"/>
+  <text x="120" y="966" class="small">Key guarantees: staged-only optimization, explicit adopt/rollback, sandbox-backed frozen-hermes MVP, no upstream SkillOpt parity claim, live-readonly disabled/report-only.</text>
+</svg>
