@@ -221,6 +221,21 @@ def test_web_package_build_contracts():
             assert version != "latest", name
 
 
+def test_mobile_topbar_controls_move_to_sheet_contract():
+    repo = Path(__file__).resolve().parents[1]
+    css = (repo / "web" / "src" / "styles.css").read_text(encoding="utf-8")
+    jsx = (repo / "web" / "src" / "main.tsx").read_text(encoding="utf-8")
+    mobile = css[css.index("@media (max-width:900px)"):css.index("@media (max-width:430px)")]
+    assert ".topbar{align-items:center;flex-wrap:nowrap;min-height:56px" in mobile
+    assert ".topbar>.top-controls{display:none}" in mobile
+    assert ".sheet-controls .top-controls{display:grid" in mobile
+    assert ".topbar .brand{flex:1;min-width:0;flex-wrap:nowrap}" in mobile
+    assert ".topbar .badge" in mobile and "white-space:nowrap" in mobile
+    assert "<header className=\"topbar\"" in jsx
+    assert "<div className=\"sheet-controls\">{topControls}</div>" in jsx
+    assert "aria-label={t.openMenu}" in jsx
+
+
 def test_cli_and_module_webui_help_smoke():
     repo = Path(__file__).resolve().parents[1]
     for cmd in (
