@@ -828,8 +828,16 @@ def test_plugin_writeback_handlers_ignore_home_override(monkeypatch):
     monkeypatch.setattr(plugin.core, "adopt", lambda **kwargs: calls.append(("adopt", kwargs)) or {"success": True})
     monkeypatch.setattr(plugin.core, "rollback", lambda **kwargs: calls.append(("rollback", kwargs)) or {"success": True})
 
-    plugin._handle_adopt({"run_id": "rid", "hermes_home": "/tmp/other", "force": True})
-    plugin._handle_rollback({"run_id": "rid", "hermes_home": "/tmp/other", "force": True})
+    adopt_refused = json.loads(plugin._handle_adopt({"run_id": "rid", "hermes_home": "/tmp/other", "force": True}))
+    rollback_refused = json.loads(plugin._handle_rollback({"run_id": "rid", "hermes_home": "/tmp/other", "force": True}))
+    assert adopt_refused.get("success") is not True
+    assert "ADOPT rid" in adopt_refused["error"]
+    assert rollback_refused.get("success") is not True
+    assert "ROLLBACK rid" in rollback_refused["error"]
+    assert calls == []
+
+    plugin._handle_adopt({"run_id": "rid", "hermes_home": "/tmp/other", "force": True, "confirmation": "ADOPT rid"})
+    plugin._handle_rollback({"run_id": "rid", "hermes_home": "/tmp/other", "force": True, "confirmation": "ROLLBACK rid"})
     assert calls == [
         ("adopt", {"run_id": "rid", "hermes_home_path": None, "force": True}),
         ("rollback", {"run_id": "rid", "hermes_home_path": None, "force": True}),

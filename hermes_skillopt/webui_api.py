@@ -47,7 +47,8 @@ def status(home: str | None = None) -> dict[str, Any]:
 
 def run_full(payload: dict[str, Any]) -> dict[str, Any]:
     """Run full cycle from WebUI, always staged-only and never force-adopt."""
-    out = core.full_run(
+    intent = str(payload.get("intent") or "review").strip().lower()
+    common = dict(
         skill=payload.get("skill") or None,
         query=payload.get("query") or None,
         eval_file=payload.get("eval_file") or None,
@@ -62,20 +63,53 @@ def run_full(payload: dict[str, Any]) -> dict[str, Any]:
         target_backend=payload.get("target_backend") or None,
         gate_mode=payload.get("gate_mode") or "soft",
         resume_run_id=payload.get("resume_run_id") or None,
-        allow_mock=bool(payload.get("allow_mock")),
+        hermes_home_path=payload.get("home") or None,
+    )
+    if "allow_mock" in payload:
+        common["allow_mock"] = bool(payload.get("allow_mock"))
+    if intent in {"smoke", "review", "production"}:
+        return core.guided_optimize(intent=intent, **common)
+    if intent:
+        raise ValueError("intent must be one of: smoke, review, production")
+    out = core.full_run(
+        **common,
         auto_adopt=False,
         force=False,
-        hermes_home_path=payload.get("home") or None,
     )
     return out
 
 
+def doctor(home: str | None = None, skill: str | None = None) -> dict[str, Any]:
+    return core.doctor(home or None, skill=skill or None)
+
+
 def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]:
-    rid = (run_id or "").strip() or legacy.latest_run_id(home or None)
+    try:
+        rid = (run_id or "").strip() or legacy.latest_run_id(home or None)
+    except Exception as exc:
+        return {"run_id": "", "summary": f"Review failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}", "report": "", "diff": "", "gate": "", "candidate": "", "rejected": "", "success": False}
     summary, report, diff, gate, candidate, rejected = legacy.review_payload(rid, home or None)
+    decision: dict[str, Any] = {}
+    review_json: dict[str, Any] = {}
+    if not summary.startswith("Review failed:"):
+        try:
+            decision = core.review_decision_summary(rid or "latest", hermes_home_path=home or None) if rid else {}
+            review_json = core.review(rid, hermes_home_path=home or None, slim=True) if rid else {}
+        except Exception as exc:
+            decision = {"success": False, "not_adoptable_reasons": [f"decision summary unavailable: {type(exc).__name__}: {core.redact_secrets(str(exc))}"], "adoptable": False, "production_gate_eligible": False, "test_gate_eligible": False, "next_action": "Inspect raw staged artifacts; integrity verification blocked the decision summary."}
+            review_json = {}
     return {
         "run_id": rid,
         "summary": summary,
+        "decision": decision,
+        "review": review_json,
+        "adoptable": decision.get("adoptable"),
+        "blockers": decision.get("not_adoptable_reasons") or [],
+        "production_gate": decision.get("production_gate_eligible"),
+        "test_gate": decision.get("test_gate_eligible"),
+        "evidence_class": "production_candidate" if decision.get("adoptable") else "review_only_or_not_ready",
+        "artifacts": decision.get("artifact_refs") or {},
+        "next_safe_action": decision.get("next_action"),
         "report": report,
         "diff": diff,
         "gate": gate,
@@ -83,6 +117,10 @@ def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]
         "rejected": rejected,
         "success": not summary.startswith("Review failed:"),
     }
+
+
+def review_latest(home: str | None = None) -> dict[str, Any]:
+    return review("", home)
 
 
 def fleet_report(home: str | None = None, limit: int = 50, skill: str | None = None) -> dict[str, Any]:

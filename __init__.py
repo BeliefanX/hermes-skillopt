@@ -19,7 +19,8 @@ def _schema(description: str, props: dict[str, Any] | None = None, required: lis
     return {"description": description, "parameters": {"type": "object", "properties": props or {}, "required": required or []}}
 
 COMMON_HOME = {"hermes_home": {"type": "string", "description": "Optional HERMES_HOME override; defaults to current profile home (~/.hermes)."}}
-WRITEBACK_PROPS = {"run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}}
+ADOPT_PROPS = {"run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}, "confirmation": {"type": "string", "description": "Typed confirmation; must exactly equal ADOPT <run_id> unless non_interactive_override=true."}, "non_interactive_override": {"type": "boolean", "default": False, "description": "Deliberate CI/test override; core gate checks still apply."}}
+ROLLBACK_PROPS = {"run_id": {"type": "string"}, "force": {"type": "boolean", "default": False}, "confirmation": {"type": "string", "description": "Typed confirmation; must exactly equal ROLLBACK <run_id> unless non_interactive_override=true."}, "non_interactive_override": {"type": "boolean", "default": False, "description": "Deliberate CI/test override; core guard checks still apply."}}
 FULL_PROPS = {
     **COMMON_HOME,
     "skill": {"type": "string"},
@@ -39,12 +40,15 @@ FULL_PROPS = {
     "resume_run_id": {"type": "string", "description": "Opt-in reuse of a completed checkpointed full-run when input/config/provenance fingerprints match."},
     "force": {"type": "boolean", "default": False},
 }
+OPTIMIZE_PROPS = {**FULL_PROPS, "intent": {"type": "string", "enum": ["smoke", "review", "production"], "default": "review", "description": "smoke/review are staged review-only presets; production fails fast unless strict, no mock, and explicit eval_file are present."}}
 
 SCHEMAS = {
     "hermes_skillopt_status": _schema("Show SkillOpt plugin status, discovered skill count, recent staged runs, lineage summaries, and stale/incomplete checkpoint rows.", COMMON_HOME),
+    "hermes_skillopt_doctor": _schema("Read-only SkillOpt readiness/guided UX report: profile paths, skill/eval readiness, recent runs, upstream/parity posture, production checklist, and next actions. Never runs full_run/adopt/rollback/fetch.", {**COMMON_HOME, "skill": {"type": "string"}}),
     "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only.", {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_full_run": _schema("Run full core pipeline: load skill state, build eval tasks, frozen target eval, optimizer reflect/edit, strict validation/test gates, hard production-failure blocking, and staged artifacts only.", FULL_PROPS),
+    "hermes_skillopt_optimize": _schema("Guided staged-only optimization alias with intent presets. smoke/review clearly remain review-only; production requires strict/no-mock/explicit eval_file and still never auto-adopts.", OPTIMIZE_PROPS),
     "hermes_skillopt_batch_preflight": _schema("Read-only deterministic validation of a staged-only SkillOpt batch plan; enforces budget and rejects adopt/writeback fields.", {**COMMON_HOME, "plan": {"type": "object", "description": "Inline batch plan object. Use CLI for JSON path input."}}, ["plan"]),
     "hermes_skillopt_batch_run": _schema("Run a preflighted SkillOpt batch under staging only; calls full_run with auto_adopt=false and force=false for every job.", {**COMMON_HOME, "plan": {"type": "object", "description": "Inline batch plan object. Use CLI for JSON path input."}}, ["plan"]),
     "hermes_skillopt_fleet_report": _schema("Read-only fleet report over recent single and batch parent/child runs with readiness, advisory skill type, evidence-contract status, grouped eligibility/resume/rollback/lineage, and tamper warnings.", {**COMMON_HOME, "limit": {"type": "integer", "default": 50}, "skill": {"type": "string"}}),
@@ -56,9 +60,9 @@ SCHEMAS = {
     "hermes_skillopt_eval_pack_curate": _schema("Create a canonical curated eval pack from inline tasks. Defaults review-only; production eligibility requires explicit production_policy and compliant execution contract.", {**COMMON_HOME, "skill": {"type": "string"}, "tasks": {"type": "array", "items": {"type": "object"}}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string", "default": "curated-v1"}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "tasks"]),
     "hermes_skillopt_eval_pack_mine_sessions": _schema("Read-only/draft mining of redacted sessions or session-like fixture file into a review-only eval pack; never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "query": {"type": "string"}, "lookback_days": {"type": "integer", "default": 14}, "limit": {"type": "integer", "default": 50}, "session_fixture": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_resume_inspect": _schema("Read-only step-level resume inspection: verifies checkpoint/stage fingerprints and artifact hashes; refuses unsafe partial continuation.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
-    "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview.", {**COMMON_HOME, "run_id": {"type": "string"}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}, ["run_id"]),
-    "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", WRITEBACK_PROPS, ["run_id"]),
-    "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", WRITEBACK_PROPS, ["run_id"]),
+    "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview. run_id may be omitted or 'latest'; summary returns decision-first slim output.", {**COMMON_HOME, "run_id": {"type": "string"}, "latest": {"type": "boolean", "default": False}, "summary": {"type": "boolean", "default": False}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}),
+    "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", ADOPT_PROPS, ["run_id"]),
+    "hermes_skillopt_rollback": _schema("Rollback an adopted run in the active Hermes profile only, using a validated backup manifest and backup SKILL.md after current-sha guard unless force=true.", ROLLBACK_PROPS, ["run_id"]),
     "hermes_skillopt_upstream_status": _schema("Show Microsoft SkillOpt upstream clone and pinned lock status for the canonical HERMES_HOME clone.", COMMON_HOME),
     "hermes_skillopt_compare_upstream_pin": _schema("Read-only pinned-upstream comparison; reports local clone/lock divergence and never fetches, merges, or writes plugin code.", COMMON_HOME),
     "hermes_skillopt_benchmark_parity_status": _schema("Read-only status surface labeling Hermes-native benchmark mode versus upstream parity; no rollout, adopt, or writeback.", COMMON_HOME),
@@ -104,6 +108,10 @@ def _handle_status(args: dict, **kw) -> str:
     return _ok(lambda hermes_home=None: core.status(hermes_home), {"hermes_home": args.get("hermes_home")})
 
 
+def _handle_doctor(args: dict, **kw) -> str:
+    return _ok(core.doctor, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+
+
 def _handle_dry_run(args: dict, **kw) -> str:
     ctx = kw.get("ctx") or kw.get("context")
     return _ok(lambda **a: core.dry_run(ctx=ctx, **a), {"skill": args.get("skill"), "goal": args.get("goal"), "session_search": args.get("session_search"), "hermes_home_path": args.get("hermes_home"), "use_llm": bool(args.get("use_llm", False))})
@@ -120,8 +128,24 @@ def _handle_run(args: dict, **kw) -> str:
     return _ok(core.full_run, _full_args(args, ctx))
 
 
+def _handle_optimize(args: dict, **kw) -> str:
+    ctx = kw.get("ctx") or kw.get("context")
+    full_args = _full_args(args, ctx)
+    full_args.pop("force", None)
+    if "allow_mock" not in args:
+        full_args.pop("allow_mock", None)
+    if "gate_mode" not in args:
+        full_args.pop("gate_mode", None)
+    return _ok(core.guided_optimize, {"intent": args.get("intent") or "review", **full_args})
+
+
 def _handle_review(args: dict, **kw) -> str:
-    return _ok(core.review, {"run_id": args.get("run_id"), "hermes_home_path": args.get("hermes_home"), "include_diff_chars": int(args.get("include_diff_chars") or 4000), "slim": bool(args.get("slim", False))})
+    rid = "latest" if bool(args.get("latest", False)) else (args.get("run_id") or "latest")
+    if bool(args.get("summary", False)):
+        return _ok(core.review_decision_summary, {"run_id": rid, "hermes_home_path": args.get("hermes_home")})
+    if rid == "latest":
+        return _ok(core.review_latest, {"hermes_home_path": args.get("hermes_home"), "include_diff_chars": int(args.get("include_diff_chars") or 4000), "slim": bool(args.get("slim", False))})
+    return _ok(core.review, {"run_id": rid, "hermes_home_path": args.get("hermes_home"), "include_diff_chars": int(args.get("include_diff_chars") or 4000), "slim": bool(args.get("slim", False))})
 
 
 def _handle_batch_preflight(args: dict, **kw) -> str:
@@ -175,11 +199,19 @@ def _handle_resume_inspect(args: dict, **kw) -> str:
 
 
 def _handle_adopt(args: dict, **kw) -> str:
-    return _ok(core.adopt, {"run_id": args.get("run_id"), "hermes_home_path": None, "force": bool(args.get("force", False))})
+    rid = (args.get("run_id") or "").strip()
+    expected = f"ADOPT {rid}"
+    if not bool(args.get("non_interactive_override", False)) and (args.get("confirmation") or "").strip() != expected:
+        return tool_error(f"hermes-skillopt failed: type {expected!r} exactly to confirm")
+    return _ok(core.adopt, {"run_id": rid, "hermes_home_path": None, "force": bool(args.get("force", False))})
 
 
 def _handle_rollback(args: dict, **kw) -> str:
-    return _ok(core.rollback, {"run_id": args.get("run_id"), "hermes_home_path": None, "force": bool(args.get("force", False))})
+    rid = (args.get("run_id") or "").strip()
+    expected = f"ROLLBACK {rid}"
+    if not bool(args.get("non_interactive_override", False)) and (args.get("confirmation") or "").strip() != expected:
+        return tool_error(f"hermes-skillopt failed: type {expected!r} exactly to confirm")
+    return _ok(core.rollback, {"run_id": rid, "hermes_home_path": None, "force": bool(args.get("force", False))})
 
 
 def _handle_upstream_status(args: dict, **kw) -> str:
@@ -222,9 +254,11 @@ def _handle_handoff_optimize(args: dict, **kw) -> str:
 
 _TOOLS = (
     ("hermes_skillopt_status", SCHEMAS["hermes_skillopt_status"], _handle_status, "🧰"),
+    ("hermes_skillopt_doctor", SCHEMAS["hermes_skillopt_doctor"], _handle_doctor, "🩺"),
     ("hermes_skillopt_dry_run", SCHEMAS["hermes_skillopt_dry_run"], _handle_dry_run, "🧪"),
     ("hermes_skillopt_run", SCHEMAS["hermes_skillopt_run"], _handle_run, "🧠"),
     ("hermes_skillopt_full_run", SCHEMAS["hermes_skillopt_full_run"], _handle_run, "🧠"),
+    ("hermes_skillopt_optimize", SCHEMAS["hermes_skillopt_optimize"], _handle_optimize, "🎯"),
     ("hermes_skillopt_batch_preflight", SCHEMAS["hermes_skillopt_batch_preflight"], _handle_batch_preflight, "🧾"),
     ("hermes_skillopt_batch_run", SCHEMAS["hermes_skillopt_batch_run"], _handle_batch_run, "🧺"),
     ("hermes_skillopt_fleet_report", SCHEMAS["hermes_skillopt_fleet_report"], _handle_fleet_report, "🛰️"),

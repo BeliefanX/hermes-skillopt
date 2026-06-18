@@ -27,6 +27,41 @@ def add_full_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--resume-run-id", help="Opt-in resume/reuse of a prior checkpointed full-run when input/config/provenance fingerprints match")
 
 
+def _full_kwargs(args: argparse.Namespace) -> dict:
+    return {
+        "skill": args.skill,
+        "query": getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None),
+        "lookback_days": args.lookback_days,
+        "limit": args.limit,
+        "iterations": args.iterations,
+        "edit_budget": args.edit_budget,
+        "candidate_count": getattr(args, "candidate_count", 1),
+        "backend": args.backend,
+        "optimizer_backend": getattr(args, "optimizer_backend", None),
+        "allow_mock": args.allow_mock,
+        "force": args.force,
+        "hermes_home_path": args.home,
+        "eval_file": getattr(args, "eval_file", None),
+        "target_executor": getattr(args, "target_executor", "auto"),
+        "target_backend": getattr(args, "target_backend", None),
+        "gate_mode": getattr(args, "gate_mode", "strict"),
+        "resume_run_id": getattr(args, "resume_run_id", None),
+    }
+
+
+def _adopt_confirmation_ok(args: argparse.Namespace) -> bool:
+    if getattr(args, "yes_i_understand_skillopt_adopt", False):
+        return True
+    expected = f"ADOPT {args.run_id}"
+    supplied = getattr(args, "confirm", None)
+    if supplied is None and sys.stdin.isatty():
+        supplied = input(f"Type {expected!r} to adopt staged SkillOpt run: ")
+    if (supplied or "").strip() == expected:
+        return True
+    print(f"adopt refused: type {expected!r} exactly via --confirm, or use --yes-i-understand-skillopt-adopt for non-interactive CI", file=sys.stderr)
+    return False
+
+
 def main() -> int:
     p = argparse.ArgumentParser(prog="hermes-skillopt")
     p.add_argument("--home", dest="home")
@@ -37,6 +72,11 @@ def main() -> int:
         parser.add_argument("--skill", help="Optional skill_name filter")
     d = sub.add_parser("dry-run"); d.add_argument("--skill"); d.add_argument("--goal"); d.add_argument("--session-search"); d.add_argument("--use-llm", action="store_true")
     fr = sub.add_parser("full-run"); add_full_args(fr)
+    doc = sub.add_parser("doctor", help="Read-only readiness/guided UX report; no full_run/adopt/rollback/fetch")
+    doc.add_argument("--skill")
+    opt = sub.add_parser("optimize", help="Guided alias for staged-only full_run with smoke/review/production intent presets; never auto-adopts")
+    opt.add_argument("--intent", choices=["smoke", "review", "production"], default="review")
+    add_full_args(opt)
     bp = sub.add_parser("batch-preflight", help="Read-only validation of a staged-only SkillOpt batch plan JSON")
     bp.add_argument("plan", help="Batch plan JSON path")
     br = sub.add_parser("batch-run", help="Run a preflighted SkillOpt batch under staging only; never adopts")
@@ -63,9 +103,14 @@ def main() -> int:
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
     bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
-    r = sub.add_parser("review"); r.add_argument("run_id")
+    r = sub.add_parser("review", help="Review a staged run. Use run_id, 'latest', --latest, or --summary for decision-first output.")
+    r.add_argument("run_id", nargs="?", default="latest")
+    r.add_argument("--latest", action="store_true")
+    r.add_argument("--summary", action="store_true")
+    r.add_argument("--slim", action="store_true")
+    r.add_argument("--include-diff-chars", type=int, default=4000)
     ri = sub.add_parser("resume-inspect", help="Read-only checkpoint/stage fingerprint inspection; never replays partial stages"); ri.add_argument("run_id")
-    a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true"); a.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
+    a = sub.add_parser("adopt"); a.add_argument("run_id"); a.add_argument("--force", action="store_true"); a.add_argument("--confirm", help="Typed confirmation; must exactly equal ADOPT <run_id>"); a.add_argument("--yes-i-understand-skillopt-adopt", action="store_true", help="Deliberate non-interactive override for CI/tests; core gate checks still apply"); a.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     rb = sub.add_parser("rollback"); rb.add_argument("run_id"); rb.add_argument("--force", action="store_true"); rb.add_argument("--unsafe-cross-profile-writeback", action="store_true", help="Allow --home to differ from active HERMES_HOME for offline maintenance only")
     sub.add_parser("upstream-status")
     sub.add_parser("compare-upstream-pin", help="Read-only report comparing local clone to pinned upstream lock; no fetch/merge/write")
@@ -89,10 +134,26 @@ def main() -> int:
     args = p.parse_args()
     if args.cmd == "status":
         out = core.status(args.home)
+    elif args.cmd == "doctor":
+        out = core.doctor(args.home, skill=args.skill)
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
-        out = core.full_run(skill=args.skill, query=getattr(args, "query", None) or getattr(args, "session_search", None) or getattr(args, "goal", None), lookback_days=args.lookback_days, limit=args.limit, iterations=args.iterations, edit_budget=args.edit_budget, candidate_count=getattr(args, "candidate_count", 1), backend=args.backend, optimizer_backend=getattr(args, "optimizer_backend", None), allow_mock=args.allow_mock, force=args.force, hermes_home_path=args.home, eval_file=getattr(args, "eval_file", None), target_executor=getattr(args, "target_executor", "auto"), target_backend=getattr(args, "target_backend", None), gate_mode=getattr(args, "gate_mode", "strict"), resume_run_id=getattr(args, "resume_run_id", None))
+        out = core.full_run(**_full_kwargs(args))
+    elif args.cmd == "optimize":
+        kw = _full_kwargs(args)
+        kw.pop("force", None)
+        explicit_allow_mock = "--allow-mock" in sys.argv
+        explicit_gate_mode = any(a == "--gate-mode" or a.startswith("--gate-mode=") for a in sys.argv)
+        if args.intent in {"smoke", "review"} and not explicit_allow_mock:
+            kw.pop("allow_mock", None)
+        if args.intent in {"smoke", "review"} and not explicit_gate_mode:
+            kw.pop("gate_mode", None)
+        try:
+            out = core.guided_optimize(intent=args.intent, **kw)
+        except ValueError as exc:
+            print(f"optimize refused: {exc}", file=sys.stderr)
+            return 2
     elif args.cmd == "batch-preflight":
         from hermes_skillopt.batch import batch_preflight
         out = batch_preflight(args.plan, hermes_home_path=args.home)
@@ -131,12 +192,20 @@ def main() -> int:
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
-        out = core.review(args.run_id, args.home)
+        rid = "latest" if args.latest else args.run_id
+        if args.summary:
+            out = core.review_decision_summary(rid, args.home)
+        elif rid == "latest":
+            out = core.review_latest(args.home, include_diff_chars=args.include_diff_chars, slim=args.slim)
+        else:
+            out = core.review(rid, args.home, include_diff_chars=args.include_diff_chars, slim=args.slim)
     elif args.cmd == "resume-inspect":
         out = core.inspect_resume_run(args.run_id, hermes_home_path=args.home)
     elif args.cmd == "adopt":
         if args.unsafe_cross_profile_writeback and not args.home:
             print("--unsafe-cross-profile-writeback requires --home", file=sys.stderr)
+            return 2
+        if not _adopt_confirmation_ok(args):
             return 2
         out = core.adopt(args.run_id, args.home, args.force, unsafe_cross_profile=args.unsafe_cross_profile_writeback)
     elif args.cmd == "rollback":

@@ -1,6 +1,6 @@
 # Release notes
 
-## 0.1.0 P0-P3 implementation snapshot
+## 0.1.0 Phase0-Phase5 implementation snapshot
 
 - Documents latest batch/eval/fleet/WebUI/upstream status surfaces:
   - batch preflight validates data-only plans, budget caps, backend/target/gate policy, production-intent requirements, and forbidden writeback fields before any job runs;
@@ -10,6 +10,13 @@
   - React/FastAPI WebUI now exposes fleet/upstream parity surfaces while keeping runs staged-only and defaulting to review-oriented soft gating; production adoption still requires strict/non-mock/curated val-test proof plus explicit guarded adopt;
   - upstream benchmark adapter levels are explicit: `json_import_only` and `pinned_manifest_replay` are supported data-only evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported/future.
 
+- Documents latest guided/runtime/CI hardening deltas:
+  - `doctor`, `optimize --intent smoke|review|production`, `review latest --summary`, CLI adopt confirmation, and WebUI wizard/review console are aligned around staged-only/no-auto-adopt behavior;
+  - decision summaries expose production/test gate status, evidence class, blockers, artifact refs, and next safe action;
+  - missing runtime evidence for adoption-eligible frozen-target contracts downgrades production eligibility; scorecard/static skill-text evidence remains review-only and must not be described as true frozen Hermes execution;
+  - sandbox/frozen-Hermes target evidence records explicit evidence class/scope, isolated runtime fingerprints, permissions with task commands disabled, transcript/trajectory, and execution-scoring evidence; task-provided commands are blocked by default;
+  - production hard-failed rows override soft score gains, and artifact hygiene/conformance remain read-only local CI aids with no upstream benchmark parity claim.
+
 - Documents latest P0/P1/P2 hardening deltas:
   - shared `safety.py` report/eval output guard now covers benchmark import, transfer eval, and conformance reports, blocking live/runtime-sensitive profile/plugin/source paths and symlink escapes;
   - bounded edit validation now checks replacement/insert text for protected headings/markers and allowed-region marker boundary mutations;
@@ -18,7 +25,7 @@
   - upstream/benchmark reporting remains import-only/data-only with no Microsoft SkillOpt upstream execution/parity claim, no upstream Python import/network/task commands, and no live skill writes;
   - transfer eval remains report-only/read-only, now surfaces readiness/skill-type/evidence-contract summaries, and staged-only history/rejected/slow metadata remains audit evidence.
 
-- Documents current Phase0-3 behavior: staged-only Hermes SkillOpt-inspired adapter, eval-only/benchmark fixed-skill scoring with `hermes-native-benchmark-report-v1`, deterministic trainer batch metadata, provenance v2, separated optimizer/target backends, default `strict` gate mode, hard production validation failure overrides, conservative resume/checkpoint inspection with lineage summaries, history/lineage, slow_meta evidence, EnvAdapter benchmark/session foundation, benchmark bridge, transfer eval, conformance, and WebUI review surfaces.
+- Documents current Phase0-5 behavior: staged-only Hermes SkillOpt-inspired adapter, eval-only/benchmark fixed-skill scoring with `hermes-native-benchmark-report-v1`, deterministic trainer batch metadata, provenance v2, separated optimizer/target backends, default `strict` gate mode, hard production validation failure overrides, conservative resume/checkpoint inspection with lineage summaries, history/lineage, slow_meta evidence, EnvAdapter benchmark/session foundation, benchmark bridge, transfer eval, conformance, guided CLI/plugin/WebUI review surfaces, artifact hygiene reporting, and runtime-evidence gate checks.
 - Records latest eval hardening tasks 1-5:
   - upstream benchmark import now has a safe output path guard plus validate-before-replace writes;
   - adoption-capable runs default to strict gate mode, while soft/mixed are explicit review/non-production choices and production-eligible validation rows with `passed: false` block staging/adoptability even when soft score improves;

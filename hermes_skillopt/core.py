@@ -2004,6 +2004,178 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
     return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs, "stale_or_incomplete_checkpoints": checkpoint_only[:20]}
 
 
+def latest_run_id(hermes_home_path: str | None = None) -> str:
+    """Return the newest staged run id without creating or modifying files."""
+
+    rows = status(hermes_home_path).get("recent_runs") or []
+    if not rows:
+        raise ValueError("no SkillOpt staged runs found")
+    rid = str(rows[0].get("run_id") or "").strip()
+    if not rid:
+        raise ValueError("newest SkillOpt run has no run_id")
+    return rid
+
+
+def review_latest(hermes_home_path: str | None = None, include_diff_chars: int = 4000, slim: bool = False) -> dict[str, Any]:
+    """Review the newest staged run; read-only convenience wrapper."""
+
+    return review(latest_run_id(hermes_home_path), hermes_home_path=hermes_home_path, include_diff_chars=include_diff_chars, slim=slim)
+
+
+def review_decision_summary(run_id: str | None = None, hermes_home_path: str | None = None) -> dict[str, Any]:
+    """Return a slim, decision-first review summary for CLI/plugin UX."""
+
+    rid = (run_id or "").strip()
+    reviewed = review_latest(hermes_home_path, slim=True) if not rid or rid == "latest" else review(rid, hermes_home_path=hermes_home_path, slim=True)
+    reasons = reviewed.get("not_adoptable_reasons") or []
+    if reviewed.get("adoptable") is True:
+        decision = "ready_for_explicit_adopt"
+        next_action = f"Review artifacts, then type ADOPT {reviewed['run_id']} with the adopt command if you intend production writeback."
+    elif reviewed.get("accepted") is True:
+        decision = "review_only_not_adoptable"
+        next_action = "Inspect report/diff; rerun with production intent and strict real eval evidence before adopt."
+    else:
+        decision = "not_ready_rejected_or_incomplete"
+        next_action = "Inspect report/gate reasons; improve eval coverage or skill inputs and rerun staged optimize."
+    adoptable = reviewed.get("adoptable") is True
+    production_gate_eligible = reviewed.get("production_gate_eligible") is True
+    test_gate_eligible = reviewed.get("test_gate_eligible") is True
+    evidence_class = "production_candidate" if adoptable and production_gate_eligible and test_gate_eligible else "review_only_or_not_ready"
+    return {
+        "success": True,
+        "run_id": reviewed.get("run_id"),
+        "decision": decision,
+        "status": reviewed.get("status"),
+        "skill": reviewed.get("skill"),
+        "adoptable": adoptable,
+        "accepted": reviewed.get("accepted") is True,
+        "production_gate_eligible": production_gate_eligible,
+        "test_gate_eligible": test_gate_eligible,
+        "evidence_class": evidence_class,
+        "blockers": reasons,
+        "not_adoptable_reasons": reasons,
+        "gate": reviewed.get("gate"),
+        "artifact_refs": reviewed.get("artifact_refs"),
+        "next_action": next_action,
+        "next_safe_action": next_action,
+    }
+
+
+def doctor(hermes_home_path: str | None = None, *, skill: str | None = None) -> dict[str, Any]:
+    """Read-only readiness/guided UX summary. Does not run evals, adopt, rollback, or fetch network."""
+
+    home = hermes_home(hermes_home_path)
+    st = status(str(home))
+    dirs = skillopt_paths(home)
+    skills = discover_skills(home)
+    selected_skill = None
+    skill_ready = bool(skills)
+    skill_reason = "skills discovered" if skills else "no skills discovered under HERMES_HOME/skills"
+    if skill:
+        try:
+            found = find_skill(home, skill)
+            selected_skill = {"name": found.name, "path": str(found.path), "sha256": found.sha256}
+            skill_ready = True
+            skill_reason = "requested skill found"
+        except Exception as exc:
+            skill_ready = False
+            skill_reason = f"requested skill unavailable: {type(exc).__name__}: {exc}"
+    eval_inventory: dict[str, Any]
+    try:
+        from hermes_skillopt.eval_packs import eval_pack_inventory
+
+        inv = eval_pack_inventory(hermes_home_path=str(home), skill=skill)
+        eval_inventory = {
+            "available": True,
+            "summary": {k: inv.get(k) for k in ("skills_count", "eval_packs_count", "production_ready_count", "review_only_count") if k in inv},
+            "items": (inv.get("items") or inv.get("skills") or [])[:10],
+        }
+    except Exception as exc:
+        eval_inventory = {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    upstream = benchmark_parity_status(str(home))
+    recent = st.get("recent_runs") or []
+    latest = recent[0] if recent else None
+    production_ready = bool(skill_ready and eval_inventory.get("available"))
+    checklist = [
+        {"item": "skill_discovered", "ready": skill_ready, "detail": skill_reason},
+        {"item": "eval_inventory_readable", "ready": bool(eval_inventory.get("available")), "detail": eval_inventory.get("reason") or "inventory read"},
+        {"item": "strict_real_optimizer_for_production", "ready": False, "detail": "verified at optimize/adopt time; production intent requires strict gate, no mock, and explicit eval_file"},
+        {"item": "staged_only", "ready": True, "detail": "doctor/optimize never auto-adopt; adopt requires a separate typed confirmation"},
+        {"item": "upstream_parity_claims", "ready": True, "detail": upstream.get("parity_label")},
+    ]
+    return {
+        "success": True,
+        "mode": "read_only_doctor_no_full_run_no_adopt_no_rollback_no_fetch",
+        "hermes_home": str(home),
+        "active_hermes_home": str(active_hermes_home()),
+        "paths": {"skills": str(home / "skills"), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "upstream": str(dirs["upstream"])},
+        "skill_readiness": {"ready": skill_ready, "reason": skill_reason, "skills_count": len(skills), "selected_skill": selected_skill},
+        "eval_readiness": eval_inventory,
+        "recent_runs": recent[:5],
+        "latest_run": latest,
+        "upstream_parity_posture": {"full_parity_claim": False, "parity_label": upstream.get("parity_label"), "supported_parity_levels": upstream.get("supported_parity_levels"), "unsupported_parity_levels": upstream.get("unsupported_parity_levels")},
+        "production_readiness_checklist": checklist,
+        "production_ready_hint": production_ready,
+        "recommended_next_action": {
+            "smoke": "hermes-skillopt optimize --intent smoke --skill <skill>",
+            "review": "hermes-skillopt optimize --intent review --skill <skill> --eval-file <curated-or-review-pack>",
+            "production": "hermes-skillopt optimize --intent production --skill <skill> --eval-file <curated-production-pack> --optimizer-backend hermes --gate-mode strict",
+            "ci": "hermes-skillopt conformance --mode quick",
+        },
+    }
+
+
+def guided_optimize(intent: str = "review", **kwargs: Any) -> dict[str, Any]:
+    """Intent-presets wrapper around full_run; always staged-only and never auto-adopts."""
+
+    intent = (intent or "review").strip().lower()
+    if intent not in {"smoke", "review", "production"}:
+        raise ValueError("intent must be one of: smoke, review, production")
+    params = dict(kwargs)
+    params["auto_adopt"] = False
+    params["force"] = False
+    if intent == "smoke":
+        params["backend"] = params.get("backend") or "mock"
+        params["optimizer_backend"] = params.get("optimizer_backend") or "mock"
+        params["allow_mock"] = True
+        params["gate_mode"] = params.get("gate_mode") or "soft"
+        params["limit"] = int(params.get("limit") or 10)
+        params["iterations"] = int(params.get("iterations") or 1)
+        params["candidate_count"] = int(params.get("candidate_count") or 1)
+    elif intent == "review":
+        params["backend"] = params.get("backend") or "auto"
+        params["optimizer_backend"] = params.get("optimizer_backend")
+        params["allow_mock"] = bool(params.get("allow_mock", True))
+        params["gate_mode"] = params.get("gate_mode") or "soft"
+    else:
+        eval_file = params.get("eval_file")
+        if not eval_file:
+            raise ValueError("production intent requires explicit --eval-file; use review/smoke for discovery")
+        if params.get("allow_mock"):
+            raise ValueError("production intent requires --allow-mock to be false")
+        if (params.get("backend") or "auto") == "mock" or (params.get("optimizer_backend") or "") == "mock":
+            raise ValueError("production intent requires a non-mock optimizer backend")
+        if (params.get("gate_mode") or "strict") != "strict":
+            raise ValueError("production intent requires --gate-mode strict")
+        home = hermes_home(params.get("hermes_home_path"))
+        candidate = Path(str(eval_file)).expanduser()
+        if not candidate.is_absolute():
+            candidate = home / candidate
+        if not candidate.is_file():
+            raise ValueError(f"production intent eval_file does not exist: {candidate}")
+        params["backend"] = params.get("backend") or "auto"
+        params["optimizer_backend"] = params.get("optimizer_backend")
+        params["allow_mock"] = False
+        params["gate_mode"] = "strict"
+    out = full_run(**params)
+    out["intent"] = intent
+    out["auto_adopt"] = False
+    out["guided_behavior"] = "staged_only_explicit_review_required" if intent != "production" else "staged_only_no_auto_adopt_production_gates_required"
+    if intent in {"smoke", "review"}:
+        out["review_only_label"] = "review-only intent; do not treat as production adoption evidence"
+    return out
+
+
 def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, warnings: list[str] | None = None, verified: bool = False) -> dict[str, Any]:
     raw_gate_policy = manifest.get("gate_policy")
     gate_policy: dict[str, Any] = raw_gate_policy if isinstance(raw_gate_policy, dict) else {}

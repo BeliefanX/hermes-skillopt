@@ -389,6 +389,29 @@ def test_frozen_hermes_target_execution_v1_requires_runtime_evidence():
     assert result_meta["frozen_target_fingerprint_sha256"] == sandbox_out["target_fingerprint_sha256"]
 
 
+def test_scorecard_text_only_is_review_scope_not_frozen_runtime_evidence():
+    task = _production_real_target_task("scorecard-text-only")
+
+    out = TargetExecutor(runner=DeterministicKeywordScorecard(), requested_executor="scorecard").evaluate("verify SANDBOX_OK", [task])
+    check = out["eval_execution_contract_checks"][0]
+    assert isinstance(check, dict)
+    ledger = out["score_ledger"]
+    assert isinstance(ledger, dict)
+    contract = out["target_execution_evidence_contract"]
+    assert isinstance(contract, dict)
+
+    assert out["executor"] == "deterministic_mock_scorecard"
+    assert out["production_gate_eligible"] is False
+    assert out["evaluation_scope"] == "review_only_deterministic_fallback"
+    assert ledger["production_curated_score"] is None
+    assert ledger["review_only_score"] == out["score"]
+    assert check["classification"] == "frozen_hermes_target_execution_v1"
+    assert check["runtime_evidence_complete"] is False
+    assert "runtime_available_true" in check["missing_runtime_evidence"]
+    assert "execution_scoring" in check["missing_runtime_evidence"]
+    assert contract["missing_required_evidence_makes_production_eligible"] is False
+
+
 def test_frozen_hermes_contract_blocks_task_commands_and_runtime_unavailable():
     task = _production_real_target_task("real-target-injection")
     task.fixtures["command"] = "touch /tmp/hermes-skillopt-should-not-run"

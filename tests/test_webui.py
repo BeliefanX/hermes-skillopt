@@ -89,7 +89,7 @@ def test_webui_upstream_update_ignores_home_override(monkeypatch, tmp_path):
 def test_cli_writeback_unsafe_flag_is_explicit(monkeypatch, tmp_path, capsys):
     calls = []
     monkeypatch.setattr(cli.core, "adopt", lambda *args, **kwargs: calls.append((args, kwargs)) or {"success": True})
-    monkeypatch.setattr(sys, "argv", ["hermes-skillopt", "--home", str(tmp_path), "adopt", "rid", "--unsafe-cross-profile-writeback"])
+    monkeypatch.setattr(sys, "argv", ["hermes-skillopt", "--home", str(tmp_path), "adopt", "rid", "--confirm", "ADOPT rid", "--unsafe-cross-profile-writeback"])
     assert cli.main() == 0
     assert calls == [(("rid", str(tmp_path), False), {"unsafe_cross_profile": True})]
     monkeypatch.setattr(sys, "argv", ["hermes-skillopt", "adopt", "rid", "--unsafe-cross-profile-writeback"])
@@ -105,6 +105,17 @@ def test_webui_review_latest_reads_only_staging_artifacts(tmp_path):
     assert "SkillOpt dry run" in payload["report"]
     assert "SkillOpt Candidate Improvements" in payload["diff"]
     assert "SkillOpt Candidate Improvements" in payload["candidate"]
+    for field in ("decision", "adoptable", "blockers", "production_gate", "test_gate", "evidence_class", "artifacts", "next_safe_action"):
+        assert field in payload
+
+
+def test_webui_run_api_production_intent_requires_eval_and_strict_no_mock(tmp_path):
+    with pytest.raises(ValueError, match="production intent requires explicit"):
+        webui_api.run_full({"intent": "production", "skill": "demo", "home": str(tmp_path), "gate_mode": "strict", "allow_mock": False})
+    eval_file = tmp_path / "eval.jsonl"
+    eval_file.write_text('{"input":"x","expected":"y"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="allow-mock"):
+        webui_api.run_full({"intent": "production", "skill": "demo", "home": str(tmp_path), "eval_file": str(eval_file), "gate_mode": "strict", "allow_mock": True})
 
 
 def test_cli_webui_propagates_home(monkeypatch, tmp_path):
@@ -166,11 +177,21 @@ def test_fastapi_routes_and_static_assets(monkeypatch, tmp_path):
     status = client.get("/api/status", params={"home": str(tmp_path)})
     assert status.status_code == 200
     assert status.json()["hermes_home"] == str(tmp_path)
+    doctor = client.get("/api/doctor", params={"home": str(tmp_path), "skill": "demo"})
+    assert doctor.status_code == 200
+    assert doctor.json()["mode"] == "read_only_doctor_no_full_run_no_adopt_no_rollback_no_fetch"
     fleet = client.get("/api/fleet/report", params={"home": str(tmp_path), "limit": 5})
     assert fleet.status_code == 200
     assert fleet.json()["mode"].startswith("read_only_report")
     assert client.get("/api/fleet/resume-plan", params={"home": str(tmp_path)}).status_code == 200
     assert client.get("/api/fleet/rollback-plan", params={"home": str(tmp_path)}).status_code == 200
+    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    latest = client.get("/api/review/latest", params={"home": str(tmp_path)})
+    assert latest.status_code == 200
+    assert latest.json()["run_id"] == run["run_id"]
+    summary = client.get("/api/review/summary", params={"home": str(tmp_path), "run_id": run["run_id"]})
+    assert summary.status_code == 200
+    assert "next_action" in summary.json()
     assert client.get("/manifest.webmanifest").status_code == 200
     manifest_json = client.get("/manifest.json")
     assert manifest_json.status_code == 200
@@ -245,6 +266,19 @@ def test_mobile_topbar_controls_move_to_sheet_contract():
     assert "<header className=\"topbar\"" in jsx
     assert "<div className=\"sheet-controls\">{topControls}</div>" in jsx
     assert "aria-label={t.openMenu}" in jsx
+
+
+def test_webui_phase4_wizard_and_decision_first_contracts():
+    repo = Path(__file__).resolve().parents[1]
+    jsx = (repo / "web" / "src" / "main.tsx").read_text(encoding="utf-8")
+    assert "Smoke" in jsx and "Review-only" in jsx and "Production" in jsx
+    assert "strict gate" in jsx and "no mock" in jsx
+    assert "staged-only / no auto-adopt" in jsx
+    assert "Decision-first review" in jsx
+    for field in ("adoptable", "blockers", "production_gate", "test_gate", "evidence_class", "artifacts", "next_safe_action"):
+        assert field in jsx
+    assert "TextBlock title=\"diff.patch\"" in jsx
+    assert "RawBlock title={t.rawReview}" in jsx
 
 
 def test_cli_and_module_webui_help_smoke():

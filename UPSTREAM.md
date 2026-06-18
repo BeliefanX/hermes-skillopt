@@ -43,7 +43,7 @@ Semantics:
 
 ## Upstream seam matrix / delta checklist
 
-`upstream-status` returns this matrix under `feature_matrix`/`delta_checklist`; `skillopt_upstream.lock` also records the P3 lock-time seams (`benchmark_bridge`, `transfer_eval`, `conformance`, `webui_writeback`). Keep both in sync when porting upstream ideas.
+`upstream-status` returns this matrix under `feature_matrix`/`delta_checklist`; `skillopt_upstream.lock` also records the current Phase0-Phase5 lock-time seams (`benchmark_bridge`, `transfer_eval`, `conformance`, `webui_writeback`, guided UX, artifact hygiene). Keep both in sync when porting upstream ideas.
 
 - `trainer_loop`: upstream rollout/reflection/update/evaluate loop is adapted as `SixStageSkillOptTrainer` rollout → reflect → aggregate → select → update → evaluate with six stage artifacts and staged-only writes.
 - `reflection_prompts`: upstream reflection prompting is adapted as redacted `OptimizerBackend.reflect` prompts with rejected-history context and prompt SHA-256 provenance.
@@ -58,6 +58,8 @@ Semantics:
 - `fleet_ux`: fleet/rollback reports group local Hermes runs by skill/type/readiness/adoptability/rollbackability and expose per-run rollback guard status; they are reporting surfaces, not upstream orchestration parity.
 - `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
 - `safe_outputs`: import/transfer/conformance report writers share a safe output path guard that blocks live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular outputs, wrong suffixes, and symlink escapes.
+- `guided_review_ux`: `doctor`, `optimize --intent`, `review latest --summary`, WebUI wizard/review console, and CLI/WebUI typed adopt confirmation are Hermes safety surfaces, not upstream parity claims.
+- `artifact_hygiene`: staging hygiene reports classify local artifact state for cleanup planning only; they do not delete, resume, adopt, or rollback.
 
 ## Upstream benchmark adapter levels
 

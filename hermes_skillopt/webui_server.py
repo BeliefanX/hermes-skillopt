@@ -65,6 +65,7 @@ def create_app(home_default: Any = None):
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: internal WebUI operation failed") from exc
 
     class RunRequest(BaseModel):
+        intent: str = "review"
         skill: Optional[str] = None
         query: Optional[str] = None
         eval_file: Optional[str] = None
@@ -106,6 +107,10 @@ def create_app(home_default: Any = None):
     def api_status(home: Optional[str] = None):
         return safe_response(lambda: webui_api.status(home or home_default))
 
+    @app.get("/api/doctor")
+    def api_doctor(home: Optional[str] = None, skill: Optional[str] = None):
+        return safe_response(lambda: webui_api.doctor(home or home_default, skill=skill))
+
     @app.post("/api/run")
     def api_run(req: RunRequest):
         data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
@@ -116,6 +121,14 @@ def create_app(home_default: Any = None):
     @app.get("/api/review")
     def api_review(run_id: Optional[str] = "", home: Optional[str] = None):
         return safe_response(lambda: webui_api.review(run_id, home or home_default))
+
+    @app.get("/api/review/latest")
+    def api_review_latest(home: Optional[str] = None):
+        return safe_response(lambda: webui_api.review_latest(home or home_default))
+
+    @app.get("/api/review/summary")
+    def api_review_summary(run_id: Optional[str] = "", home: Optional[str] = None):
+        return safe_response(lambda: core.review_decision_summary(run_id or "latest", hermes_home_path=home or home_default))
 
     @app.get("/api/fleet/report")
     def api_fleet_report(home: Optional[str] = None, limit: int = Query(50, ge=1, le=200), skill: Optional[str] = None):

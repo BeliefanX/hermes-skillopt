@@ -1,6 +1,6 @@
 # Hermes SkillOpt architecture
 
-This document describes the current P0-P3 architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
+This document describes the current Phase0-Phase5 architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
 
 ## Boundaries
 
@@ -10,7 +10,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 
 ## Main modules
 
-- `core.py`: orchestration, status/review/adopt/rollback, eval-only/benchmark fixed-skill reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, and held-out sensitivity reporting.
+- `core.py`: orchestration, status/review/adopt/rollback, guided `doctor`/`optimize` decision UX, eval-only/benchmark fixed-skill reports, artifact hygiene reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, and held-out sensitivity reporting.
 - `batch.py`: data-only batch preflight and staged-only batch runner with budget enforcement and forbidden writeback field rejection.
 - `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
 - `eval_packs.py`: read-only eval-pack inventory plus safe review-only scaffold generation for missing skill coverage.
@@ -52,6 +52,8 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 `batch_preflight()` validates `hermes-skillopt-batch-plan-v1` without writes. It enforces budget caps (`max_jobs`, `max_total_iterations`, `max_total_candidates`), integer defaults, backend/target/gate enums, production-intent `skill`/`eval_file`, and forbidden writeback fields. `run_batch()` writes a batch parent staging directory only after preflight, then invokes child `full_run()` calls with `auto_adopt=False` and `force=False`; batch target enum validation currently accepts `auto|replay|sandbox|scorecard|live-readonly|frozen-hermes|frozen_hermes_target_execution_v1`, with frozen aliases limited to the sandbox-backed MVP evidence contract.
 
 Fleet functions (`fleet_report`, `fleet_resume_plan`, `fleet_rollback_plan`) inspect recent run dirs, batch parents/children, checkpoints, and backup state. Fleet report rows include readiness, advisory skill type, and evidence-contract summaries, and the report groups by skill/type/readiness/adoptability/rollbackability. Rollback planning includes safely readable backup/current-SHA status and a per-run command template. They are read-only reporting/planning surfaces: no full-run invocation, no partial resume execution, no deletion/cleanup, no bulk rollback, and no skill writes.
+
+Guided UX functions are also safety-scoped. `doctor()` is read-only readiness reporting. `guided_optimize()` powers CLI/plugin/WebUI intent presets and always disables auto-adopt. `review_decision_summary()` is the decision-first read surface for CLI/plugin/WebUI and exposes production/test gate booleans, evidence class, blockers, artifact refs, and next safe action. `artifact_hygiene_report()` classifies stale/tampered/incomplete/orphaned staging artifacts for reviewer cleanup decisions but never deletes or resumes anything.
 
 ## Artifact model
 
@@ -108,7 +110,7 @@ Adopt requires:
 
 Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
 
-## P0-P3 closure map
+## Phase0-Phase5 closure map
 
 Current code closes the earlier architecture gaps in these bounded ways:
 
@@ -116,7 +118,8 @@ Current code closes the earlier architecture gaps in these bounded ways:
 - P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance writes local compile/pytest reports.
-- P2/P3 orchestration/UX utilities: batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes real curated-pack coverage gaps; React/FastAPI WebUI surfaces fleet/upstream parity while keeping `auto_adopt=false`.
+- Phase2/Phase3 orchestration/UX utilities: batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes real curated-pack coverage gaps; React/FastAPI WebUI surfaces guided wizard/review console/fleet/upstream parity while keeping `auto_adopt=false`.
+- Phase4/Phase5 guided/runtime-evidence hardening: `doctor`, `optimize --intent`, `review --summary`, CLI/WebUI typed adopt confirmation, artifact hygiene reporting, runtime-evidence contract checks, scorecard-vs-frozen-evidence separation, and production hard-fail overrides are encoded in core surfaces and tests.
 
 Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
 

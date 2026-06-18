@@ -4,9 +4,11 @@ description: "Hermes SkillOpt plugin: staged skill optimization with curated gat
 author: "BeliefanX / Hermes Agent"
 provides_tools:
   - hermes_skillopt_status
+  - hermes_skillopt_doctor
   - hermes_skillopt_dry_run
   - hermes_skillopt_run
   - hermes_skillopt_full_run
+  - hermes_skillopt_optimize
   - hermes_skillopt_batch_preflight
   - hermes_skillopt_batch_run
   - hermes_skillopt_fleet_report
