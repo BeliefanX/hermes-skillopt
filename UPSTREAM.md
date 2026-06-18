@@ -56,7 +56,7 @@ Semantics:
 - `benchmark_bridge`: upstream-style benchmark manifests are accepted only as inert JSON data and converted to Hermes eval packs; executable/remote benchmark fields are rejected.
 - `transfer_eval`: cross-target/profile checks are read-only deterministic transfer reports over staged/proposed skill text with readiness/skill-type/evidence-contract summaries, not live cross-model training, upstream parity, or writeback.
 - `fleet_ux`: fleet/rollback reports group local Hermes runs by skill/type/readiness/adoptability/rollbackability and expose per-run rollback guard status; they are reporting surfaces, not upstream orchestration parity.
-- `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access.
+- `conformance`: local compile/pytest reports define this adapter's regression contract without requiring upstream checkout, external services, or network access. It returns JSON by default and writes a file only when an explicit guarded `--output` path is supplied.
 - `safe_outputs`: import/transfer/conformance report writers share a safe output path guard that blocks live skills/plugins/config/memory/cron/runtime paths, plugin/repo source paths, non-regular outputs, wrong suffixes, and symlink escapes.
 - `guided_review_ux`: `scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`, WebUI scout/wizard/review console, and CLI/WebUI typed adopt confirmation are Hermes safety surfaces, not upstream parity claims.
 - `readiness_review_schema`: inventory/review/WebUI/scout use `hermes-skillopt-readiness-adoptability-v1`, `hermes-skillopt-readiness-matrix-v1`, score provenance, and slim artifact refs to separate review-only acceptance from production/test adoptability.
@@ -110,7 +110,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - Sandbox/frozen-Hermes support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor or real upstream benchmark runner.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
 - `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; safe `json_import_only` and data-only `pinned_manifest_replay` conversion are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. Transfer eval does not create real cross-model claims. Reports distinguish production-curated scores from review-only scores and surface per-task deltas/ledger evidence rather than collapsing all evidence into a single benchmark claim.
-- `scout` and `review --digest` are notification/review conveniences only: they surface safe next actions, score provenance, gate separation, and artifact refs, but never fetch upstream, run optimizers, adopt, rollback, schedule cron, or claim parity.
+- `scout` and `review --digest` are notification/review conveniences only: they surface safe next actions, score provenance, gate separation, and artifact refs, but never fetch upstream, run optimizers, adopt, rollback, schedule cron, or claim parity. Scheduled automation should be limited to read-only `scout`, `doctor`, `eval-pack-inventory`, and `review --digest` surfaces.
 
 ## Upstream diff/status workflow
 

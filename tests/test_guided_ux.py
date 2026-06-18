@@ -229,6 +229,37 @@ def test_scout_safe_next_commands_quote_dynamic_home_and_skill(tmp_path):
     assert "--skill demo odd;$(touch pwned)" not in scout_cmd
 
 
+def test_scout_mixed_production_ready_and_missing_eval_pack_does_not_crash(tmp_path):
+    make_skill(tmp_path, "prod")
+    make_skill(tmp_path, "missing odd;$(touch pwned)")
+    from hermes_skillopt.eval_packs import create_curated_eval_pack
+
+    create_curated_eval_pack(
+        hermes_home_path=str(tmp_path),
+        skill="prod",
+        production_policy={"allow_production_adoption": True, "reviewed_by": "unit-test"},
+        tasks=[
+            {"id": "train-1", "split": "train", "prompt": "Train tool safety.", "expected_keywords": ["tool"], "production_gate_eligible": False},
+            {"id": "val-1", "split": "validation", "prompt": "Validate grounded tool safety.", "expected_keywords": ["grounded", "tool"], "production_gate_eligible": True},
+            {"id": "test-1", "split": "test", "prompt": "Held-out rollback guard test.", "expected_keywords": ["rollback", "guard"], "production_gate_eligible": True},
+        ],
+    )
+
+    out = core.scout(hermes_home_path=str(tmp_path), limit=2)
+
+    assert out["success"] is True
+    assert out["summary"]["production_eligible_eval_pack_count"] == 1
+    assert out["summary"]["no_eval_pack_count"] == 1
+    assert any(a["action"] == "create_or_curate_eval_pack" for a in out["next_actions"])
+    assert any(a["action"] == "run_production_candidate_only_when_eligible" for a in out["next_actions"])
+    scaffold_cmd = out["safe_next_commands"]["create_or_curate_eval_pack"]
+    production_cmd = out["safe_next_commands"]["production_candidate_when_eligible"]
+    assert "missing odd;$(touch pwned)" in shlex.split(scaffold_cmd)
+    assert "prod" in shlex.split(production_cmd)
+    assert "--skill missing odd;$(touch pwned)" not in scaffold_cmd
+    assert out["report_path"] is None
+
+
 def test_scout_safe_next_commands_quote_latest_run_id(tmp_path):
     make_skill(tmp_path, "demo")
     malicious_run_id = "zz;touch pwned"
@@ -312,13 +343,13 @@ def test_cli_optimize_production_refusal_is_clear(tmp_path):
 
 def test_cli_scout_returns_slim_json_without_writing_default(tmp_path):
     make_skill(tmp_path)
-    proc = subprocess.run([sys.executable, "-m", "hermes_skillopt.cli", "--home", str(tmp_path), "scout", "--skill", "demo"], cwd=Path(__file__).resolve().parents[1], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    proc = subprocess.run([sys.executable, "-m", "hermes_skillopt.cli", "--home", str(tmp_path), "scout", "--limit", "2"], cwd=Path(__file__).resolve().parents[1], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     payload = json.loads(proc.stdout)
     assert payload["schema_version"] == "hermes-skillopt-scout-v1"
     assert payload["report_path"] is None
-    assert payload["safe_next_commands"]["scout"].endswith("scout --skill demo")
+    assert payload["safe_next_commands"]["scout"].endswith("scout")
     assert not (tmp_path / "skillopt").exists()
 
 

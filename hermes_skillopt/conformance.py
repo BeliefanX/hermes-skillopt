@@ -39,11 +39,12 @@ def _safe_conformance_report_path(output_path: str | Path, *, repo_root: Path) -
 
 
 def run_conformance(*, repo_root: str | Path | None = None, output_path: str | Path | None = None, pytest_args: Iterable[str] | None = None, timeout: int = 180, mode: str = "quick") -> dict[str, Any]:
-    """Run local conformance and emit a JSON report.
+    """Run local conformance and optionally emit a JSON report.
 
     ``mode='quick'`` is the default deterministic smoke/regression suite and is
     intentionally not a full repository health check. Use ``mode='full'`` to run
-    all pytest tests after compileall.
+    all pytest tests after compileall. When ``output_path`` is omitted, no report
+    file is written; the report is returned in-memory with ``report_path=None``.
     """
 
     root = Path(repo_root or Path(__file__).resolve().parents[1]).resolve()
@@ -61,10 +62,7 @@ def run_conformance(*, repo_root: str | Path | None = None, output_path: str | P
         args = QUICK_PYTEST_ARGS.copy()
         suite = "quick-local-deterministic"
         scope_note = "Quick deterministic conformance smoke suite only; not a full repository health check. Use mode='full' for all tests."
-    if output_path:
-        out = _safe_conformance_report_path(output_path, repo_root=root)
-    else:
-        out = root / "skillopt_conformance_report.json"
+    out = _safe_conformance_report_path(output_path, repo_root=root) if output_path else None
     commands = [
         _run([sys.executable, "-m", "compileall", "-q", "hermes_skillopt", "tests"], root, timeout),
         _run([sys.executable, "-m", "pytest", *args], root, timeout),
@@ -95,6 +93,7 @@ def run_conformance(*, repo_root: str | Path | None = None, output_path: str | P
             ],
         },
     }
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return {"success": payload["passed"], "report_path": str(out), "report": payload}
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"success": payload["passed"], "report_path": str(out) if out is not None else None, "report": payload}

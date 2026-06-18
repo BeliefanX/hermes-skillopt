@@ -232,6 +232,7 @@ def test_curated_eval_pack_factory_invalid_production_request_does_not_create_fi
         )
 
     assert not out_path.exists()
+    assert not list(out_path.parent.glob(f".{out_path.name}.curated.*.tmp.json"))
 
 
 def test_curated_eval_pack_factory_invalid_production_request_preserves_existing_file(tmp_path):
@@ -254,6 +255,31 @@ def test_curated_eval_pack_factory_invalid_production_request_preserves_existing
         )
 
     assert out_path.read_text(encoding="utf-8") == sentinel
+    assert not list(out_path.parent.glob(f".{out_path.name}.curated.*.tmp.json"))
+
+
+def test_review_only_factories_cannot_become_production_eligible_automatically(tmp_path):
+    make_skill(tmp_path, "demo")
+
+    scaffold_path = tmp_path / "skillopt" / "evals" / "demo-scaffold.json"
+    scaffold = scaffold_eval_pack(skill="demo", output=scaffold_path, hermes_home_path=str(tmp_path))
+    scaffold_payload = json.loads(scaffold_path.read_text(encoding="utf-8"))
+    assert scaffold["production_eligible"] is False
+    assert scaffold["report"]["production_eligible"] is False
+    assert scaffold_payload["production_policy"]["allow_production_adoption"] is False
+    assert all(t["production_gate_eligible"] is False for t in scaffold_payload["tasks"])
+
+    fixture = tmp_path / "sessions_fixture.json"
+    fixture.write_text(json.dumps({"sessions": [{"id": "s1", "text": "verified demo tool behavior"}]}), encoding="utf-8")
+    mined_path = tmp_path / "skillopt" / "evals" / "demo-session-mined.json"
+    mined = mine_session_eval_pack(skill="demo", output=mined_path, hermes_home_path=str(tmp_path), session_fixture=fixture)
+    mined_payload = json.loads(mined_path.read_text(encoding="utf-8"))
+    assert mined["production_eligible"] is False
+    assert mined["report"]["production_eligible"] is False
+    assert mined_payload["task_origin"] == "session-mined"
+    assert mined_payload["production_policy"]["allow_production_adoption"] is False
+    assert all(t["production_gate_eligible"] is False for t in mined_payload["tasks"])
+    assert all(t["task_origin"] == "session-mined" for t in mined_payload["tasks"])
 
 
 def test_session_mined_eval_pack_is_review_only_redacted_and_loadable(tmp_path):

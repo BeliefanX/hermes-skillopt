@@ -57,7 +57,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - `python3 -m hermes_skillopt.cli scout [--skill SKILL] [--output skillopt/reports/scout.json]`
   - Read-only notification-ready summary: skill/package metadata, eval-pack inventory/readiness, recent staged runs, artifact hygiene classifications, safe next commands, and scout-only cron guidance.
-  - Does not run full-run/optimize, fetch/update upstream, adopt, rollback, write live profile files, or create cron entries.
+  - Does not run full-run/optimize, fetch/update upstream, adopt, rollback, write live profile files, or create cron entries. Without `--output`, CLI scout returns JSON only and writes no report.
 
 - `python3 -m hermes_skillopt.cli optimize --intent smoke|review|production ...`
   - Guided staged-only wrapper over `full_run`; always disables auto-adopt and force.
@@ -112,7 +112,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
   - Modes: `quick` (default deterministic smoke/regression suite) and `full` (all local pytest tests).
   - Important: quick mode is not a full repository health check and must not be reported as one.
   - Runs: `python -m compileall -q hermes_skillopt tests` plus mode-selected/custom pytest args.
-  - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`, written only through the shared safe report path guard when an output file is requested.
+  - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`. Default is no file write (`report_path: null`); `--output`/`output_path` is required to write a guarded `.json` report. The old implicit repo-root `skillopt_conformance_report.json` behavior is intentionally absent.
 
 - `hermes_skillopt.core.artifact_hygiene_report(...)`
   - Read-only staging classifier for `complete_verified`, `tampered_hash_mismatch`, `checkpoint_only_recent`, `stale_incomplete_checkpoint_only`, `stale_checkpoint_only`, `missing_manifest_or_checkpoint`, and `orphaned_batch_child` artifacts.
@@ -137,6 +137,8 @@ CLI equivalents (console script after editable install, or `python3 -m hermes_sk
 - `hermes-skillopt import-upstream-benchmark MANIFEST --output PACK.json`
 - `hermes-skillopt transfer-eval --run-id RUN --target scorecard --target replay --output report.json`
 - `hermes-skillopt conformance --output conformance.json`
+
+Scheduled automation should stay read-only: `scout`, `doctor`, `eval-pack-inventory`, and `review --digest` are appropriate notification inputs. Do not cron `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, or cleanup/writeback actions.
 
 Hermes plugin tool equivalents registered in `plugin.yaml`:
 
@@ -172,3 +174,4 @@ Each six-stage trainer artifact under `stages/` records `schema_version: skillop
 - Phase3 integration utilities: benchmark import, transfer eval, conformance, and shared safe report output guards are local/report-only and no-parity.
 - Phase4 guided UX: `doctor`, `optimize --intent`, `review --summary`, CLI adopt confirmation, and WebUI wizard/review console keep smoke/review/production intent labels aligned with staged-only/no-auto-adopt behavior.
 - Phase5 runtime/CI evidence: missing runtime evidence downgrades frozen-target contracts to review-only, production hard-fails override soft score gains, artifact hygiene is read-only, and CI conformance must not be reported as upstream benchmark parity.
+- P0-P2 safety patch notes: scout mixed-inventory gaps are reported instead of raising, scout remains cron-safe/read-only, eval-pack factory writes validate atomically before replacement, target evidence summaries mark task-command execution as incomplete evidence, and conformance writes no report unless an explicit guarded output path is supplied.

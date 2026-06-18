@@ -19,6 +19,9 @@
   - production hard-failed rows override soft score gains, and artifact hygiene/conformance remain read-only local CI aids with no upstream benchmark parity claim.
 
 - Documents latest P0/P1/P2 hardening deltas:
+  - scout mixed-inventory gaps are handled as reportable readiness gaps instead of crashing; scout is cron-safe/read-only and CLI scout writes no report unless `--output` is supplied;
+  - conformance now returns JSON with `report_path: null` by default and writes a guarded file only with explicit `--output`; it no longer creates a repo-root `skillopt_conformance_report.json` by default;
+  - eval-pack factory/import writes validate before atomic replacement, and target evidence summaries treat `task_commands_executed=true` as incomplete evidence rather than production-ready proof;
   - shared `safety.py` report/eval output guard now covers benchmark import, transfer eval, and conformance reports, blocking live/runtime-sensitive profile/plugin/source paths and symlink escapes;
   - bounded edit validation now checks replacement/insert text for protected headings/markers and allowed-region marker boundary mutations;
   - `frozen-hermes` / `frozen_hermes_target_execution_v1` is a sandbox-backed Hermes target execution MVP with isolated runtime evidence, provider/model/toolset/session fingerprints, transcript/trajectory scoring evidence, task commands disabled, and no live writes;

@@ -502,6 +502,30 @@ def test_conformance_report_generation(tmp_path):
     assert result["success"] is True
 
 
+def test_conformance_default_output_does_not_write_repo_report(monkeypatch, tmp_path):
+    import hermes_skillopt.conformance as conformance
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    default_report = repo_root / "skillopt_conformance_report.json"
+    calls = []
+
+    def fake_run(cmd, cwd, timeout):
+        calls.append((cmd, cwd, timeout))
+        return {"cmd": cmd, "returncode": 0, "passed": True, "output_tail": "", "output_tail_sha256": hashlib.sha256(b"").hexdigest()}
+
+    monkeypatch.setattr(conformance, "_run", fake_run)
+    result = conformance.run_conformance(repo_root=repo_root, pytest_args=["tests/test_p3.py::test_transfer_eval_defaults_to_staged_input"], timeout=60)
+
+    assert result["success"] is True
+    assert result["report_path"] is None
+    assert result["report"]["mode"] == "quick"
+    assert result["report"]["quick_is_full_repo_health"] is False
+    assert "not necessarily a full repository health" in result["report"]["scope_note"]
+    assert len(calls) == 2
+    assert not default_report.exists()
+
+
 def test_conformance_report_output_cannot_target_live_runtime_paths(tmp_path, monkeypatch):
     import hermes_skillopt.conformance as conformance
 

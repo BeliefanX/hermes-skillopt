@@ -1068,7 +1068,11 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
     if isinstance(test_results, dict):
         evals.append(test_results)
     results = _flatten_eval_results(*evals)
-    metadata_rows = [r.get("metadata") for r in results if isinstance(r.get("metadata"), dict)]
+    metadata_rows: list[dict[str, Any]] = []
+    for r in results:
+        meta = r.get("metadata")
+        if isinstance(meta, dict):
+            metadata_rows.append(meta)
     contract_checks = [c for ev in evals for c in (ev.get("eval_execution_contract_checks") or []) if isinstance(c, dict)]
     params = target_config.get("parameters") if isinstance(target_config.get("parameters"), dict) else {}
     frozen_requested = target_backend in {"hermes_sandbox_executor_mvp", "frozen-hermes", "frozen_hermes_target_execution_v1", "sandbox"} or bool(params.get("frozen_hermes_contract"))
@@ -1077,7 +1081,16 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
     runtime_available = any(isinstance(m.get("runtime_fingerprint"), dict) and m["runtime_fingerprint"].get("available") is True for m in metadata_rows)
     sandbox_mvp = str(target_config.get("executor") or target_backend) == "hermes_sandbox_executor_mvp"
     permissions = exemplar.get("permissions") if isinstance(exemplar.get("permissions"), dict) else {}
-    complete = bool(frozen_requested and contract_checks and not missing and permissions.get("task_commands_allowed") is False and permissions.get("profile_write_allowed") is False and runtime_available)
+    task_commands_executed = any(m.get("task_commands_executed") is True for m in metadata_rows)
+    complete = bool(
+        frozen_requested
+        and contract_checks
+        and not missing
+        and permissions.get("task_commands_allowed") is False
+        and permissions.get("profile_write_allowed") is False
+        and runtime_available
+        and not task_commands_executed
+    )
     payload = {
         "schema_version": "skillopt-target-execution-evidence-v1",
         "classification": "frozen_hermes_target_execution_v1" if frozen_requested else "non_frozen_or_scorecard_target",
@@ -1097,7 +1110,7 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
         "isolated_runtime_proof": exemplar.get("isolated_runtime_evidence"),
         "permissions": {"task_commands_allowed": permissions.get("task_commands_allowed"), "profile_write_allowed": permissions.get("profile_write_allowed"), "live_profile_writes": permissions.get("live_profile_writes")},
         "task_command_policy": "task-provided commands disabled/blocked by default; never executed for evidence",
-        "task_commands_executed": any(m.get("task_commands_executed") is True for m in metadata_rows),
+        "task_commands_executed": task_commands_executed,
         "trajectory_or_transcript_artifact_fingerprint": {
             "validation": (validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(validation_summary, dict) else None,
             "production_validation": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
@@ -2481,9 +2494,9 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
     if production_ready:
         first = shlex.quote(str(production_ready[0].get("skill") or "<skill>"))
         safe_commands["production_candidate_when_eligible"] = f"hermes-skillopt --home {command_home} optimize --intent production --skill {first} --eval-file <curated-production-pack> --optimizer-backend hermes --gate-mode strict"
-    else:
-        first_missing = shlex.quote(str((no_pack[0] if no_pack else {}).get("skill") or skill or "<skill>"))
-        safe_commands["create_or_curate_eval_pack"] = f"hermes-skillopt --home {command_home} eval-pack-scaffold --skill {first_missing}"
+    coverage_target = no_pack[0] if no_pack else (invalid_pack[0] if invalid_pack else {})
+    first_coverage_gap = shlex.quote(str(coverage_target.get("skill") or skill or "<skill>"))
+    safe_commands["create_or_curate_eval_pack"] = f"hermes-skillopt --home {command_home} eval-pack-scaffold --skill {first_coverage_gap}"
 
     next_actions: list[dict[str, Any]] = []
     if latest_run_id:

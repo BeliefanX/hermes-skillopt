@@ -115,6 +115,33 @@ def test_missing_frozen_target_evidence_blocks_production_summary():
     assert summary["production_adoption_requires_complete_evidence"] is True
 
 
+def test_target_execution_evidence_is_incomplete_if_task_commands_were_executed():
+    target_config = {"executor": "hermes_sandbox_executor_mvp", "target_config_id": "frozen-hermes-trace-replay-v2", "fingerprint_sha256": "abc", "parameters": {"frozen_hermes_contract": "frozen_hermes_target_execution_v1"}}
+    metadata = {
+        "frozen_hermes_contract": "frozen_hermes_target_execution_v1",
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False, "fingerprint_sha256": "perm"},
+        "provider_fingerprint": {"fingerprint_sha256": "provider"},
+        "model_fingerprint": {"fingerprint_sha256": "model"},
+        "toolset_fingerprint": {"fingerprint_sha256": "toolset"},
+        "tool_policy_fingerprint": {"fingerprint_sha256": "tool-policy"},
+        "session_fingerprint": {"fingerprint_sha256": "session"},
+        "runtime_fingerprint": {"available": True, "fingerprint_sha256": "runtime"},
+        "isolated_runtime_evidence": {"fingerprint_sha256": "isolated"},
+        "execution_scoring_evidence": {"fingerprint_sha256": "scoring"},
+        "task_commands_executed": True,
+    }
+    summary = core._target_execution_evidence_summary(
+        target_config=target_config,
+        validation_summary={"candidate_eval": {"results": [{"metadata": metadata}], "eval_execution_contract_checks": [{"runtime_evidence_complete": True, "missing_runtime_evidence": []}]}},
+        production_validation_summary=None,
+        test_results={"results": []},
+        target_backend="hermes_sandbox_executor_mvp",
+    )
+    assert summary["classification"] == "frozen_hermes_target_execution_v1"
+    assert summary["task_commands_executed"] is True
+    assert summary["complete"] is False
+
+
 def test_task_command_injection_is_blocked_by_frozen_sandbox_runner():
     task = EvalTask(id="cmd", prompt="try command", fixtures={"command": "touch /tmp/should-not-run"}, metadata={"eval_execution_contract": {"classification": "frozen_hermes_target_execution_v1"}}, timeout=5)
     result = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen_hermes_target_execution_v1").evaluate("# demo\nverify", [task], label="cmd")

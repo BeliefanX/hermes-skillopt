@@ -24,7 +24,7 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" benchmark-parity-status
 Expected interpretation:
 
 - `doctor` and `scout` are read-only: no eval execution/full-run, no fetch, no adopt, no rollback, no write.
-- `scout` is suitable for notifications. Its `cron_recommendation` is scout-only (`auto_adopt_from_cron: false`) and must not be expanded into scheduled optimize/adopt/rollback.
+- `scout` is suitable for notifications. Without `--output`, it returns JSON and writes no report. Its `cron_recommendation` is scout-only (`auto_adopt_from_cron: false`) and must not be expanded into scheduled optimize/adopt/rollback.
 - Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent.
 - Parity status should remain no-full-parity unless future code adds real upstream execution evidence.
 
@@ -116,19 +116,20 @@ CI evidence labels:
 
 - `conformance --mode quick`: local smoke/regression subset, not full repo health.
 - `conformance --mode full`: local adapter test run, not upstream benchmark parity.
+- `conformance` writes no file unless `--output <report.json>` is explicit; there is no default repo-root `skillopt_conformance_report.json`.
 - `scout`: read-only notification summary and safe next commands; no scheduled adoption.
 - `artifact-hygiene-report`: read-only cleanup guidance; never deletes or resumes.
 - `benchmark`/`eval-only`: fixed-skill local report only; always non-adoptable.
 
-## 6a. Scheduled scout only
+## 6a. Scheduled read-only surfaces only
 
-If you want scheduled monitoring, schedule only scout and route the JSON to your notifier:
+If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
 
 ```bash
 hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json
 ```
 
-Do not schedule `optimize`, `adopt`, `rollback`, `upstream-update`, or cleanup commands from scout output. Treat `next_actions` and `safe_next_commands` as human-review prompts.
+Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, or cleanup commands from scout output. Treat `next_actions` and `safe_next_commands` as human-review prompts.
 
 ## 7. WebUI workflow
 
