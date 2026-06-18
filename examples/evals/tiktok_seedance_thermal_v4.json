@@ -1,0 +1,55 @@
+{
+  "schema_version": "hermes-curated-eval-pack-v1",
+  "pack_id": "tiktok-seedance-thermal",
+  "version": "thermal-v4",
+  "description": "Deterministic replay fixture for TikTok Seedance thermal product wording: heated brush must not be confused with hot air brush, blow dryer, or airflow devices.",
+  "require_complete_splits": true,
+  "task_origin": "curated",
+  "evaluation_mode": "deterministic_replay_contract_compliant",
+  "eval_execution_contract": {
+    "classification": "deterministic_replay_contract_compliant",
+    "declared_by": "skillopt-fixture"
+  },
+  "production_policy": {
+    "allow_production_adoption": true,
+    "reviewed_by": "skillopt-fixture",
+    "review_note": "Thermal-v4 fixture uses deterministic hard required/forbidden markers; no task commands or upstream code execution."
+  },
+  "tasks": [
+    {
+      "id": "thermal-v4-train-classify-heated-brush",
+      "split": "train",
+      "prompt": "Seedance caption/product-copy training case: describe a ceramic heated brush accurately.",
+      "expected_keywords": ["heated brush", "ceramic"],
+      "all_required_keywords": ["heated brush", "ceramic barrel"],
+      "required_markers": ["PRODUCT_CLASS:HEATED_BRUSH", "NO_AIRFLOW_CLAIM"],
+      "forbidden_markers": ["hot air brush", "blow dryer", "hair dryer", "airflow", "negative ion hair dryer"],
+      "forbidden_keywords": ["hot air brush", "blow dryer", "hair dryer", "airflow"],
+      "production_gate_eligible": false
+    },
+    {
+      "id": "thermal-v4-val-heated-brush-not-hot-air",
+      "split": "validation",
+      "prompt": "Seedance held-out validation: thermal brush product must be represented as a heated brush, not a hot air brush.",
+      "expected_keywords": ["heated brush", "thermal", "ceramic"],
+      "all_required_keywords": ["heated brush", "ceramic barrel", "no airflow"],
+      "required_markers": ["PRODUCT_CLASS:HEATED_BRUSH", "NO_AIRFLOW_CLAIM"],
+      "forbidden_markers": ["hot air brush", "blow dryer", "hair dryer", "negative ion hair dryer", "air styler"],
+      "forbidden_keywords": ["hot air brush", "blow dryer", "hair dryer", "negative ion", "airflow fan"],
+      "production_gate_eligible": true,
+      "weight": 2
+    },
+    {
+      "id": "thermal-v4-test-no-airflow-or-dryer-claim",
+      "split": "test",
+      "prompt": "Seedance held-out test: ensure copy says the product heats directly and does not claim airflow or dryer behavior.",
+      "expected_keywords": ["heated brush", "direct heat"],
+      "all_required_keywords": ["heated brush", "no airflow"],
+      "required_markers": ["PRODUCT_CLASS:HEATED_BRUSH", "NO_AIRFLOW_CLAIM"],
+      "forbidden_markers": ["hot air brush", "blow dryer", "hair dryer", "airflow", "negative ion hair dryer"],
+      "forbidden_keywords": ["hot air brush", "blow dryer", "hair dryer", "airflow"],
+      "production_gate_eligible": true,
+      "weight": 2
+    }
+  ]
+}

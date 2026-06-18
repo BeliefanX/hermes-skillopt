@@ -20,7 +20,7 @@ Hermes maps the core SkillOpt abstraction as follows:
 - Environment/benchmark: Hermes eval packs with explicit train/val/test split governance; bundled examples under `examples/evals/` are static review fixtures and cannot production-adopt.
 - Rollout/target model: frozen target executor (`scorecard`, `replay`, or `sandbox`) with backend config fingerprints.
 - Reflection/update: optimizer proposes bounded edits; candidate text is staged.
-- Evaluation gate: validation/test scorecards decide whether a candidate is review-worthy or adoptable; any hard-failed production-eligible validation row blocks production gate acceptance/adoptability regardless of soft weighted-score improvement or gate mode.
+- Evaluation gate: validation/test scorecards decide whether a candidate is review-worthy or adoptable; any hard-failed production-eligible validation row blocks production gate acceptance/adoptability regardless of soft weighted-score improvement or gate mode. Critical `all_required_keywords`/`required_markers` and `forbidden_markers` are hard pass/fail constraints, not soft weights.
 - Artifacts/checkpoints: every staged run records manifest, task/eval, target, optimizer, profile, and provenance fingerprints; stage artifacts include deterministic batch metadata.
 
 ## Intentional Hermes divergences
@@ -34,6 +34,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Transfer evaluation is report-only/read-only: it evaluates staged/proposed skill text or an explicit file and never writes live skills.
 - Cross-profile evaluation records profile fingerprints but does not mutate target profiles.
 - Conformance tooling runs local deterministic `compileall` plus pytest commands and does not depend on network, credentials, upstream checkout, or live Hermes services.
+- Resume tooling is inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
 
 ## P0/P1/P3 commands/modules
 
@@ -51,13 +52,18 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - `hermes_skillopt.transfer.transfer_eval(...)`
   - Inputs: staged `run_id` or explicit staged `skill_file`, eval pack/staged task artifacts, target list, profile list.
   - Output: `hermes-skillopt-transfer-eval-v1` report with profile/backend/target fingerprints.
-  - Default posture: staged/report-only; no live skill writeback.
+  - Default posture: staged/report-only/read-only; no live skill writeback and no external/live model performance claim.
 
 - `hermes_skillopt.conformance.run_conformance(...)`
   - Modes: `quick` (default deterministic smoke/regression suite) and `full` (all local pytest tests).
   - Important: quick mode is not a full repository health check and must not be reported as one.
   - Runs: `python -m compileall -q hermes_skillopt tests` plus mode-selected/custom pytest args.
   - Output: `hermes-skillopt-conformance-v1` JSON report with `mode`, `pytest_args`, and `scope_note`.
+
+- `hermes_skillopt.core.review(..., slim=True)`
+  - Verifies staged artifact hashes before returning run data.
+  - Returns `artifact_refs` with diff/report path, SHA-256, byte size, and preview length; slim mode intentionally omits large `diff_preview`/`report_summary` payloads.
+  - Includes `artifact_lineage` summaries for skill hashes, eval pack identity/fingerprint, target/provenance fingerprints, and tracked artifact state.
 
 CLI equivalents (console script after editable install, or `python3 -m hermes_skillopt.cli ...` from the repo):
 
@@ -76,7 +82,7 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 
 - The bundled `examples/evals/*production_v1.json` files are static review fixtures, not production certification suites for any skill.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.
-- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current parity support is import-only; true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist.
+- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is import-only; true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist.
 - Split manifest support is embedded JSON only; file references are intentionally not followed in P3.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model results.
 - Conformance reports local adapter health only; they do not certify Microsoft SkillOpt parity or external benchmark performance.
@@ -86,7 +92,7 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 Each six-stage trainer artifact under `stages/` records `schema_version: skillopt-stage-v1` plus `deterministic_batch` metadata using `batch_schema: skillopt-deterministic-batch-v1`. The metadata includes a stable `batch_id` (`iter-NNN-stage`), iteration, stage, seed `0`, a stable input-order/deterministic-rank note, and input SHA-256. This documents replayability of stage inputs/ordering; it does not imply stochastic upstream trainer parity or external model determinism.
 
 
-## Track B conformance points
+## Additional current conformance points
 
 - P0 status surfaces: `compare-upstream-pin` and `benchmark-parity-status` are read-only/report-only.
 - P1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. Future `frozen_hermes_target_execution_v1` adoption evidence must include frozen target config, provider/model/toolset/session fingerprints, isolated runtime, permissions, transcript/trajectory artifact, and execution-based scoring.

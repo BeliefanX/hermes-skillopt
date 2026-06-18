@@ -52,11 +52,11 @@ Run directories contain the current/proposed skill copies, eval task JSONL files
 
 The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, per-task deltas, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
 
-Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed.
+Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed. `status` and `resume-inspect` also expose stale/incomplete checkpoint rows, tracked artifact path/hash state, lineage summaries, and cleanup guidance only; no code auto-deletes or resumes partial stage output.
 
 ## Eval and adoption gates
 
-Task schema supports `prompt`, split, expected/forbidden keywords, assertions, markers, success criteria, expected behavior, allowed tools, fixtures, timeout, judge, weight, executor metadata, and an explicit `production_gate_eligible`/`production_gate` opt-out flag. Production schema policy is recorded as `production-eval-schema-v1` in manifests. Versioned `hermes-curated-eval-pack-v1` packs require train/validation/test splits, reject split leakage, and validate declared fingerprints when present.
+Task schema supports `prompt`, split, expected/forbidden keywords, assertions, markers, success criteria, expected behavior, allowed tools, fixtures, timeout, judge, weight, executor metadata, and an explicit `production_gate_eligible`/`production_gate` opt-out flag. `expected_keywords`/`expected_terms` are weighted soft checks; `all_required_keywords`/`required_keywords`/`must_include_keywords`, `required_markers`, and `forbidden_markers` are critical hard constraints that set `passed: false` when violated. Production schema policy is recorded as `production-eval-schema-v1` in manifests. Versioned `hermes-curated-eval-pack-v1` packs require train/validation/test splits, reject split leakage, and validate declared fingerprints when present.
 
 Production adoption is intentionally stricter than generic validation:
 
@@ -104,7 +104,7 @@ Rollback restores only from the verified backup directory created by adopt. It v
 Current code closes the earlier architecture gaps in these bounded ways:
 
 - P0/P1 core abstraction: `SKILL.md` is explicit trainable state; optimizer and target executor are separate; candidate edits are bounded and staged; curated production eval packs and validation/test gates drive adoption status.
-- P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, and conservative completed-run resume inspection.
+- P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance writes local compile/pytest reports.
 
@@ -124,6 +124,6 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 - WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts.
 
 
-## Track B P0-P2 closure notes
+## Current no-parity guardrails
 
-The remaining upstream gap is now explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented only by a safe disabled-by-default read-only adapter interface until credentials/service hooks, sandbox policy, transcript artifacts, and frozen-target evidence are available. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.
+The remaining upstream gap is explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented only by a safe disabled-by-default read-only adapter interface until credentials/service hooks, sandbox policy, transcript artifacts, and frozen-target evidence are available. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.

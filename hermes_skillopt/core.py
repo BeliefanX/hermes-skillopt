@@ -352,6 +352,7 @@ def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> 
             fixtures=dict(row.get("fixtures") or {}),
             expected_terms=tuple(row.get("expected_terms") or ()),
             failure_terms=tuple(row.get("failure_terms") or ()),
+            all_required_keywords=tuple(row.get("all_required_keywords") or ()),
             required_markers=tuple(row.get("required_markers") or ()),
             forbidden_markers=tuple(row.get("forbidden_markers") or ()),
             split=str(row.get("split", "validation")),
@@ -1035,6 +1036,84 @@ def _resume_completed_run(run_dir: Path, expected_input: dict[str, Any]) -> dict
     return reviewed
 
 
+def _maybe_sha_file(path: Path) -> str | None:
+    return sha256_file(path) if path.is_file() else None
+
+
+def _slim_artifact_state(run_dir: Path, files: dict[str, str] | None = None) -> dict[str, Any]:
+    tracked = {
+        "checkpoint": "checkpoint.json",
+        "manifest": "manifest.json",
+        "report": "report.md",
+        "original": "original_SKILL.md",
+        "current": "current_SKILL.md",
+        "proposed": "proposed_SKILL.md",
+        "best": "best_skill.md",
+        "history": "history.json",
+        "target_binding": "target_binding.json",
+        "provenance_binding": "provenance_binding.json",
+    }
+    if files:
+        tracked.update({k: v for k, v in files.items() if k in {"original", "current", "proposed", "best", "history", "target_binding", "provenance_binding", "report"}})
+    out: dict[str, Any] = {}
+    for name, rel in tracked.items():
+        path = run_dir / rel
+        out[name] = {"path": rel, "exists": path.is_file(), "sha256": _maybe_sha_file(path)}
+    return out
+
+
+def _artifact_lineage_status(run_dir: Path, manifest: dict[str, Any] | None = None, checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
+    m = manifest or {}
+    cp_input = checkpoint.get("input", {}) if isinstance(checkpoint, dict) else {}
+    history_path = run_dir / str((m.get("files") or {}).get("history") or "history.json")
+    history: dict[str, Any] = {}
+    if history_path.is_file():
+        try:
+            history = json.loads(read_text(history_path))
+        except Exception:
+            history = {}
+    target_binding: dict[str, Any] = {}
+    tb_path = run_dir / str((m.get("files") or {}).get("target_binding") or "target_binding.json")
+    if tb_path.is_file():
+        try:
+            target_binding = json.loads(read_text(tb_path))
+        except Exception:
+            target_binding = {}
+    provenance = m.get("provenance_fingerprint") if isinstance(m.get("provenance_fingerprint"), dict) else {}
+    return {
+        "schema_version": "skillopt-artifact-lineage-status-v1",
+        "run_id": m.get("run_id") or run_dir.name,
+        "parent_run_id": m.get("parent_run_id") or m.get("resume_run_id") or history.get("parent_run_id"),
+        "resume_run_id": m.get("resume_run_id"),
+        "skill_name": m.get("skill_name") or cp_input.get("skill_name"),
+        "skill_relpath": m.get("skill_relpath") or cp_input.get("skill_relpath"),
+        "skill_hashes": {
+            "source_original_sha256": m.get("original_sha256") or cp_input.get("original_sha256") or history.get("parent_sha256"),
+            "current_artifact_sha256": _maybe_sha_file(run_dir / "current_SKILL.md"),
+            "proposed_sha256": m.get("proposed_sha256") or history.get("proposed_sha256") or _maybe_sha_file(run_dir / "proposed_SKILL.md"),
+            "best_artifact_sha256": _maybe_sha_file(run_dir / "best_skill.md"),
+        },
+        "eval_pack": {
+            "eval_file": m.get("eval_file") or cp_input.get("eval_file"),
+            "eval_file_sha256": (provenance or {}).get("eval_file_sha256") or cp_input.get("eval_file_sha256"),
+            "pack_id": m.get("eval_pack_id") or cp_input.get("eval_pack_id"),
+            "version": m.get("eval_pack_version") or cp_input.get("eval_pack_version"),
+            "fingerprint_sha256": m.get("eval_pack_fingerprint_sha256") or cp_input.get("eval_pack_fingerprint_sha256"),
+        },
+        "target_provenance": {
+            "target_executor": m.get("target_executor") or (provenance or {}).get("target_executor") or cp_input.get("target_backend"),
+            "target_config_id": m.get("target_config_id") or (provenance or {}).get("target_config_id") or cp_input.get("target_config_id"),
+            "target_fingerprint_sha256": (provenance or {}).get("target_fingerprint_sha256"),
+            "provenance_fingerprint_sha256": (provenance or {}).get("fingerprint_sha256"),
+            "target_binding_sha256": _maybe_sha_file(tb_path),
+            "target_binding_summary": {k: target_binding.get(k) for k in ("schema_version", "target_config_id", "skill_relpath", "skill_sha256") if k in target_binding},
+        },
+        "artifact_state": _slim_artifact_state(run_dir, m.get("files") if isinstance(m.get("files"), dict) else None),
+        "history_path": history_path.name if history_path.is_file() else None,
+        "history_sha256": _maybe_sha_file(history_path),
+    }
+
+
 def inspect_resume_run(run_id: str, *, hermes_home_path: str | None = None, expected_input: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read-only step-level resume inspection; never replays partial stages."""
 
@@ -1046,8 +1125,9 @@ def inspect_resume_run(run_id: str, *, hermes_home_path: str | None = None, expe
         checkpoint = json.loads(read_text(run_dir / "checkpoint.json"))
     except Exception as exc:
         refusal_reasons.append(f"checkpoint unreadable: {type(exc).__name__}: {exc}")
+    expected_input_sha256 = _stable_json_sha(expected_input) if expected_input is not None else None
     if expected_input is not None and checkpoint:
-        if checkpoint.get("input_sha256") != _stable_json_sha(expected_input) or checkpoint.get("input") != expected_input:
+        if checkpoint.get("input_sha256") != expected_input_sha256 or checkpoint.get("input") != expected_input:
             refusal_reasons.append("fingerprint mismatch: checkpoint input/config/provenance differs from requested resume")
     stages: list[dict[str, Any]] = []
     for path in sorted((run_dir / "stages").glob("*.json")):
@@ -1059,10 +1139,12 @@ def inspect_resume_run(run_id: str, *, hermes_home_path: str | None = None, expe
                 refusal_reasons.append(f"stage {path.name} missing input/output fingerprint")
         except Exception as exc:
             refusal_reasons.append(f"stage {path.name} unreadable: {type(exc).__name__}: {exc}")
+    manifest: dict[str, Any] = {}
     manifest_hash_verified = False
     if (run_dir / "manifest.json").is_file():
         try:
-            verify_artifact_hashes(run_dir, load_manifest(run_dir))
+            manifest = load_manifest(run_dir)
+            verify_artifact_hashes(run_dir, manifest)
             manifest_hash_verified = True
         except Exception as exc:
             refusal_reasons.append(f"artifact hash verification failed: {type(exc).__name__}: {exc}")
@@ -1073,7 +1155,12 @@ def inspect_resume_run(run_id: str, *, hermes_home_path: str | None = None, expe
             refusal_reasons.append("run is incomplete; partial-stage continuation is refused because replay could skip gates/adopt checks")
         if not manifest_hash_verified:
             refusal_reasons.append("completed-run reuse unavailable until manifest artifact hashes verify")
-    return {"success": True, "run_id": run_id, "run_dir": str(run_dir), "checkpoint_status": status, "completed_stages": checkpoint.get("completed_stages", []), "stages": stages, "manifest_hash_verified": manifest_hash_verified, "safe_reuse_completed": safe_reuse_completed, "partial_continuation_available": False, "refusal_reasons": sorted(set(refusal_reasons))}
+    cleanup_guidance = []
+    if not safe_reuse_completed:
+        cleanup_guidance.append("No automatic cleanup is performed. If this run is abandoned, manually inspect run_dir, ensure no optimizer process is still writing it, then remove the directory or keep it for audit.")
+        if not (run_dir / "manifest.json").is_file():
+            cleanup_guidance.append("No manifest/report is present; treat staged artifacts as incomplete and non-adoptable.")
+    return {"success": True, "run_id": run_id, "run_dir": str(run_dir), "checkpoint_status": status, "checkpoint_input_sha256": checkpoint.get("input_sha256"), "expected_input_sha256": expected_input_sha256, "completed_stages": checkpoint.get("completed_stages", []), "stages": stages, "stage_count": len(stages), "manifest_present": (run_dir / "manifest.json").is_file(), "report_present": (run_dir / "report.md").is_file(), "manifest_hash_verified": manifest_hash_verified, "artifact_state": _slim_artifact_state(run_dir, manifest.get("files") if isinstance(manifest.get("files"), dict) else None), "artifact_lineage": _artifact_lineage_status(run_dir, manifest, checkpoint), "safe_reuse_completed": safe_reuse_completed, "partial_continuation_available": False, "refusal_reasons": sorted(set(refusal_reasons)), "cleanup_guidance": cleanup_guidance}
 
 
 def _slow_meta_artifact(original: str, evidence: dict[str, Any], rejected: list[dict[str, Any]], candidate_summary: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1430,6 +1517,16 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         adoptability_reasons.append("no staged_best candidate")
     if not production_gate_eligible:
         adoptability_reasons.append("missing accepted explicit curated production validation gate")
+    production_hard_failures = []
+    if isinstance(production_validation_summary, dict):
+        metric_summary = production_validation_summary.get("metric_summary")
+        if isinstance(metric_summary, dict):
+            production_hard_failures = [f for f in (metric_summary.get("production_candidate_hard_failures") or []) if isinstance(f, dict)]
+    for failure in production_hard_failures:
+        task_id = failure.get("task_id") or "unknown"
+        reason = f"production-eligible validation task hard-failed: {task_id}"
+        if reason not in adoptability_reasons:
+            adoptability_reasons.append(reason)
     if not test_gate_eligible:
         adoptability_reasons.append("held-out test split is missing, non-production, or below threshold")
     if not strict_gate_mode:
@@ -1577,10 +1674,11 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "test_results": test_results,
         "files": artifacts.manifest_files(include_best=final_status == "staged_best"),
     }
+    _write_checkpoint(run_dir, resume_input, status="complete", completed_stages=["rollout", "reflect", "aggregate", "select", "update", "evaluate", "final_artifacts"])
+    manifest["artifact_lineage"] = _artifact_lineage_status(run_dir, manifest)
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
-    _write_checkpoint(run_dir, resume_input, status="complete", completed_stages=["rollout", "reflect", "aggregate", "select", "update", "evaluate", "final_artifacts"])
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
     return result
 
 
@@ -1625,16 +1723,57 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
     dirs = skillopt_paths(home)
     runs = []
+    seen_dirs: set[Path] = set()
+    manifest_keys = ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "target_executor", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score")
     for m in sorted(dirs["staging"].glob("*/manifest.json"), reverse=True)[:20]:
         try:
             d = json.loads(read_text(m))
-            runs.append({k: d.get(k) for k in ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "target_executor", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score")})
+            run_dir = m.parent
+            seen_dirs.add(run_dir)
+            row = {k: d.get(k) for k in manifest_keys}
+            row["run_dir"] = str(run_dir)
+            row["artifact_lineage"] = d.get("artifact_lineage") or _artifact_lineage_status(run_dir, d)
+            runs.append(row)
         except Exception:
             pass
-    return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs}
+    checkpoint_only = []
+    for cp in sorted(dirs["staging"].glob("*/checkpoint.json"), reverse=True)[:20]:
+        run_dir = cp.parent
+        if run_dir in seen_dirs:
+            continue
+        try:
+            checkpoint = json.loads(read_text(cp))
+        except Exception as exc:
+            checkpoint = {"status": "unreadable", "error": f"{type(exc).__name__}: {exc}"}
+        lineage = _artifact_lineage_status(run_dir, {}, checkpoint)
+        reasons = []
+        if checkpoint.get("status") != "complete":
+            reasons.append("run is incomplete; partial-stage continuation is refused because replay could skip gates/adopt checks")
+        if not (run_dir / "manifest.json").is_file():
+            reasons.append("completed-run reuse unavailable until manifest artifact hashes verify")
+        row = {
+            "run_id": run_dir.name,
+            "status": checkpoint.get("status") or "checkpoint_only",
+            "checkpoint_status": checkpoint.get("status"),
+            "skill_name": lineage.get("skill_name"),
+            "adoptable": False,
+            "manifest_present": False,
+            "report_present": (run_dir / "report.md").is_file(),
+            "partial_continuation_available": False,
+            "safe_reuse_completed": False,
+            "refusal_reasons": sorted(set(reasons)),
+            "cleanup_guidance": "No automatic cleanup; inspect run_dir and confirm no writer is active before manual removal.",
+            "run_dir": str(run_dir),
+            "artifact_state": _slim_artifact_state(run_dir),
+            "artifact_lineage": lineage,
+        }
+        checkpoint_only.append(row)
+    runs.extend(checkpoint_only)
+    runs = runs[:20]
+    return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs, "stale_or_incomplete_checkpoints": checkpoint_only[:20]}
 
 
-def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars: int = 4000) -> dict[str, Any]:
+def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars: int = 4000, slim: bool = False) -> dict[str, Any]:
     home = hermes_home(hermes_home_path)
     run_dir = resolve_run_dir(home, run_id)
     m = load_manifest(run_dir)
@@ -1642,8 +1781,15 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
     diff = read_text(run_dir / "diff.patch") if (run_dir / "diff.patch").exists() else ""
     report = read_text(run_dir / "report.md") if (run_dir / "report.md").exists() else ""
     gate = m.get("gate") or (json.loads(read_text(run_dir / "gate_results.json")).get("best_gate") if (run_dir / "gate_results.json").exists() else None)
-    report_summary = {"timeline": {"status": m.get("status"), "created_at": m.get("created_at")}, "eligibility": {"adoptable": m.get("adoptable") is True, "reasons": m.get("production_eligibility_reasons") or [], "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True}, "split_scores": m.get("split_scores") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "provenance_security": {"artifact_integrity": "verified", "provenance_fingerprint": (m.get("provenance_fingerprint") or {}).get("fingerprint_sha256") if isinstance(m.get("provenance_fingerprint"), dict) else None, "production_eval_policy": (m.get("production_eval_policy") or {}).get("policy_version") if isinstance(m.get("production_eval_policy"), dict) else None, "target_executor": m.get("target_executor"), "gate_policy": m.get("gate_policy")}}
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "diff_preview": diff[:include_diff_chars], "report_summary": report[:1200]}
+    artifact_lineage = m.get("artifact_lineage") or _artifact_lineage_status(run_dir, m)
+    report_summary = {"timeline": {"status": m.get("status"), "created_at": m.get("created_at")}, "eligibility": {"adoptable": m.get("adoptable") is True, "reasons": m.get("production_eligibility_reasons") or [], "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True}, "split_scores": m.get("split_scores") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "artifact_lineage": artifact_lineage, "provenance_security": {"artifact_integrity": "verified", "provenance_fingerprint": (m.get("provenance_fingerprint") or {}).get("fingerprint_sha256") if isinstance(m.get("provenance_fingerprint"), dict) else None, "production_eval_policy": (m.get("production_eval_policy") or {}).get("policy_version") if isinstance(m.get("production_eval_policy"), dict) else None, "target_executor": m.get("target_executor"), "gate_policy": m.get("gate_policy")}}
+    diff_path = run_dir / "diff.patch"
+    report_path = run_dir / "report.md"
+    artifact_refs = {
+        "diff": {"path": str(diff_path), "sha256": sha256_text(diff) if diff else None, "bytes": len(diff.encode("utf-8")), "preview_chars": 0 if slim else min(len(diff), include_diff_chars)},
+        "report": {"path": str(report_path), "sha256": sha256_text(report) if report else None, "bytes": len(report.encode("utf-8")), "preview_chars": 0 if slim else min(len(report), 1200)},
+    }
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
 
 
 def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:

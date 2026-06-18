@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
+from hermes_skillopt import core
 from hermes_skillopt.benchmark_bridge import import_upstream_manifest
 from hermes_skillopt.conformance import run_conformance
 from hermes_skillopt.transfer import transfer_eval
@@ -220,6 +222,49 @@ def test_transfer_eval_report_output_cannot_target_live_skills(tmp_path):
     with pytest.raises(ValueError, match="report-only"):
         transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(skill), staged_only=False)
 
+    with pytest.raises(ValueError, match="report-only"):
+        transfer_eval(hermes_home_path=str(tmp_path), skill_file=str(staged), eval_file=str(eval_pack), output_path=str(tmp_path / "skills" / "demo" / "transfer-report.json"), staged_only=False)
+
+
+def test_benchmark_parity_status_does_not_claim_true_upstream_execution(tmp_path):
+    result = core.benchmark_parity_status(str(tmp_path))
+
+    assert result["success"] is True
+    assert result["parity_label"] == "Hermes-native benchmark mode; not an upstream SkillOpt benchmark result"
+    assert result["unsupported_parity_levels"]["true_upstream_benchmark_execution"].startswith("unsupported")
+    assert result["upstream_benchmark_parity"]["true_benchmark_execution"]["supported"] is False
+    assert result["supported_parity_levels"]["hermes_eval_pack_replay"] == "supported_native_not_upstream_parity"
+
+
+def test_review_slim_returns_artifact_refs_without_large_previews(tmp_path):
+    run_id = "20260618-review-slim"
+    run_dir = tmp_path / "skillopt" / "staging" / run_id
+    run_dir.mkdir(parents=True)
+    diff = "diff --git a/SKILL.md b/SKILL.md\n" + "+line\n" * 2000
+    report = "# Report\n" + "trace line\n" * 2000
+    (run_dir / "diff.patch").write_text(diff, encoding="utf-8")
+    (run_dir / "report.md").write_text(report, encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "status": "staged_best",
+        "skill_name": "demo",
+        "files": {"diff": "diff.patch", "report": "report.md"},
+        "artifact_sha256": {
+            "diff": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+            "report": hashlib.sha256(report.encode("utf-8")).hexdigest(),
+        },
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = core.review(run_id, hermes_home_path=str(tmp_path), slim=True)
+
+    assert result["slim"] is True
+    assert result["diff_preview"] == ""
+    assert result["report_summary"] == ""
+    assert result["artifact_refs"]["diff"]["path"].endswith("diff.patch")
+    assert result["artifact_refs"]["diff"]["sha256"] == hashlib.sha256(diff.encode("utf-8")).hexdigest()
+    assert result["artifact_refs"]["report"]["bytes"] == len(report.encode("utf-8"))
+
 
 def test_conformance_report_generation(tmp_path):
     report_path = tmp_path / "conformance.json"
@@ -233,7 +278,19 @@ def test_conformance_report_generation(tmp_path):
     assert "not necessarily a full repository health" in report["scope_note"]
     assert report["external_services_required"] is False
     assert len(report["commands"]) == 2
+    assert all(command["output_tail_sha256"] for command in report["commands"])
+    assert all("output_tail_chars" in command and "output_truncated" in command for command in report["commands"])
     assert result["success"] is True
+
+
+def test_conformance_report_output_cannot_target_live_runtime_paths(tmp_path, monkeypatch):
+    import hermes_skillopt.conformance as conformance
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(conformance, "_run", lambda cmd, cwd, timeout: {"cmd": cmd, "returncode": 0, "passed": True, "output_tail": "", "output_tail_sha256": hashlib.sha256(b"").hexdigest()})
+
+    with pytest.raises(ValueError, match="report-only"):
+        conformance.run_conformance(repo_root=Path(__file__).resolve().parents[1], output_path=tmp_path / "skills" / "demo" / "conformance.json")
 
 
 def test_conformance_full_mode_uses_all_tests_when_no_pytest_override(tmp_path, monkeypatch):

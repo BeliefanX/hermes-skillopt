@@ -616,6 +616,10 @@ def test_resume_checkpoint_relative_eval_file_hashes_profile_local_file(tmp_path
 
     assert input_payload["eval_file"] == str(eval_path.resolve())
     assert original_sha == core.sha256_file(eval_path)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provenance_fingerprint"]["eval_file"] == str(eval_path.resolve())
+    assert manifest["provenance_fingerprint"]["eval_file_sha256"] == original_sha
+    assert manifest["artifact_lineage"]["eval_pack"]["eval_file"] == str(eval_path.resolve())
 
     eval_path.write_text(
         json.dumps({"id": "v2", "prompt": "changed validation", "expected_keywords": ["changed"], "split": "validation"}) + "\n",
@@ -666,8 +670,45 @@ def test_resume_inspection_refuses_incomplete_or_unfingerprinted_stage(tmp_path)
     inspection = core.inspect_resume_run(out["run_id"], hermes_home_path=str(tmp_path))
     assert inspection["safe_reuse_completed"] is False
     assert inspection["partial_continuation_available"] is False
+    assert inspection["artifact_state"]["checkpoint"]["exists"] is True
+    assert inspection["artifact_lineage"]["skill_hashes"]["source_original_sha256"]
+    assert inspection["cleanup_guidance"]
     assert any("missing input/output fingerprint" in reason for reason in inspection["refusal_reasons"])
     assert any("partial-stage continuation is refused" in reason for reason in inspection["refusal_reasons"])
+
+
+def test_status_surfaces_checkpoint_only_running_run_without_cleanup(tmp_path):
+    skill_path = make_skill(tmp_path, "demo", body="Use tools safely.")
+    target = core.find_skill(tmp_path, "demo")
+    original = skill_path.read_text(encoding="utf-8")
+    payload = core._resume_input_payload(
+        home=tmp_path.resolve(),
+        target=target,
+        original=original,
+        query="demo",
+        lookback_days=14,
+        limit=50,
+        iterations=1,
+        edit_budget=3,
+        candidate_count=1,
+        optimizer_backend="mock",
+        target_backend="auto",
+        gate_mode="strict",
+        eval_file=None,
+        allow_mock=True,
+    )
+    run_dir = tmp_path / "skillopt" / "staging" / "running-demo"
+    core._write_checkpoint(run_dir, payload, status="running", completed_stages=["rollout"])
+    (run_dir / "current_SKILL.md").write_text(original, encoding="utf-8")
+
+    status = core.status(hermes_home_path=str(tmp_path))
+    stale = status["stale_or_incomplete_checkpoints"]
+    assert stale and stale[0]["run_id"] == "running-demo"
+    assert stale[0]["manifest_present"] is False
+    assert stale[0]["partial_continuation_available"] is False
+    assert stale[0]["artifact_state"]["current"]["exists"] is True
+    assert stale[0]["artifact_lineage"]["skill_hashes"]["source_original_sha256"] == core.sha256_text(original)
+    assert "No automatic cleanup" in stale[0]["cleanup_guidance"]
 
 
 def test_rejected_step_buffer_reused_by_next_candidate(monkeypatch, tmp_path):
@@ -918,12 +959,16 @@ def test_review_returns_phase3_report_fields(tmp_path):
     review = core.review(out["run_id"], hermes_home_path=str(tmp_path))
     assert review["artifact_integrity"] == "verified"
     assert "report_fields" in review
+    assert "artifact_lineage" in review
+    assert review["artifact_lineage"]["skill_hashes"]["source_original_sha256"]
+    assert review["artifact_lineage"]["target_provenance"]["target_executor"]
     assert review["report_fields"]["timeline"]["status"] == review["status"]
     assert "eligibility" in review["report_fields"]
     assert "split_scores" in review["report_fields"]
     assert "candidate_comparison" in review["report_fields"]
     assert "regression_cases" in review["report_fields"]
     assert "provenance_security" in review["report_fields"]
+    assert "artifact_lineage" in review["report_fields"]
     assert review["report_fields"]["provenance_security"]["artifact_integrity"] == "verified"
 
 
@@ -1778,6 +1823,7 @@ def test_production_validation_hard_failure_blocks_adoptability(monkeypatch, tmp
     assert production_gate["metric_summary"]["production_candidate_hard_failures"][0]["task_id"] == "prod-val-command-hard-fail"
     assert manifest["adoptable"] is False
     assert "missing accepted explicit curated production validation gate" in manifest["production_eligibility_reasons"]
+    assert "production-eligible validation task hard-failed: prod-val-command-hard-fail" in manifest["production_eligibility_reasons"]
 
 
 def test_validation_gate_rejects_production_soft_gain_with_candidate_hard_failure():
@@ -1799,6 +1845,32 @@ def test_validation_gate_rejects_production_soft_gain_with_candidate_hard_failur
     assert decision.metric_summary is not None
     assert decision.metric_summary["candidate"]["hard_pass_rate"] == 0.5
     assert decision.metric_summary["production_candidate_hard_failures"][0]["task_id"] == "command"
+
+
+def test_replay_scorecard_enforces_critical_required_and_forbidden_markers():
+    from hermes_skillopt.target import HermesRolloutRunner
+
+    task = EvalTask(
+        id="thermal-v4-critical",
+        prompt="thermal product classification",
+        expected_terms=("heated brush", "airflow"),
+        all_required_keywords=("heated brush", "ceramic barrel"),
+        required_markers=("PRODUCT_CLASS:HEATED_BRUSH", "NO_AIRFLOW_CLAIM"),
+        forbidden_markers=("hot air brush", "blow dryer", "negative ion hair dryer"),
+        split="val",
+    )
+    runner = HermesRolloutRunner()
+
+    soft_gain_but_missing = runner.score("heated brush airflow validation gate ceramic barrel", task)
+    forbidden = runner.score("heated brush ceramic barrel PRODUCT_CLASS:HEATED_BRUSH NO_AIRFLOW_CLAIM hot air brush", task)
+    passing = runner.score("heated brush ceramic barrel PRODUCT_CLASS:HEATED_BRUSH NO_AIRFLOW_CLAIM", task)
+
+    assert soft_gain_but_missing.score >= 0.55
+    assert soft_gain_but_missing.passed is False
+    assert "missing_required_marker:PRODUCT_CLASS:HEATED_BRUSH" in soft_gain_but_missing.metadata["failure_tags"]
+    assert forbidden.passed is False
+    assert "forbidden_marker:hot air brush" in forbidden.metadata["failure_tags"]
+    assert passing.passed is True
 
 
 def test_full_run_review_adopt_rollback_e2e_and_adopt_tamper_guards(tmp_path):

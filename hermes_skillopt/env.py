@@ -31,6 +31,7 @@ class EvalTask:
     fixtures: dict[str, Any] = field(default_factory=dict)
     expected_terms: tuple[str, ...] = ()
     failure_terms: tuple[str, ...] = ()
+    all_required_keywords: tuple[str, ...] = ()
     required_markers: tuple[str, ...] = ()
     forbidden_markers: tuple[str, ...] = ()
     split: str = "validation"
@@ -261,7 +262,7 @@ def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
         reasons.append("missing explicit deterministic scorecard")
     if not bool(task.metadata.get("production_gate_eligible")):
         reasons.append("production_gate_eligible flag is false")
-    if not (task.expected_terms or task.assertions or task.expected_behavior or task.failure_terms or task.metadata.get("ground_truth_score") is not None):
+    if not (task.expected_terms or task.all_required_keywords or task.assertions or task.expected_behavior or task.failure_terms or task.required_markers or task.forbidden_markers or task.metadata.get("ground_truth_score") is not None):
         reasons.append("missing objective expected behavior/assertions")
     eligible = not reasons
     return ProductionEligibility(eligible=eligible, reasons=tuple(reasons or ("eligible explicit curated production scorecard",)))
@@ -390,9 +391,10 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
     if timeout <= 0:
         raise ValueError(f"eval task {task_id} timeout must be > 0")
     expected = _string_tuple(record.get("expected_keywords") or record.get("expected_terms"))
+    all_required_keywords = _string_tuple(record.get("all_required_keywords") or record.get("required_keywords") or record.get("must_include_keywords"))
     required_markers = _string_tuple(record.get("required_markers") or record.get("required_tool_markers") or record.get("required_actions"))
     forbidden_markers = _string_tuple(record.get("forbidden_markers") or record.get("forbidden_tool_markers") or record.get("forbidden_actions"))
-    explicit_scorecard = bool(expected or assertions or required_markers or forbidden_markers or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
+    explicit_scorecard = bool(expected or all_required_keywords or assertions or required_markers or forbidden_markers or record.get("forbidden_keywords") or record.get("failure_terms") or record.get("ground_truth_score") is not None)
     production_flag = record.get("production_gate_eligible", record.get("production_gate", explicit_scorecard))
     if not expected:
         expected = _criteria_to_terms(criteria)
@@ -432,13 +434,14 @@ def _task_from_record(record: dict[str, Any], source: str, index: int, pack_meta
         fixtures=fixtures,
         expected_terms=expected,
         failure_terms=forbidden,
+        all_required_keywords=all_required_keywords,
         required_markers=required_markers,
         forbidden_markers=forbidden_markers,
         split=split,
         weight=weight,
         success_criteria=criteria,
         metadata={
-            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
+            **{k: v for k, v in record.items() if k not in {"id", "prompt", "expected_behavior", "assertions", "judge", "allowed_tools", "timeout", "fixtures", "expected_keywords", "expected_terms", "all_required_keywords", "required_keywords", "must_include_keywords", "forbidden_keywords", "failure_terms", "required_markers", "required_tool_markers", "required_actions", "forbidden_markers", "forbidden_tool_markers", "forbidden_actions", "success_criteria", "split", "weight"}},
             "scorecard_explicit": explicit_scorecard,
             "production_gate_eligible": production_flag,
             "production_eval_schema_policy": PRODUCTION_EVAL_POLICY_VERSION,

@@ -51,6 +51,14 @@ def _safe_fixture_list(value: object, *, limit: int = 12) -> list[object]:
     return [value]
 
 
+def _critical_keyword_missing(low_text: str, task: EvalTask) -> list[str]:
+    return [term for term in task.all_required_keywords if not any(v in low_text for v in _variants(term))]
+
+
+def _critical_marker_missing(low_text: str, task: EvalTask) -> list[str]:
+    return [marker for marker in task.required_markers if marker.lower() not in low_text]
+
+
 def _variants(term: str) -> set[str]:
     term_l = term.lower()
     variants = {term_l}
@@ -92,6 +100,8 @@ class DeterministicKeywordScorecard:
             if any(v in low for v in _variants(term)):
                 score += 0.12
                 matched.append(term)
+        missing_required_keywords = _critical_keyword_missing(low, task)
+        missing_required_markers = _critical_marker_missing(low, task)
         if "skillopt learned rules" in low or "skillopt candidate improvements" in low:
             score += 0.12
             matched.append("learned_rules")
@@ -102,8 +112,11 @@ class DeterministicKeywordScorecard:
             score += 0.08
             matched.append("bounded_edit")
         penalties = [term for term in task.failure_terms if term.lower() in low]
+        penalties.extend([m for m in task.forbidden_markers if m.lower() in low])
         score = round(max(0.0, min(1.0, score - 0.15 * len(penalties))), 3)
-        return EvalResult(task.id, score, score >= 0.55, f"runner={self.mode}; matched={matched}; penalties={penalties}", {**_result_metadata(task), "runner_label": "deterministic_fallback_review_only", "task_commands_executed": False, "hard_pass": score >= 0.55, "soft_score": score})
+        failure_tags = [f"missing_required_keyword:{x}" for x in missing_required_keywords] + [f"missing_required_marker:{x}" for x in missing_required_markers] + [f"forbidden_marker:{x}" for x in penalties]
+        passed = score >= 0.55 and not failure_tags
+        return EvalResult(task.id, score, passed, f"runner={self.mode}; matched={matched}; penalties={penalties}; failure_tags={failure_tags}", {**_result_metadata(task), "runner_label": "deterministic_fallback_review_only", "task_commands_executed": False, "failure_tags": failure_tags, "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "hard_pass": passed, "soft_score": score})
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,8 @@ class HermesRolloutRunner:
         checks: list[tuple[str, bool, float]] = []
         for term in task.expected_terms:
             checks.append((f"expected_keyword:{term}", any(v in low for v in _variants(term)), 1.0))
+        for term in task.all_required_keywords:
+            checks.append((f"all_required_keyword:{term}", any(v in low for v in _variants(term)), 1.0))
         for assertion in task.assertions:
             name, passed = self._assertion_passed(low, assertion)
             checks.append((name, passed, float(assertion.get("weight", 1.0) or 1.0)))
@@ -150,14 +165,18 @@ class HermesRolloutRunner:
                     checks.append((f"expected_behavior:{word}", word in low, 0.25))
         penalties = [term for term in task.failure_terms if term.lower() in low]
         penalties.extend([m for m in task.forbidden_markers if m.lower() in low])
+        missing_required_keywords = _critical_keyword_missing(low, task)
+        missing_required_markers = _critical_marker_missing(low, task)
         command_blocked = task.fixtures.get("command") is not None or task.metadata.get("command") is not None
-        failure_tags = list(dict.fromkeys((["task_provided_command_blocked"] if command_blocked else []) + [f"penalty:{p}" for p in penalties]))
+        critical_failures = [f"missing_required_keyword:{x}" for x in missing_required_keywords] + [f"missing_required_marker:{x}" for x in missing_required_markers] + [f"forbidden_marker:{x}" for x in penalties]
+        failure_tags = list(dict.fromkeys((["task_provided_command_blocked"] if command_blocked else []) + critical_failures + [f"penalty:{p}" for p in penalties]))
         score, passed_names, failed_names = _score_checks(checks, penalties)
         trajectory = self._trajectory(skill_text, task, checks, penalties, passed_names, failed_names, score, failure_tags)
+        hard_pass = score >= 0.55 and not penalties and not command_blocked and not missing_required_keywords and not missing_required_markers
         return EvalResult(
             task.id,
             score,
-            score >= 0.55 and not penalties and not command_blocked,
+            hard_pass,
             f"runner={self.mode}; passed={passed_names}; failed={failed_names}; penalties={penalties}; failure_tags={failure_tags}; judge=not_used_for_acceptance",
             {
                 **_result_metadata(task),
@@ -169,10 +188,12 @@ class HermesRolloutRunner:
                 "trace_schema": TRACE_SCHEMA_VERSION,
                 "trace_fingerprint_sha256": _stable_json_sha(trajectory),
                 "failure_tags": failure_tags,
+                "missing_required_keywords": missing_required_keywords,
+                "missing_required_markers": missing_required_markers,
                 "sandbox_command_blocked": command_blocked,
                 "task_commands_executed": False,
                 "runner_label": "deterministic_replay_review_only_unless_curated_pack",
-                "hard_pass": score >= 0.55 and not penalties and not command_blocked,
+                "hard_pass": hard_pass,
                 "soft_score": score,
             },
         )
@@ -321,6 +342,8 @@ class HermesSandboxRunner:
         checks: list[tuple[str, bool, float]] = [("exit_zero", code == 0, 1.0)]
         for term in task.expected_terms:
             checks.append((f"expected_keyword:{term}", any(v in low_skill for v in _variants(term)), 0.75))
+        for term in task.all_required_keywords:
+            checks.append((f"all_required_keyword:{term}", any(v in low_skill for v in _variants(term)), 1.0))
         for marker in task.required_markers:
             checks.append((f"required_marker:{marker}", marker.lower() in low_transcript or marker.lower() in low_skill, 1.0))
         for assertion in task.assertions:
@@ -328,10 +351,14 @@ class HermesSandboxRunner:
             checks.append((name, ok, float(assertion.get("weight", 1.0) or 1.0)))
         penalties = [term for term in task.failure_terms if term.lower() in low_skill or term.lower() in low_transcript]
         penalties.extend([m for m in task.forbidden_markers if m.lower() in low_transcript or m.lower() in low_skill])
+        missing_required_keywords = _critical_keyword_missing(low_skill, task)
+        missing_required_markers = [marker for marker in task.required_markers if marker.lower() not in low_skill and marker.lower() not in low_transcript]
+        critical_failures = [f"missing_required_keyword:{x}" for x in missing_required_keywords] + [f"missing_required_marker:{x}" for x in missing_required_markers] + [f"forbidden_marker:{x}" for x in penalties]
         score, passed_names, failed_names = _score_checks(checks, penalties)
-        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": code == 0 and score >= 0.55 and not penalties, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
+        hard_pass = code == 0 and score >= 0.55 and not penalties and not missing_required_keywords and not missing_required_markers
+        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": hard_pass, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
         metadata["trace_fingerprint_sha256"] = _stable_json_sha(metadata["trajectory"])
-        return EvalResult(task.id, score, code == 0 and score >= 0.55 and not penalties, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}", metadata)
+        return EvalResult(task.id, score, hard_pass, f"runner={self.mode}; exit={code}; passed={passed_names}; failed={failed_names}; penalties={penalties}; critical_failures={critical_failures}", metadata)
 
 
 def _score_checks(checks: list[tuple[str, bool, float]], penalties: list[str]) -> tuple[float, list[str], list[str]]:
@@ -561,6 +588,7 @@ def _result_metadata(task: EvalTask) -> dict[str, object]:
         "success_criteria": task.success_criteria,
         "expected_behavior": task.expected_behavior,
         "allowed_tools": task.allowed_tools,
+        "all_required_keywords": task.all_required_keywords,
         "required_markers": task.required_markers,
         "forbidden_markers": task.forbidden_markers,
         "timeout": task.timeout,

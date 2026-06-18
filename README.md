@@ -42,12 +42,12 @@ python3 -m pip install -e '.[webui]'
 
 Toolset: `hermes_skillopt`
 
-- `hermes_skillopt_status`: profile, skill count, recent staged runs.
+- `hermes_skillopt_status`: profile, skill count, recent staged runs, artifact lineage summaries, and stale/incomplete checkpoint rows with cleanup guidance.
 - `hermes_skillopt_run`: defaults to `mode="full"`; `mode="legacy"` calls the legacy review-only dry-run path.
 - `hermes_skillopt_full_run`: executes the current six-stage SkillOpt-inspired lifecycle.
-- `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay.
+- `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay or unsafe partial continuation.
 - `hermes_skillopt_dry_run`: legacy staged proposal; review-only.
-- `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, report/diff paths, and previews.
+- `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, lineage, report/diff paths, artifact refs, and previews; `slim=true` omits large previews and returns path/hash/byte references.
 - `hermes_skillopt_adopt`: explicit live writeback after all guards pass; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_rollback`: explicit restore from verified backup manifest/SKILL.md; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_upstream_status`: local pinned upstream clone/lock status; no network fetch.
@@ -104,7 +104,7 @@ Core artifacts include:
 
 `manifest.json` records SHA-256 hashes for staged artifacts plus `skillopt-provenance-v2`: plugin repo/commit, upstream lock, eval/task fingerprint, optimizer_backend/target_backend configs, gate policy, profile/skill fingerprints, and production eval policy fingerprint. `review`, `adopt`, and `rollback` re-check artifact integrity before trusting the run. At adopt time, SkillOpt also reloads the verified `gate_results.json`, `test_results.json`, `val_items.jsonl`, `test_items.jsonl`, `candidate_summary.json`, `evidence.json`, and `proposed_SKILL.md` artifacts and independently re-derives production/test eligibility, production eval policy, and provenance fingerprint; manifest-only edits cannot make a review-only or non-production run adoptable.
 
-`history.json` is an audit artifact, not a training database. It records each ranked candidate's parent skill hash, selected/accepted/rejected status, gate summaries, production-gate summaries, and rejection reasons so later reflection can inspect lineage without silently applying rejected edits.
+`history.json` is an audit artifact, not a training database. It records each ranked candidate's parent skill hash, selected/accepted/rejected status, gate summaries, production-gate summaries, and rejection reasons so later reflection can inspect lineage without silently applying rejected edits. `status`, `resume-inspect`, and `review` surface `artifact_lineage` with skill/eval/target path and hash summaries so reviewers can see which staged artifacts back a run without opening every file.
 
 Read-only resume inspection is available with:
 
@@ -112,7 +112,7 @@ Read-only resume inspection is available with:
 python3 -m hermes_skillopt.cli resume-inspect RUN_ID
 ```
 
-It verifies checkpoint/stage fingerprints and manifest hashes. It reports whether a completed run is safe to reuse; incomplete checkpoints are refused rather than replayed from the middle of the six-stage lifecycle.
+It verifies checkpoint/stage fingerprints and manifest hashes. It reports whether a completed run is safe to reuse; incomplete checkpoints are refused rather than replayed from the middle of the six-stage lifecycle. Cleanup is guidance-only: no command auto-removes a run directory, and abandoned runs should be manually inspected to ensure no writer is active before deletion.
 
 ## Eval-only and benchmark
 
@@ -138,7 +138,9 @@ Two static review seed packs are bundled under `examples/evals/` (historical fil
 - `examples/evals/hermes_tool_use_production_v1.json`: static review pack for grounded tool use, command boundary safety, and verification discipline.
 - `examples/evals/hermes_skill_safety_production_v1.json`: static review pack for staged skill editing, active-profile isolation, adoption gates, provenance, and rollback safety.
 
-These example packs use `schema_version: hermes-curated-eval-pack-v1`, complete train/validation/test splits, stable task IDs/prompts, deterministic keyword/text scorecard fields, `task_origin: static-review-eval-pack`, `sample_pack: true`, `production_policy.allow_production_adoption: false`, and tasks marked `production_gate_eligible: false`. They are review/training fixtures for Hermes safety/tool-use skills; they cannot make a run production-adoptable and do not certify arbitrary skills or upstream benchmark parity.
+A curated TikTok Seedance thermal fixture is also bundled at `examples/evals/tiktok_seedance_thermal_v4.json`. It upgrades the old thermal-v3-style wording checks to `version: thermal-v4` and uses hard `all_required_keywords`/`required_markers` plus `forbidden_markers` so "heated brush" cannot be hidden by soft score when copy incorrectly says hot air brush, blow dryer/hair dryer, negative-ion dryer, or airflow.
+
+The static Hermes examples use `schema_version: hermes-curated-eval-pack-v1`, complete train/validation/test splits, stable task IDs/prompts, deterministic keyword/text scorecard fields, `task_origin: static-review-eval-pack`, `sample_pack: true`, `production_policy.allow_production_adoption: false`, and tasks marked `production_gate_eligible: false`. They are review/training fixtures for Hermes safety/tool-use skills; they cannot make a run production-adoptable and do not certify arbitrary skills or upstream benchmark parity.
 
 Minimal task:
 
@@ -150,7 +152,7 @@ Supported fields include:
 
 - Required: `prompt`; optional `id`.
 - Splits: `train`, `validation`/`val`, `test`.
-- Scoring/assertion fields: `expected_keywords`/`expected_terms`, `forbidden_keywords`/`failure_terms`, `assertions`, `required_markers`, `forbidden_markers`, `success_criteria`, `expected_behavior`, optional `ground_truth_score` metadata.
+- Scoring/assertion fields: `expected_keywords`/`expected_terms` (weighted soft checks), `all_required_keywords`/`required_keywords`/`must_include_keywords` (critical all-required hard checks), `forbidden_keywords`/`failure_terms`, `assertions`, `required_markers` (critical hard checks), `forbidden_markers` (critical hard fail), `success_criteria`, `expected_behavior`, optional `ground_truth_score` metadata.
 - Metadata/execution fields: `judge`, `allowed_tools`, `timeout`, `fixtures`, `weight`, `executor`, `production_gate_eligible`/`production_gate` (set false to opt out of production adopt even when the scorecard is explicit).
 
 Production eval schema policy (`production-eval-schema-v1`) is recorded into `manifest.json` and `report.md` with eval pack id/version/fingerprint, split governance, and a provenance fingerprint over eval file SHA, eval pack identity, task fingerprint, backend, target executor, and target config. Versioned curated packs require complete train/validation/test coverage, reject split leakage, and reject tampered declared eval fingerprints. `checkpoint.json` also records eval pack identity for completed-run resume matching. `review` returns that fingerprint plus per-task validation deltas.
@@ -203,7 +205,7 @@ python3 -m hermes_skillopt.cli conformance --output conformance.json
 - `conformance` runs local deterministic checks (`compileall` and pytest args) and writes a `hermes-skillopt-conformance-v1` JSON report. It does not contact upstream, run external benchmark code, or require live Hermes services.
 - Default `conformance` mode is `quick`, a deterministic smoke/regression subset. Use `--mode full` when you need all local pytest tests; do not report quick mode as full repository health.
 
-These utilities are useful for local regression evidence. Upstream benchmark parity status is **import-only supported**: safe JSON manifest conversion is available, but true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist. They do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
+These utilities are useful for local regression evidence. Upstream benchmark bridge status is **import-only / no-execution**: safe JSON manifest conversion is available, but true upstream benchmark execution is unsupported until adapters and frozen-target evidence exist. They do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
 
 ## Adopt and rollback
 
@@ -269,12 +271,3 @@ python3 -m hermes_skillopt.cli full-run --help
 python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```
-
-
-## Track B P0-P2 status additions
-
-- `hermes-skillopt compare-upstream-pin` is a read-only status surface for the pinned Microsoft SkillOpt clone/lock. It never fetches, vendors, merges, or rewrites plugin code.
-- `hermes-skillopt benchmark-parity-status` labels the current mode as **Hermes-native benchmark mode**, not an upstream SkillOpt benchmark result. It is report-only and performs no rollout, adopt, or writeback.
-- `eval-only`/`benchmark` use the benchmark adapter v1 (`JsonEvalPackBenchmarkAdapter`) with schema/version/fingerprint/split/leakage governance fields.
-- `target_executor=live-readonly` is a disabled-by-default Hermes target adapter interface for future evidence collection. It is not an implemented live Hermes runner; without the required `frozen_hermes_target_execution_v1` evidence it returns report-only/non-adoption evidence.
-- Adopt/rollback are serialized by a profile-local writeback lock and append `skillopt/writeback_audit.jsonl` attempt/result events.
