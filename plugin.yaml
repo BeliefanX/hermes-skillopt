@@ -32,3 +32,19 @@ provides_tools:
   - hermes_skillopt_transfer_eval
   - hermes_skillopt_conformance
   - hermes_skillopt_handoff_optimize
+safety_metadata:
+  schema_version: hermes-skillopt-tool-safety-v1
+  compatibility: metadata_only_all_existing_tools_remain_available
+  scheduled_default_guidance: "Schedule only read-only scout/doctor/status/eval-pack-inventory/review digest surfaces; never cron optimize/full-run/adopt/rollback/upstream-update."
+  groups:
+    read_only: "Inspection/inventory/digest only; cron-safe by default."
+    read_only_report: "Read-only checks with optional explicit report output; cron-safe by default."
+    stage_artifacts: "Creates staging/eval/handoff artifacts for human review; not a default cron action."
+    writeback: "Writes live SKILL.md after explicit typed confirmation; never cron-safe."
+    upstream: "Fetches/updates pinned upstream clone/lock; human-triggered only."
+  tool_groups:
+    read_only: [hermes_skillopt_status, hermes_skillopt_scout, hermes_skillopt_doctor, hermes_skillopt_eval_pack_inventory, hermes_skillopt_review, hermes_skillopt_resume_inspect, hermes_skillopt_fleet_report, hermes_skillopt_fleet_resume_plan, hermes_skillopt_fleet_rollback_plan, hermes_skillopt_artifact_hygiene_report, hermes_skillopt_upstream_status, hermes_skillopt_compare_upstream_pin, hermes_skillopt_benchmark_parity_status, hermes_skillopt_batch_preflight]
+    read_only_report: [hermes_skillopt_conformance, hermes_skillopt_transfer_eval]
+    stage_artifacts: [hermes_skillopt_dry_run, hermes_skillopt_run, hermes_skillopt_full_run, hermes_skillopt_optimize, hermes_skillopt_batch_run, hermes_skillopt_eval_pack_scaffold, hermes_skillopt_eval_pack_curate, hermes_skillopt_eval_pack_mine_sessions, hermes_skillopt_import_upstream_benchmark, hermes_skillopt_handoff_optimize]
+    writeback: [hermes_skillopt_adopt, hermes_skillopt_rollback]
+    upstream: [hermes_skillopt_upstream_update]

@@ -153,12 +153,15 @@ def test_review_latest_and_summary(tmp_path):
 
     status = core.status(str(tmp_path))
     assert status["recent_runs"][0]["readiness_adoptability"]["schema_version"] == "hermes-skillopt-readiness-adoptability-v1"
+    assert status["recent_runs"][0]["evidence_class"] == "review_only_or_not_ready"
+    assert status["tool_safety"]["schema_version"] == "hermes-skillopt-tool-safety-v1"
 
     digest = core.review_digest("latest", hermes_home_path=str(tmp_path))
     assert digest["schema_version"] == "hermes-skillopt-review-digest-v1"
     assert "report_summary" not in digest
     assert "diff_preview" not in digest
     assert "score_provenance:" in digest["digest"]
+    assert "evidence_class: review_only_or_not_ready" in digest["digest"]
     assert "eval_pack:" in digest["digest"]
     assert "next_safe_action:" in digest["digest"]
 
@@ -309,6 +312,15 @@ def test_plugin_registers_doctor_optimize_and_enforces_adopt_confirmation(monkey
     assert "hermes_skillopt_optimize" in plugin.SCHEMAS
     assert plugin.SCHEMAS["hermes_skillopt_optimize"]["parameters"]["properties"]["intent"]["enum"] == ["smoke", "review", "production"]
     assert "confirmation" in plugin.SCHEMAS["hermes_skillopt_adopt"]["parameters"]["properties"]
+    assert plugin.SCHEMAS["hermes_skillopt_scout"]["x-hermes-skillopt-safety"]["safety_group"] == "read_only"
+    assert plugin.SCHEMAS["hermes_skillopt_scout"]["x-hermes-skillopt-safety"]["cron_safe"] is True
+    assert plugin.SCHEMAS["hermes_skillopt_optimize"]["x-hermes-skillopt-safety"]["safety_group"] == "stage_artifacts"
+    assert plugin.SCHEMAS["hermes_skillopt_optimize"]["x-hermes-skillopt-safety"]["cron_safe"] is False
+    assert plugin.SCHEMAS["hermes_skillopt_adopt"]["risk_level"] == "high"
+    assert plugin.TOOL_SAFETY_CATALOG["groups"]["writeback"]["scheduled_default"] is False
+    assert "never cron optimize" in plugin.TOOL_SAFETY_CATALOG["scheduled_default_guidance"]
+    registered = {name for name, *_ in plugin._TOOLS}
+    assert set(plugin.core.TOOL_SAFETY_METADATA) == registered
     assert "digest" in plugin.SCHEMAS["hermes_skillopt_review"]["parameters"]["properties"]
     rollback_confirm = plugin.SCHEMAS["hermes_skillopt_rollback"]["parameters"]["properties"]["confirmation"]
     assert "ROLLBACK <run_id>" in rollback_confirm["description"]

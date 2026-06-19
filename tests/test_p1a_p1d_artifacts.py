@@ -75,8 +75,12 @@ def test_frozen_mvp_full_run_emits_target_execution_evidence_and_reviewer_gate(t
 
     assert evidence["schema_version"] == "skillopt-target-execution-evidence-v1"
     assert evidence["classification"] == "frozen_hermes_target_execution_v1"
-    assert evidence["implementation_label"] == "sandbox_mvp_not_live_upstream_hermes"
-    assert evidence["complete"] is True
+    assert evidence["implementation_label"] == "sandbox_mvp_fixed_runner_review_only"
+    assert evidence["complete"] is False
+    assert evidence["explicit_real_runtime_required"] is True
+    assert evidence["real_hermes_runtime_evidence"] is False
+    assert evidence["real_hermes_runtime_invocation"] is False
+    assert evidence["internal_review_only_runner"] is True
     assert evidence["permissions"]["task_commands_allowed"] is False
     assert evidence["permissions"]["profile_write_allowed"] is False
     assert evidence["provider_fingerprint"]["fingerprint_sha256"]

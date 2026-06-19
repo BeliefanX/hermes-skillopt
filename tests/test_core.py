@@ -112,6 +112,30 @@ def test_llm_backend_fails_safely_without_llm_context():
         core.LLMBackend(backend="hermes", allow_mock=False, ctx=ctx)
 
 
+def test_hermes_home_prefers_official_helper_and_keeps_deterministic_fallback(monkeypatch, tmp_path):
+    official_home = tmp_path / "official"
+    env_home = tmp_path / "env"
+    monkeypatch.setenv("HERMES_HOME", str(env_home))
+
+    def fake_import_module(name):
+        if name == "hermes.config":
+            return type("HermesConfig", (), {"get_hermes_home": staticmethod(lambda: str(official_home))})
+        raise ImportError(name)
+
+    monkeypatch.setattr(core.importlib, "import_module", fake_import_module)
+    assert core.hermes_home() == official_home.resolve()
+    explicit = tmp_path / "explicit"
+    assert core.hermes_home(str(explicit)) == explicit.resolve()
+
+    def missing_import_module(name):
+        raise ImportError(name)
+
+    monkeypatch.setattr(core.importlib, "import_module", missing_import_module)
+    assert core.hermes_home() == env_home.resolve()
+    monkeypatch.delenv("HERMES_HOME")
+    assert core.hermes_home() == (Path.home() / ".hermes").resolve()
+
+
 def test_dry_run_stages_files_and_diff(tmp_path):
     make_skill(tmp_path, "demo")
     out = core.dry_run(skill="demo", goal="be safer", hermes_home_path=str(tmp_path))
@@ -139,10 +163,37 @@ def test_adopt_sha_guard_and_rollback(tmp_path):
         core.adopt(run_id, hermes_home_path=str(tmp_path))
     adopt = core.adopt(run_id, hermes_home_path=str(tmp_path), force=True)
     assert Path(adopt["backup_dir"]).exists()
+    assert adopt["post_write_readback"]["verified"] is True
+    assert adopt["post_write_readback"]["hash_match"] is True
     assert "SkillOpt Learned Rules" in skill.read_text(encoding="utf-8")
     rb = core.rollback(run_id, hermes_home_path=str(tmp_path))
     assert rb["status"] == "rolled_back"
+    assert rb["post_write_readback"]["verified"] is True
     assert "external edit" in skill.read_text(encoding="utf-8")
+    audit_rows = [json.loads(line) for line in (tmp_path / "skillopt" / "writeback_audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    success_rows = [r for r in audit_rows if r.get("outcome") == "success"]
+    assert success_rows
+    assert all(r["details"]["post_write_readback"]["verified"] is True for r in success_rows)
+
+
+def test_adopt_post_write_readback_mismatch_refuses_success(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path, "demo")
+    eval_path = write_eval_file(tmp_path)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    original_read_text = core.read_text
+
+    def fake_read_text(path):
+        if Path(path) == skill:
+            return original_read_text(path) + "\npost-write race/tamper\n"
+        return original_read_text(path)
+
+    monkeypatch.setattr(core, "read_text", fake_read_text)
+    with pytest.raises(ValueError, match="Post-write readback sha mismatch"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+    manifest = json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "staged_best"
+    assert "post_write_readback" not in manifest
 
 
 def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_path):
@@ -158,6 +209,34 @@ def test_adopt_rejects_tampered_proposed_artifact_without_writing_target(tmp_pat
 
     assert skill.read_text(encoding="utf-8") == original
     assert not any((tmp_path / "skillopt" / "backups").iterdir())
+
+
+def test_session_mined_evidence_is_review_only_and_not_production_adoption(tmp_path):
+    skill_path = make_skill(tmp_path, "demo")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "session.log").write_text("demo success verified with pytest but direct harvest only", encoding="utf-8")
+
+    snippets = core.harvest_sessions(
+        tmp_path,
+        core.Skill("demo", skill_path, "skills/demo/SKILL.md", core.sha256_text(skill_path.read_text(encoding="utf-8"))),
+        query="demo",
+    )
+    assert snippets
+    assert all(s["review_only"] is True and s["allow_production_adoption"] is False for s in snippets)
+
+    items = core.mine_items(snippets, core.Skill("demo", skill_path, "skills/demo/SKILL.md", ""), query="demo")
+    assert all(i["review_only"] is True and i["allow_production_adoption"] is False for i in items)
+
+    from hermes_skillopt.env import HermesSkillEnv, production_eligibility_for_task
+    from hermes_skillopt.state import SkillState
+
+    state = SkillState("demo", skill_path, "skills/demo/SKILL.md", skill_path.read_text(encoding="utf-8"), core.sha256_text(skill_path.read_text(encoding="utf-8")), tmp_path)
+    tasks, evidence = HermesSkillEnv(state, query="demo").build_tasks()
+    assert evidence["session_harvest_provenance"]["review_only"] is True
+    session_tasks = [t for split_tasks in tasks.values() for t in split_tasks if t.metadata.get("task_origin") == "session-mined"]
+    assert session_tasks
+    assert all(t.metadata["review_only"] is True and t.metadata["allow_production_adoption"] is False for t in session_tasks)
+    assert all(not production_eligibility_for_task(t).eligible for t in session_tasks)
 
 
 @pytest.mark.parametrize("gate_mode", ["soft", "mixed"])

@@ -1,6 +1,6 @@
 # Production and CI cookbook
 
-This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skillopt`. It is intentionally conservative: no recipe auto-adopts, no recipe claims Microsoft SkillOpt upstream benchmark parity, and local sandbox/frozen-Hermes evidence is scope-labeled Hermes-native MVP evidence unless a future real adapter supplies stronger proof.
+This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skillopt`. It is intentionally conservative: no recipe auto-adopts, no recipe claims Microsoft SkillOpt upstream benchmark parity, and current sandbox/frozen-Hermes evidence is review-only/non-production unless a future real Hermes runtime adapter supplies the required proof.
 
 ## Principles
 
@@ -10,7 +10,7 @@ This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skil
 - Use `optimize --intent production` only with an explicit curated production eval pack, strict gate, non-mock optimizer, and eligible validation/test splits.
 - Review with `review latest --summary` or `review latest --digest` before any writeback. Summary/digest separate validation, production-best, and held-out-test gates; expose evidence class, blockers, score provenance, artifact refs, and next safe action.
 - Adopt only with an exact typed confirmation (`ADOPT <run_id>`). Core adopt re-verifies hashed artifacts, production/test eligibility, provenance, proposed skill SHA, and current live skill SHA.
-- Do not call local `benchmark`, `eval-only`, import, transfer, conformance, scorecard, or frozen-Hermes sandbox reports upstream parity or external benchmark performance.
+- Do not call local `benchmark`, `eval-only`, import, transfer, conformance, scorecard, or frozen-Hermes sandbox/fixed-runner reports upstream parity, external benchmark performance, or production adoption proof.
 
 ## 1. Read-only readiness
 
@@ -78,7 +78,7 @@ Production intent requirements enforced by code:
 - `--gate-mode strict`
 - staged-only / no auto-adopt
 
-Adoptability additionally requires eligible curated validation and held-out test tasks, no production hard-failed rows, complete required runtime evidence for adoption-eligible frozen-target contracts, verified artifacts, and provenance consistency. Missing runtime evidence downgrades production eligibility even if a scorecard or skill-text-only score improves.
+Adoptability additionally requires eligible curated validation and held-out test tasks, no production hard-failed rows, complete required runtime evidence for adoption-eligible frozen-target contracts, verified artifacts, and provenance consistency. Current sandbox/fixed internal runners are review-only because they lack real Hermes runtime invocation proof; missing runtime evidence downgrades production eligibility even if a scorecard or skill-text-only score improves.
 
 If review/digest shows a held-out test score but also warns that `heldout_test_sensitivity` is missing, keep the score caveated and do not turn it into an external performance or upstream parity claim.
 
@@ -146,8 +146,8 @@ Before reporting a production candidate, verify:
 - `review --summary` has `production_gate_eligible: true`, `test_gate_eligible: true`, and no blockers.
 - `review --summary`/`--digest` score provenance points to the intended target executor/backend, optimizer backend, eval pack id/version/fingerprint, and `score_source: production_curated_eval_pack`.
 - Eval inventory readiness shows `hermes-skillopt-readiness-adoptability-v1` gates as production eligible for the pack; advisory package metadata (`references/`, `templates/`, `scripts/`, `assets/`) was reviewed if relevant but not treated as adoption authority.
-- Frozen-Hermes evidence includes explicit class/scope, target config fingerprint, provider/model/toolset/session fingerprints, permissions with task commands disabled, isolated runtime evidence, transcript/trajectory, and execution-scoring evidence.
-- `scorecard` or static skill-text-only evidence is not called true frozen Hermes execution.
+- Frozen-Hermes evidence includes explicit class/scope, target config fingerprint, provider/model/toolset/session/runtime fingerprints, permissions with task commands disabled, isolated runtime evidence, transcript/trajectory, execution-scoring evidence, and explicit real Hermes runtime invocation proof. If review shows `non_production_internal_runner` or missing real-runtime proof, treat it as review-only.
+- `scorecard`, static skill-text-only evidence, and fixed internal sandbox runner output are not called adoption-eligible frozen Hermes execution.
 - Task-provided commands are blocked by default and blocked-command rows are not production-gate eligible.
 - Production hard-fails override soft score gains.
 - Reports avoid claims of Microsoft upstream benchmark execution, upstream result equivalence, arbitrary live Hermes command execution, or external performance parity.

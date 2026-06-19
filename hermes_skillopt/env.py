@@ -128,6 +128,8 @@ class EvalPackMetadata:
     production_policy_fingerprint_sha256: str | None = None
     eval_execution_contract: dict[str, Any] = field(default_factory=dict)
     heldout_policy: str = "validation selects candidates; held-out test is final gate only"
+    metadata_authority: str = "advisory_ux_only_not_production_authority"
+    advisory_only: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -248,6 +250,8 @@ def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
         reasons.append("missing explicit curated eval pack provenance")
     if not bool(task.metadata.get("eval_pack_production_allowed")):
         reasons.append("eval pack production policy does not allow adoption")
+    if task.metadata.get("review_only") is True or task.metadata.get("allow_production_adoption") is False:
+        reasons.append("evidence metadata is review-only and disallows production adoption")
     contract_raw = task.metadata.get("eval_execution_contract")
     contract = contract_raw if isinstance(contract_raw, dict) else {}
     if not bool(contract.get("adoption_eligible")):
@@ -711,6 +715,8 @@ def eval_pack_governance_report(tasks: list[EvalTask], metadata: EvalPackMetadat
         "production_policy_fingerprint_sha256": metadata.production_policy_fingerprint_sha256,
         "eval_execution_contract": metadata.eval_execution_contract,
         "heldout_policy": metadata.heldout_policy,
+        "metadata_authority": metadata.metadata_authority,
+        "advisory_only": metadata.advisory_only,
         "leakage_diagnostics": {
             "duplicate_ids_across_splits": leaked_ids,
             "duplicate_prompts_across_splits": leaked_prompts,
@@ -884,6 +890,13 @@ class HermesSkillEnv:
         session_pipeline = session_sleep_pipeline_records(snippets, items, tasks)
         evidence = {
             "snippets": snippets,
+            "session_harvest_provenance": {
+                "schema_version": "hermes-skillopt-session-harvest-provenance-v1",
+                "source": "direct-state-db-and-log-fallback",
+                "review_only": True,
+                "allow_production_adoption": False,
+                "warning": "Best-effort direct state.db/sessions/logs harvest is review-only; it may inform candidates but cannot satisfy production adoption evidence.",
+            },
             "items": items,
             "abstraction": "environment/benchmark",
             "env_adapter_contract": "HermesEnvAdapter-v1",
@@ -934,6 +947,10 @@ class HermesSkillEnv:
                 **item,
                 "source_id": item.get("source_id"),
                 "task_origin": "session-mined",
+                "review_only": True,
+                "allow_production_adoption": False,
+                "evidence_provenance": "direct-session-harvest",
+                "production_adoption_refusal_reason": "session-mined/direct-harvest evidence is best-effort review-only and cannot satisfy production gates",
                 "scorecard_explicit": True,
                 "production_gate_eligible": False,
                 "production_eval_schema_policy": "production-eval-schema-v1",

@@ -14,7 +14,7 @@ The adapter implements SkillOpt-inspired concepts in Hermes terms:
 
 - `SKILL.md` is the trainable state.
 - `SixStageSkillOptTrainer` performs rollout → reflect → aggregate → select → update → evaluate/gate.
-- `TargetExecutor` runs frozen replay/sandbox/scorecard evaluation; `frozen-hermes` / `frozen_hermes_target_execution_v1` currently routes to the constrained sandbox MVP with isolated runtime/provider/model/toolset/session evidence.
+- `TargetExecutor` runs frozen replay/sandbox/scorecard evaluation; `frozen-hermes` / `frozen_hermes_target_execution_v1` currently routes to a constrained sandbox/fixed internal runner that records review-only evidence. Production adoption requires a future/real Hermes runtime invocation proof in addition to fingerprints/transcript/scoring evidence.
 - `OptimizerBackend` emits bounded edits only.
 - `HermesSkillEnv` builds curated/session/fallback train/validation/test tasks, with bundled static review seed packs under `examples/evals/` for review/training evidence only.
 - Hermes safety remains outside the trainer: staged-only artifacts, read-only scout/review/digest surfaces, explicit review/adopt/rollback, artifact hashes, path/SHA guards, active-profile isolation.
@@ -72,7 +72,7 @@ Semantics:
 - `pinned_upstream_execution` — unsupported/future. This would require a pinned, bounded, no-live-write execution adapter with evidence equivalent to the Hermes frozen-target contract.
 - `parity_evidence_complete` — unsupported/future. This would require comparable pinned upstream execution evidence plus mapped Hermes eval evidence; it is not available on this branch.
 
-Consequently, `benchmark`, `eval-only`, `import-upstream-benchmark`, transfer eval, and sandbox-backed `frozen-hermes` results are local Hermes evidence. They must not be described as Microsoft SkillOpt upstream benchmark parity or external performance results.
+Consequently, `benchmark`, `eval-only`, `import-upstream-benchmark`, transfer eval, and sandbox/fixed-runner `frozen-hermes` results are local review evidence. They must not be described as Microsoft SkillOpt upstream benchmark parity, external performance results, or production-adoption proof.
 
 Supported local parity levels are intentionally limited to Hermes-native eval-pack replay plus JSON/pinned-manifest conversion evidence. Unsupported levels remain `pinned_upstream_execution`, `parity_evidence_complete`, arbitrary live Hermes command execution, and any claim that local transfer/fleet reports prove Microsoft SkillOpt benchmark behavior.
 
@@ -86,7 +86,7 @@ The current adapter’s production adoption gates depend on local curated eval f
 - Held-out test eligibility requires eligible curated test tasks passing threshold.
 - Fallback, synthetic, session-mined, sample/static keyword packs, report-only replay contracts, and legacy dry-run evidence remains review-only.
 - Sandbox eval is isolated and blocks task-provided commands by default.
-- Frozen-Hermes target execution is currently an MVP alias for the sandbox runner. It can provide isolated runtime/transcript/scoring evidence for Hermes-native evals, but it is not Microsoft upstream benchmark execution, not parity certification, and not arbitrary live agent command execution.
+- Frozen-Hermes target execution is currently routed through the sandbox/fixed internal runner. It can provide isolated runtime/transcript/scoring review evidence for Hermes-native evals, but production adoption requires explicit real Hermes runtime evidence (`real_hermes_runtime_evidence` plus real core/gateway invocation proof). It is not Microsoft upstream benchmark execution, not parity certification, and not arbitrary live agent command execution.
 - Bundled seed packs `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` are currently static review packs (`sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`) despite historical filenames; they cannot satisfy production/adoption gates.
 
 ## Conformance semantics
@@ -107,7 +107,7 @@ Hermes conformance is defined by local tests and the staged artifact contract, n
 - `SKILL.md` is the only trainable state; Hermes core prompts, plugin code, and upstream clones are not rewritten by optimization runs.
 - Optimizer backend and target backend are separated so candidate generation cannot alter the frozen evaluator.
 - Production adoption is narrower than generic optimization: explicit curated validation plus held-out curated test gates are required, and static/keyword/sample/report-only packs cannot authorize adoption.
-- Sandbox/frozen-Hermes support is a constrained Hermes review/eval MVP that blocks task-provided commands; it is not an arbitrary command executor or real upstream benchmark runner.
+- Sandbox/frozen-Hermes support is a constrained Hermes review/eval path that blocks task-provided commands; without real Hermes runtime invocation evidence it is not production-adoption evidence, an arbitrary command executor, or a real upstream benchmark runner.
 - Upstream update commands clone/fetch/pin metadata only and do not merge code, write skills, or auto-port changes.
 - `benchmark`/`eval-only` reports and benchmark bridge imports do not execute upstream benchmark code or assert external benchmark parity; safe `json_import_only` and data-only `pinned_manifest_replay` conversion are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. Transfer eval does not create real cross-model claims. Reports distinguish production-curated scores from review-only scores and surface per-task deltas/ledger evidence rather than collapsing all evidence into a single benchmark claim.
 - `scout` and `review --digest` are notification/review conveniences only: they surface safe next actions, score provenance, gate separation, and artifact refs, but never fetch upstream, run optimizers, adopt, rollback, schedule cron, or claim parity. Scheduled automation should be limited to read-only `scout`, `doctor`, `eval-pack-inventory`, and `review --digest` surfaces.
@@ -139,4 +139,4 @@ Do not replace the Hermes safety shell with upstream training paths, and do not 
 
 ## Current upstream pin/parity policy
 
-`compare-upstream-pin` compares the local canonical clone with `skillopt_upstream.lock` and locally fetched `origin/main` only. It does not fetch. `upstream-update --fetch-only` is the explicit refresh path. No upstream Microsoft SkillOpt code is vendored or blindly merged into this Hermes-native adapter. `benchmark-parity-status` deliberately reports **no full upstream parity claim**: `json_import_only` and `pinned_manifest_replay` adapter levels are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. The local sandbox-backed frozen-Hermes MVP provides Hermes evidence only and does not certify Microsoft SkillOpt benchmark parity.
+`compare-upstream-pin` compares the local canonical clone with `skillopt_upstream.lock` and locally fetched `origin/main` only. It does not fetch. `upstream-update --fetch-only` is the explicit refresh path. No upstream Microsoft SkillOpt code is vendored or blindly merged into this Hermes-native adapter. `benchmark-parity-status` deliberately reports **no full upstream parity claim**: `json_import_only` and `pinned_manifest_replay` adapter levels are supported, while `pinned_upstream_execution` and `parity_evidence_complete` remain unsupported. The local sandbox/fixed-runner frozen-Hermes path provides review evidence only and does not certify Microsoft SkillOpt benchmark parity or production adoption readiness.

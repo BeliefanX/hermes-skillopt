@@ -8,7 +8,7 @@ Current Phase0-Phase5 code provides deterministic, local, no-credential tooling 
 
 - Staged six-phase skill optimization over a single Hermes `SKILL.md` with explicit review/adopt/rollback gates.
 - Reviewed Hermes static seed eval packs, safe curated eval-pack authoring, session-mined review drafts, and safe upstream-style benchmark manifest import into Hermes eval pack format.
-- Runtime-evidence-aware target execution through deterministic scorecard/replay and the sandbox-backed `frozen_hermes_target_execution_v1` MVP.
+- Runtime-evidence-aware target execution through deterministic scorecard/replay and the sandbox-routed `frozen_hermes_target_execution_v1` path, with sandbox/fixed internal runner evidence treated as review-only until real Hermes runtime invocation proof exists.
 - Guided UX surfaces (`scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`), WebUI wizard/review console/API, fleet/readiness reports, artifact hygiene reports, and local CI conformance reports.
 
 No command in this adapter vendors Microsoft SkillOpt, imports upstream Python modules, executes upstream benchmark code, or requires external services.
@@ -19,7 +19,7 @@ Hermes maps the core SkillOpt abstraction as follows:
 
 - Trainable state: a Hermes `SKILL.md` document.
 - Environment/benchmark: Hermes eval packs with explicit train/val/test split governance; bundled examples under `examples/evals/` are static review fixtures and cannot production-adopt.
-- Rollout/target model: frozen target executor (`scorecard`, `replay`, `sandbox`, or `frozen-hermes`/`frozen_hermes_target_execution_v1`) with backend config fingerprints. The frozen-Hermes path is currently a sandbox-backed MVP with isolated runtime/provider/model/toolset/session evidence, transcript/trajectory evidence, task commands disabled, and no live profile writes.
+- Rollout/target model: frozen target executor (`scorecard`, `replay`, `sandbox`, or `frozen-hermes`/`frozen_hermes_target_execution_v1`) with backend config fingerprints. The frozen-Hermes path is currently sandbox/fixed-runner backed with isolated runtime/provider/model/toolset/session evidence, transcript/trajectory evidence, task commands disabled, and no live profile writes; this is review-only because it lacks real Hermes runtime invocation proof.
 - Reflection/update: optimizer proposes bounded edits; candidate text is staged.
 - Evaluation gate: validation/test scorecards decide whether a candidate is review-worthy or adoptable; any hard-failed production-eligible validation row blocks production gate acceptance/adoptability regardless of soft weighted-score improvement or gate mode. Critical `all_required_keywords`/`required_markers` and `forbidden_markers` are hard pass/fail constraints, not soft weights.
 - Artifacts/checkpoints: every staged run records manifest, task/eval, target, optimizer, profile, and provenance fingerprints; stage artifacts include deterministic batch metadata.
@@ -45,8 +45,8 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - `readiness_adoptability` is the shared schema (`hermes-skillopt-readiness-adoptability-v1`) used by inventory, decision summaries, review digests, fleet/scout-style surfaces, and WebUI review APIs. It separates validation gate, production-best gate, held-out test gate, review-only status, blockers, warnings, and `next_safe_action`; it is descriptive and never an adoption side effect.
 - `eval-pack-inventory` returns `hermes-skillopt-eval-pack-inventory-v2` and a top-level `hermes-skillopt-readiness-matrix-v1`. It recognizes versioned `hermes-curated-eval-pack-v1` packs by `pack_id`, `version`, and fingerprint, including name-derived files such as `<skill>-thermal-v4.json`, while avoiding broad substring false matches.
 - `review --summary` / plugin `summary=true` returns decision-first JSON; `review --digest` / plugin `digest=true` / `review_digest()` returns a slim notification text plus artifact refs. Both separate validation, production-best, and held-out-test gates and keep `adoptable` distinct from `accepted` or review-only improvement.
-- `score_provenance` records target executor/backend, optimizer backend, eval pack identity/version/path/fingerprint, policy fingerprints, split labels, score fields, and warnings. Held-out test scores without `heldout_test_sensitivity` are reported with a warning and must not be overclaimed.
-- `scout` is a read-only notification surface for eval inventory, recent runs, artifact hygiene, package metadata, and safe next commands. Its mode explicitly states no full-run/optimize/adopt/rollback/fetch, and its cron recommendation is no-auto-adopt.
+- `score_provenance` records target executor/backend, optimizer backend, eval pack identity/version/path/fingerprint, policy fingerprints, split labels, score fields, evidence class/source, artifact refs when available, and warnings. Held-out test scores without `heldout_test_sensitivity` are reported with a warning and must not be overclaimed.
+- `scout` is a read-only notification surface for eval inventory, recent runs, artifact hygiene, package metadata, tool safety/risk metadata, and safe next commands. Its mode explicitly states no full-run/optimize/adopt/rollback/fetch, and its cron recommendation is no-auto-adopt.
 - Skill package awareness is advisory only: sibling `references/`, `templates/`, `scripts/`, and `assets/` are summarized by path/hash/count after symlink/profile-boundary checks, with `content_included: false`; this does not expand adoption authority or editable scope.
 
 ## Phase0-Phase5 commands/modules
@@ -61,7 +61,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - `python3 -m hermes_skillopt.cli optimize --intent smoke|review|production ...`
   - Guided staged-only wrapper over `full_run`; always disables auto-adopt and force.
-  - `smoke` is review-only/mock-capable, `review` is staged review evidence, and `production` requires explicit eval file, strict gate, no mock optimizer, and later explicit adopt.
+  - `smoke` is review-only/mock-capable, `review` is staged review evidence, and `production` requires explicit eval file, strict gate, no mock optimizer, complete production-eligible target runtime evidence, and later explicit adopt.
 
 - `python3 -m hermes_skillopt.cli review latest --summary|--digest|--slim`
   - Decision-first review surface exposing production/test gate booleans, evidence class, blockers/not-adoptable reasons, artifact refs, and next safe action.
@@ -154,7 +154,7 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 - Eval-pack inventory/scaffold intentionally exposes that many skills have no true curated pack yet. Do not treat scaffold/sample/static packs as production evidence.
 - Batch/fleet surfaces are orchestration/reporting helpers only; batch never adopts, and fleet resume/rollback commands never perform resume/rollback/delete/writeback themselves.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.
-- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is `json_import_only` plus `pinned_manifest_replay` for data-only manifests under the canonical pinned clone; `pinned_upstream_execution` and `parity_evidence_complete` are unsupported/future. True upstream benchmark execution is unsupported even though the Hermes-native frozen-Hermes sandbox MVP can produce local isolated runtime evidence.
+- The bridge supports common upstream-style JSON manifests, not arbitrary upstream repository benchmark loaders. Current upstream bridge support is `json_import_only` plus `pinned_manifest_replay` for data-only manifests under the canonical pinned clone; `pinned_upstream_execution` and `parity_evidence_complete` are unsupported/future. True upstream benchmark execution is unsupported; the Hermes-native frozen-Hermes sandbox/fixed-runner path produces review-only isolated runtime evidence, not production adoption proof.
 - Split manifest support is embedded JSON only; file references are intentionally not followed in P3.
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model results.
 - Conformance reports local adapter health only; they do not certify Microsoft SkillOpt parity or external benchmark performance.
@@ -167,11 +167,11 @@ Each six-stage trainer artifact under `stages/` records `schema_version: skillop
 ## Additional current conformance points
 
 - Phase0 status surfaces: `compare-upstream-pin` and `benchmark-parity-status` are read-only/report-only.
-- Phase1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. `frozen_hermes_target_execution_v1` is currently implemented only through the constrained sandbox MVP and must include frozen target config, provider/model/toolset/session fingerprints, isolated runtime, permissions, transcript/trajectory artifact, and execution-based scoring. It is not upstream parity or arbitrary live agent command execution.
+- Phase1 target adapter: `LiveHermesReadOnlyRunner` is a disabled/report-only interface, not an implemented live Hermes runner. `frozen_hermes_target_execution_v1` must include frozen target config, provider/model/toolset/session/runtime fingerprints, isolated runtime, permissions/no task-provided commands, transcript/trajectory artifact, execution-based scoring, and explicit real Hermes runtime invocation proof. The current constrained sandbox/fixed internal runner lacks that proof and is therefore review-only/non-production. It is not upstream parity or arbitrary live agent command execution.
 - Phase1 benchmark adapter: `JsonEvalPackBenchmarkAdapter` owns safe JSON eval-pack loading plus governance diagnostics.
-- Phase1 writeback safety: adopt/rollback use `skillopt/writeback.lock` and audit JSONL events.
+- Phase1 writeback safety: active profile resolution tries Hermes' official home helper before `HERMES_HOME`/`~/.hermes` fallback; adopt/rollback use `skillopt/writeback.lock`, audit JSONL events, and post-write readback verification before reporting success.
 - Phase2 governance/UX: manifests/reports/WebUI expose eval pack governance, parity labels, gate/provenance/lineage, and remain staged/read-only by default.
 - Phase3 integration utilities: benchmark import, transfer eval, conformance, and shared safe report output guards are local/report-only and no-parity.
 - Phase4 guided UX: `doctor`, `optimize --intent`, `review --summary`, CLI adopt confirmation, and WebUI wizard/review console keep smoke/review/production intent labels aligned with staged-only/no-auto-adopt behavior.
-- Phase5 runtime/CI evidence: missing runtime evidence downgrades frozen-target contracts to review-only, production hard-fails override soft score gains, artifact hygiene is read-only, and CI conformance must not be reported as upstream benchmark parity.
+- Phase5 runtime/CI evidence: missing runtime evidence, non-production internal runners, or task-command execution downgrades frozen-target contracts to review-only; production hard-fails override soft score gains, artifact hygiene is read-only, and CI conformance must not be reported as upstream benchmark parity.
 - P0-P2 safety patch notes: scout mixed-inventory gaps are reported instead of raising, scout remains cron-safe/read-only, eval-pack factory writes validate atomically before replacement, target evidence summaries mark task-command execution as incomplete evidence, and conformance writes no report unless an explicit guarded output path is supplied.

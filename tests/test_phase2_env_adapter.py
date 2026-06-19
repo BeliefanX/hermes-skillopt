@@ -367,26 +367,50 @@ def test_frozen_hermes_target_execution_v1_requires_runtime_evidence():
     sandbox_out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen-hermes").evaluate("verify", [task])
     sandbox_check = sandbox_out["eval_execution_contract_checks"][0]
     result_meta = sandbox_out["results"][0]["metadata"]
-    assert sandbox_check["runtime_evidence_complete"] is True
-    assert sandbox_check["missing_runtime_evidence"] == []
-    assert sandbox_out["production_gate_eligible"] is True
-    assert sandbox_out["production_score"] == sandbox_out["score"]
-    assert sandbox_out["review_only_score"] is None
+    assert sandbox_check["runtime_evidence_complete"] is False
+    assert "explicit_real_hermes_runtime_evidence" in sandbox_check["missing_runtime_evidence"]
+    assert "real_hermes_runtime_invocation" in sandbox_check["missing_runtime_evidence"]
+    assert "non_production_internal_runner" in sandbox_check["missing_runtime_evidence"]
+    assert sandbox_out["production_gate_eligible"] is False
+    assert sandbox_out["production_score"] is None
+    assert sandbox_out["review_only_score"] == sandbox_out["score"]
     for key in ("model_fingerprint", "profile_fingerprint", "toolset_fingerprint", "session_fingerprint"):
         assert result_meta[key]["fingerprint_sha256"]
     assert result_meta["sandbox_isolated"] is True
     assert result_meta["live_profile_writes"] is False
     assert result_meta["task_commands_executed"] is False
+    assert result_meta["real_hermes_runtime_evidence"] is False
+    assert result_meta["production_adopt_allowed"] is False
     assert result_meta["transcript_preview"]
     assert result_meta["execution_scoring"]
     assert result_meta["permissions"]["task_commands_allowed"] is False
     assert result_meta["permissions"]["profile_write_allowed"] is False
     assert result_meta["runtime_fingerprint"]["available"] is True
+    assert result_meta["runtime_fingerprint"]["invokes_hermes_core_or_gateway"] is False
     assert result_meta["provider_fingerprint"]["fingerprint_sha256"]
     assert result_meta["tool_policy_fingerprint"]["fingerprint_sha256"]
     assert result_meta["execution_scoring_evidence"]["fingerprint_sha256"]
     assert result_meta["frozen_target_config_id"] == sandbox_out["target_config_id"]
     assert result_meta["frozen_target_fingerprint_sha256"] == sandbox_out["target_fingerprint_sha256"]
+
+
+def test_frozen_hermes_sandbox_fixed_runner_cannot_be_production_adoptable():
+    task = _production_real_target_task("sandbox-fixed-bypass-regression")
+
+    out = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen_hermes_target_execution_v1").evaluate("verify SANDBOX_OK", [task])
+    check = out["eval_execution_contract_checks"][0]
+    meta = out["results"][0]["metadata"]
+    assert isinstance(check, dict)
+    assert isinstance(meta, dict)
+
+    assert out["production_gate_eligible"] is False
+    assert out["evaluation_scope"] == "review_only_deterministic_fallback"
+    assert check["runtime_evidence_complete"] is False
+    assert {"explicit_real_hermes_runtime_evidence", "real_hermes_runtime_invocation", "non_production_internal_runner"}.issubset(set(check["missing_runtime_evidence"]))
+    assert meta["runner_label"] == "sandbox_fixed_runner_review_only_unless_curated_pack"
+    assert meta["real_hermes_runtime_evidence"] is False
+    assert meta["production_adopt_allowed"] is False
+    assert meta["task_commands_executed"] is False
 
 
 def test_scorecard_text_only_is_review_scope_not_frozen_runtime_evidence():

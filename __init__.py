@@ -74,6 +74,15 @@ SCHEMAS = {
     "hermes_skillopt_handoff_optimize": _schema("Build and score a staged multi-agent delegate_task handoff package. No LLM/network calls and no global prompt auto-adopt.", {"requirements": {"type": "string"}, "worker": {"type": "string"}, "context_budget_chars": {"type": "integer", "default": 6000}}, ["requirements"]),
 }
 
+for _tool_name, _metadata in core.TOOL_SAFETY_METADATA.items():
+    if _tool_name in SCHEMAS:
+        SCHEMAS[_tool_name]["x-hermes-skillopt-safety"] = dict(_metadata)
+        SCHEMAS[_tool_name]["safety_group"] = _metadata.get("safety_group")
+        SCHEMAS[_tool_name]["risk_level"] = _metadata.get("risk_level")
+
+
+TOOL_SAFETY_CATALOG = core.tool_safety_catalog()
+
 
 def _ok(fn: Callable[..., dict[str, Any]], args: dict[str, Any]) -> str:
     try:

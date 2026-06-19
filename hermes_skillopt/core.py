@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -38,6 +39,57 @@ SECRET_PATTERNS = [
     re.compile(r"\b[A-Za-z0-9_+/=-]{32,}\b"),
 ]
 
+TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
+    "hermes_skillopt_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_scout": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_eval_pack_inventory": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_resume_inspect": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_fleet_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_fleet_resume_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_fleet_rollback_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_artifact_hygiene_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_upstream_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_compare_upstream_pin": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_benchmark_parity_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_batch_preflight": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
+    "hermes_skillopt_conformance": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": True},
+    "hermes_skillopt_transfer_eval": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": True},
+    "hermes_skillopt_dry_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_full_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_batch_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_eval_pack_scaffold": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
+    "hermes_skillopt_eval_pack_curate": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
+    "hermes_skillopt_eval_pack_mine_sessions": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output", "cron_safe": False},
+    "hermes_skillopt_import_upstream_benchmark": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
+    "hermes_skillopt_handoff_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "handoff_artifact_only", "cron_safe": False},
+    "hermes_skillopt_adopt": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_with_backup", "cron_safe": False},
+    "hermes_skillopt_rollback": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_restore", "cron_safe": False},
+    "hermes_skillopt_upstream_update": {"safety_group": "upstream", "risk_level": "high", "writes": "pinned_upstream_clone_and_lock", "cron_safe": False},
+}
+TOOL_SAFETY_GROUPS: dict[str, dict[str, Any]] = {
+    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch.", "scheduled_default": True},
+    "read_only_report": {"description": "Read-only checks that may write an explicitly requested report artifact.", "scheduled_default": True},
+    "stage_artifacts": {"description": "Creates guarded staging/eval/handoff artifacts for human review; never auto-adopts.", "scheduled_default": False},
+    "writeback": {"description": "Writes live SKILL.md after explicit typed confirmation and guard checks.", "scheduled_default": False},
+    "upstream": {"description": "Touches the pinned upstream clone/lock only; not plugin code, but network/write side effects remain human-triggered.", "scheduled_default": False},
+}
+
+
+def tool_safety_catalog() -> dict[str, Any]:
+    """Compatibility-preserving safety/risk metadata for all registered tools."""
+
+    return {
+        "schema_version": "hermes-skillopt-tool-safety-v1",
+        "compatibility": "metadata_only_all_existing_tools_remain_available",
+        "scheduled_default_guidance": "Schedule only read-only scout/doctor/status/eval-pack-inventory/review digest surfaces; never cron optimize/full-run/adopt/rollback/upstream-update.",
+        "groups": json.loads(json.dumps(TOOL_SAFETY_GROUPS, sort_keys=True)),
+        "tools": json.loads(json.dumps(TOOL_SAFETY_METADATA, sort_keys=True)),
+    }
+
 
 def now_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -55,8 +107,36 @@ def redact_secrets(text: str) -> str:
     return out
 
 
+def _official_hermes_home() -> str | os.PathLike[str] | None:
+    """Best-effort bridge to Hermes' official runtime home helper.
+
+    Hermes may expose ``get_hermes_home`` from different import paths across
+    runtime versions.  SkillOpt must not require that package at import time, so
+    this helper probes known locations and returns None when unavailable.
+    """
+
+    for module_name in ("hermes.config", "hermes.runtime", "hermes_agent.config", "hermes_agent.runtime"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        helper = getattr(module, "get_hermes_home", None)
+        if not callable(helper):
+            continue
+        try:
+            value = helper()
+        except Exception:
+            continue
+        if isinstance(value, (str, os.PathLike)):
+            return os.fspath(value)
+    return None
+
+
 def hermes_home(explicit: str | None = None) -> Path:
-    raw = explicit or os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    if explicit:
+        raw = explicit
+    else:
+        raw = _official_hermes_home() or os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
     return Path(raw).expanduser().resolve()
 
 
@@ -101,6 +181,37 @@ def read_text(path: Path) -> str:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _post_write_readback_verification(target: Path, *, expected_sha256: str, expected_skill_name: str | None = None) -> dict[str, Any]:
+    """Verify the runtime-visible SKILL.md bytes immediately after writeback."""
+
+    evidence: dict[str, Any] = {
+        "schema_version": "hermes-skillopt-post-write-readback-v1",
+        "path": str(target),
+        "expected_sha256": expected_sha256,
+        "verified": False,
+    }
+    try:
+        text = read_text(target)
+    except Exception as exc:
+        evidence.update({"error_type": type(exc).__name__, "error": redact_secrets(str(exc))})
+        raise ValueError("Post-write readback failed; refusing writeback success") from exc
+    actual_sha = sha256_text(text)
+    actual_name = parse_frontmatter_name(text)
+    evidence.update({
+        "actual_sha256": actual_sha,
+        "hash_match": actual_sha == expected_sha256,
+        "frontmatter_skill_name": actual_name,
+        "expected_skill_name": expected_skill_name,
+        "skill_name_match": True if expected_skill_name is None or actual_name is None else actual_name == expected_skill_name,
+    })
+    if actual_sha != expected_sha256:
+        raise ValueError("Post-write readback sha mismatch; refusing writeback success")
+    if expected_skill_name is not None and actual_name is not None and actual_name != expected_skill_name:
+        raise ValueError("Post-write readback skill name mismatch; refusing writeback success")
+    evidence["verified"] = True
+    return evidence
 
 
 def parse_frontmatter_name(text: str) -> str | None:
@@ -632,7 +743,7 @@ def harvest_sessions(home: Path, skill: Skill, query: str | None = None, lookbac
         hay = flat.lower()
         if terms and not any(t in hay for t in terms):
             return
-        out.append({"id": f"h{len(out)+1}", "source": source, "text": flat, "meta": meta or {}})
+        out.append({"id": f"h{len(out)+1}", "source": source, "text": flat, "review_only": True, "allow_production_adoption": False, "provenance": "direct-session-harvest", "warning": "best-effort direct state/log harvest; review-only and never production adoption evidence", "meta": meta or {}})
 
     db = home / "state.db"
     if db.exists():
@@ -659,7 +770,7 @@ def harvest_sessions(home: Path, skill: Skill, query: str | None = None, lookbac
                     if len(out) >= limit:
                         return out
         except Exception as exc:
-            out.append({"id": "harvest-warning", "source": "state.db", "text": f"harvest warning: {type(exc).__name__}: {redact_secrets(str(exc))}", "meta": {"warning": True}})
+            out.append({"id": "harvest-warning", "source": "state.db", "text": f"harvest warning: {type(exc).__name__}: {redact_secrets(str(exc))}", "review_only": True, "allow_production_adoption": False, "provenance": "direct-session-harvest", "meta": {"warning": True}})
         finally:
             try:
                 con.close()  # type: ignore[name-defined]
@@ -705,9 +816,12 @@ def mine_items(snippets: list[dict[str, Any]], skill: Skill, query: str | None =
             "skill_relevance": 1.0 if skill.name.lower() in lower or (query and query.lower() in lower) else 0.6,
             "success_hints": ["verified outcome"] if success else [],
             "failure_hints": ["tool/error/verification gap present"] if failure else [],
+            "review_only": True,
+            "allow_production_adoption": False,
+            "evidence_provenance": snip.get("provenance") or "direct-session-harvest",
         })
     if not items:
-        items.append({"id": "item-0001", "source_id": None, "user_goal": query or skill.name, "assistant_outcome": "unknown", "evidence": "No recent matching Hermes sessions were found; optimize from skill text only.", "tools_errors": [], "skill_relevance": 0.2, "success_hints": [], "failure_hints": ["missing harvested evidence"]})
+        items.append({"id": "item-0001", "source_id": None, "user_goal": query or skill.name, "assistant_outcome": "unknown", "evidence": "No recent matching Hermes sessions were found; optimize from skill text only.", "tools_errors": [], "skill_relevance": 0.2, "success_hints": [], "failure_hints": ["missing harvested evidence"], "review_only": True, "allow_production_adoption": False, "evidence_provenance": "direct-session-harvest-empty"})
     return items
 
 
@@ -1080,6 +1194,12 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
     exemplar = next((m for m in metadata_rows if m.get("frozen_hermes_contract") == "frozen_hermes_target_execution_v1"), metadata_rows[0] if metadata_rows else {})
     runtime_available = any(isinstance(m.get("runtime_fingerprint"), dict) and m["runtime_fingerprint"].get("available") is True for m in metadata_rows)
     sandbox_mvp = str(target_config.get("executor") or target_backend) == "hermes_sandbox_executor_mvp"
+    real_hermes_runtime_evidence = any(m.get("real_hermes_runtime_evidence") is True for m in metadata_rows)
+    real_hermes_runtime_invocation = any(isinstance(m.get("runtime_fingerprint"), dict) and m["runtime_fingerprint"].get("invokes_hermes_core_or_gateway") is True for m in metadata_rows)
+    raw_params = target_config.get("parameters")
+    params = raw_params if isinstance(raw_params, dict) else {}
+    backend_kind = str(params.get("backend_kind") or "")
+    internal_review_only_runner = sandbox_mvp or backend_kind in {"sandbox_fixed_internal_runner", "deterministic_trace_replay", "deterministic_fallback_scorecard"}
     permissions = exemplar.get("permissions") if isinstance(exemplar.get("permissions"), dict) else {}
     task_commands_executed = any(m.get("task_commands_executed") is True for m in metadata_rows)
     complete = bool(
@@ -1089,15 +1209,22 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
         and permissions.get("task_commands_allowed") is False
         and permissions.get("profile_write_allowed") is False
         and runtime_available
+        and real_hermes_runtime_evidence
+        and real_hermes_runtime_invocation
+        and not internal_review_only_runner
         and not task_commands_executed
     )
     payload = {
         "schema_version": "skillopt-target-execution-evidence-v1",
         "classification": "frozen_hermes_target_execution_v1" if frozen_requested else "non_frozen_or_scorecard_target",
-        "implementation_label": "sandbox_mvp_not_live_upstream_hermes" if sandbox_mvp else "deterministic_or_readonly_target",
+        "implementation_label": "sandbox_mvp_fixed_runner_review_only" if sandbox_mvp else "deterministic_or_readonly_target",
         "production_adoption_requires_complete_evidence": True,
         "complete": complete,
         "review_only_unless_complete": True,
+        "explicit_real_runtime_required": True,
+        "real_hermes_runtime_evidence": real_hermes_runtime_evidence,
+        "real_hermes_runtime_invocation": real_hermes_runtime_invocation,
+        "internal_review_only_runner": internal_review_only_runner,
         "frozen_target_config": target_config,
         "frozen_target_config_id": target_config.get("target_config_id"),
         "frozen_target_fingerprint_sha256": target_config.get("fingerprint_sha256"),
@@ -1109,7 +1236,7 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
         "runtime_fingerprint": exemplar.get("runtime_fingerprint"),
         "isolated_runtime_proof": exemplar.get("isolated_runtime_evidence"),
         "permissions": {"task_commands_allowed": permissions.get("task_commands_allowed"), "profile_write_allowed": permissions.get("profile_write_allowed"), "live_profile_writes": permissions.get("live_profile_writes")},
-        "task_command_policy": "task-provided commands disabled/blocked by default; never executed for evidence",
+        "task_command_policy": "task-provided commands disabled/blocked by default; task-provided command execution makes evidence non-production",
         "task_commands_executed": task_commands_executed,
         "trajectory_or_transcript_artifact_fingerprint": {
             "validation": (validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(validation_summary, dict) else None,
@@ -2070,7 +2197,7 @@ def dry_run(skill: str | None = None, goal: str | None = None, session_search: s
     write_text(run_dir / "original_SKILL.md", original)
     write_text(run_dir / "proposed_SKILL.md", proposed)
     write_text(run_dir / "diff.patch", diff)
-    write_text(run_dir / "evidence.json", json.dumps({"snippets": evidence}, ensure_ascii=False, indent=2) + "\n")
+    write_text(run_dir / "evidence.json", json.dumps({"snippets": evidence, "session_harvest_provenance": {"schema_version": "hermes-skillopt-session-harvest-provenance-v1", "source": "direct-state-db-and-log-fallback", "review_only": True, "allow_production_adoption": False, "warning": "Dry-run direct/session-mined evidence is review-only and cannot satisfy production adoption."}}, ensure_ascii=False, indent=2) + "\n")
     write_text(run_dir / "report.md", f"# SkillOpt dry run\n\n- run_id: {rid}\n- skill: {target.name}\n- engine: {engine}\n- changed: {bool(diff)}\n\n```diff\n{diff[:4000]}\n```\n")
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
@@ -2090,6 +2217,7 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             seen_dirs.add(run_dir)
             row = {k: d.get(k) for k in manifest_keys}
             row["readiness_adoptability"] = readiness_adoptability_schema(d)
+            row["evidence_class"] = "production_candidate" if row["readiness_adoptability"].get("adoptable") and row["readiness_adoptability"].get("production_gate_eligible") and row["readiness_adoptability"].get("test_gate_eligible") else "review_only_or_not_ready"
             row["score_provenance"] = _score_provenance_summary(d)
             row["run_dir"] = str(run_dir)
             hygiene = _hygiene_row(run_dir, stale_after_hours=24.0)
@@ -2140,11 +2268,12 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             "run_dir": str(run_dir),
             "artifact_state": _slim_artifact_state(run_dir),
             "artifact_lineage": lineage,
+            "evidence_class": "review_only_or_not_ready",
         }
         checkpoint_only.append(row)
     runs.extend(checkpoint_only)
     runs = runs[:20]
-    return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs, "stale_or_incomplete_checkpoints": checkpoint_only[:20]}
+    return {"success": True, "hermes_home": str(home), "skills_count": len(discover_skills(home)), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "recent_runs": runs, "stale_or_incomplete_checkpoints": checkpoint_only[:20], "tool_safety": tool_safety_catalog()}
 
 
 def latest_run_id(hermes_home_path: str | None = None) -> str:
@@ -2291,6 +2420,7 @@ def review_digest(run_id: str | None = None, hermes_home_path: str | None = None
         f"decision: {summary.get('decision')}",
         f"adoptable: {summary.get('adoptable')} | production_gate_eligible: {summary.get('production_gate_eligible')} | test_gate_eligible: {summary.get('test_gate_eligible')}",
         f"review_only: {summary.get('review_only')}",
+        f"evidence_class: {summary.get('evidence_class')}",
         f"score_provenance: executor={score_prov.get('target_executor')} backend={score_prov.get('optimizer_backend')} source={score_prov.get('score_source')}",
         f"eval_pack: id={eval_pack.get('id')} version={eval_pack.get('version')} path={eval_pack.get('path')} fingerprint={eval_pack.get('fingerprint_sha256')}",
     ]
@@ -3027,9 +3157,10 @@ def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: boo
     write_text(backup_dir / "SKILL.md", current)
     write_text(backup_dir / "manifest.json", json.dumps({"run_id": run_id, "skill_path": str(target), "skill_relpath": m.get("skill_relpath"), "sha256": current_sha, "original_sha256": current_sha, "proposed_sha256": proposed_sha, "adopted_sha256": proposed_sha}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     write_text(target, proposed)
-    m.update({"status": "adopted", "adopted_at": datetime.now(timezone.utc).isoformat(), "backup_dir": str(backup_dir), "original_sha256": current_sha, "adopted_sha256": proposed_sha})
+    readback = _post_write_readback_verification(target, expected_sha256=proposed_sha, expected_skill_name=m.get("skill_name"))
+    m.update({"status": "adopted", "adopted_at": datetime.now(timezone.utc).isoformat(), "backup_dir": str(backup_dir), "original_sha256": current_sha, "adopted_sha256": proposed_sha, "post_write_readback": readback})
     save_manifest(run_dir, m)
-    return {"success": True, "run_id": run_id, "status": "adopted", "skill_path": str(target), "backup_dir": str(backup_dir)}
+    return {"success": True, "run_id": run_id, "status": "adopted", "skill_path": str(target), "backup_dir": str(backup_dir), "post_write_readback": readback}
 
 
 def _rollback_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
@@ -3051,10 +3182,12 @@ def _rollback_unlocked(run_id: str, hermes_home_path: str | None = None, force: 
             raise ValueError("Current skill sha does not match adopted state; pass force=true to rollback")
     backup_skill = resolve_backup_skill_path(home, m, run_id, target)
     restored = read_text(backup_skill)
+    restored_sha = sha256_text(restored)
     write_text(target, restored)
-    m.update({"status": "rolled_back", "rolled_back_at": datetime.now(timezone.utc).isoformat(), "rolled_back_sha256": sha256_text(restored)})
+    readback = _post_write_readback_verification(target, expected_sha256=restored_sha, expected_skill_name=m.get("skill_name"))
+    m.update({"status": "rolled_back", "rolled_back_at": datetime.now(timezone.utc).isoformat(), "rolled_back_sha256": restored_sha, "post_write_readback": readback})
     save_manifest(run_dir, m)
-    return {"success": True, "run_id": run_id, "status": "rolled_back", "skill_path": str(target)}
+    return {"success": True, "run_id": run_id, "status": "rolled_back", "skill_path": str(target), "post_write_readback": readback}
 
 
 
@@ -3103,7 +3236,7 @@ def _with_writeback_lock(home: Path, action: str, run_id: str, fn):
         except Exception as exc:
             _audit_writeback_event(home, action, run_id, "error", {"error_type": type(exc).__name__, "error": redact_secrets(str(exc))})
             raise
-        _audit_writeback_event(home, action, run_id, "success", {k: v for k, v in result.items() if k in {"status", "skill_path", "backup_dir"}} if isinstance(result, dict) else {})
+        _audit_writeback_event(home, action, run_id, "success", {k: v for k, v in result.items() if k in {"status", "skill_path", "backup_dir", "post_write_readback"}} if isinstance(result, dict) else {})
         return result
     finally:
         try:

@@ -33,17 +33,22 @@ TRACE_SCHEMA_VERSION = "hermes-target-trace-v1"
 FROZEN_HERMES_CONTRACT = "frozen_hermes_target_execution_v1"
 FROZEN_TARGET_MODEL_ID = "no-live-model-deterministic-target-v1"
 FROZEN_PROFILE_POLICY = "isolated-or-readonly-profile-no-live-profile-writes"
-FROZEN_TOOL_POLICY = "task-commands-never-executed; fixture-tools-recorded-or-fixed-runner-only"
+FROZEN_TOOL_POLICY = "task-commands-never-executed; fixed-internal-runners-are-review-only"
 FROZEN_REQUIRED_RUNTIME_EVIDENCE = (
     "frozen_target_config_id",
     "frozen_target_fingerprint_sha256",
-    "model_fingerprint",
     "provider_fingerprint",
+    "model_fingerprint",
+    "profile_fingerprint",
+    "toolset_fingerprint",
     "tool_policy_fingerprint",
     "session_fingerprint",
     "runtime_fingerprint",
+    "explicit_real_hermes_runtime_evidence",
+    "real_hermes_runtime_invocation",
     "isolated_runtime_evidence",
     "permissions",
+    "task_commands_executed=false",
     "trajectory",
     "trace_fingerprint_sha256",
     "transcript_preview",
@@ -334,6 +339,9 @@ class HermesSandboxRunner:
             "fixture_tool_policy": "fixed_runner_only_no_task_shell",
             "deterministic": False,
             "review_only_unless_curated_pack": True,
+            "review_only_reason": "fixed internal sandbox runner does not invoke real Hermes runtime",
+            "production_adopt_allowed": False,
+            "real_hermes_runtime_evidence": False,
             "isolated_home": True,
             "live_profile_writes": False,
             "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
@@ -353,6 +361,9 @@ class HermesSandboxRunner:
                 "transcript_preview": transcript,
                 "sandbox_isolated": True,
                 "sandbox_command_blocked": True,
+                "production_adopt_allowed": False,
+                "real_hermes_runtime_evidence": False,
+                "review_only_reason": "task command blocked before subprocess; no real Hermes runtime execution",
                 "live_profile_writes": False,
                 "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
                 "model_fingerprint": {"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner", "fingerprint_sha256": _stable_json_sha({"provider": "local-subprocess", "model": "fixed-internal-sandbox-runner"})},
@@ -437,7 +448,7 @@ class HermesSandboxRunner:
         critical_failures = [f"missing_required_keyword:{x}" for x in missing_required_keywords] + [f"missing_required_marker:{x}" for x in missing_required_markers] + [f"forbidden_marker:{x}" for x in penalties]
         score, passed_names, failed_names = _score_checks(checks, penalties)
         hard_pass = code == 0 and score >= 0.55 and not penalties and not missing_required_keywords and not missing_required_markers
-        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": hard_pass, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
+        metadata = {**_result_metadata(task), "exit_code": code, "transcript_preview": transcript[:4000], "sandbox_isolated": True, "sandbox_command_blocked": False, "production_gate_eligible": False, "production_adopt_allowed": False, "real_hermes_runtime_evidence": False, "review_only_reason": "fixed internal sandbox runner evidence is not real Hermes target execution", "live_profile_writes": False, "trace_schema": TRACE_SCHEMA_VERSION, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "missing_required_keywords": missing_required_keywords, "missing_required_markers": missing_required_markers, "task_commands_executed": False, "runner_label": "sandbox_fixed_runner_review_only_unless_curated_pack", "hard_pass": hard_pass, "soft_score": score, "trajectory": {"schema_version": TRACE_SCHEMA_VERSION, "task_id": task.id, "messages": [{"role": "user", "content_preview": _preview(task.prompt, 800)}, {"role": "assistant", "skill_sha256": _stable_json_sha({"skill_text": skill_text}), "content_preview": _preview(skill_text, 800)}], "tool_calls": [{"id": "fixed-sandbox-runner", "name": "hermes_skillopt.sandbox_runner", "allowed": True, "executed": True, "blocked_reason": None}], "observations": [{"id": "sandbox-transcript", "content_preview": transcript[:4000]}], "scores": {"score": score, "passed_checks": passed_names, "failed_checks": failed_names, "penalties": penalties}, "failure_tags": critical_failures + [f"penalty:{p}" for p in penalties], "task_commands_executed": False}}
         metadata.update({
             "frozen_hermes_contract": FROZEN_HERMES_CONTRACT,
             "permissions": frozen_hermes_permissions(),
@@ -449,7 +460,7 @@ class HermesSandboxRunner:
             "session_fingerprint": _fingerprint_payload({"session_policy": "ephemeral_temp_session_per_task", "task_id": task.id}),
             "runtime_probe": runtime_probe,
             "runtime_fingerprint": runtime_probe,
-            "isolated_runtime_evidence": _fingerprint_payload({"sandbox_isolated": True, "home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False}),
+            "isolated_runtime_evidence": _fingerprint_payload({"sandbox_isolated": True, "home_policy": "temp-isolated", "hermes_home_policy": "temp-isolated", "workspace_policy": "temp-isolated", "live_profile_writes": False, "real_hermes_runtime": False}),
             "execution_scoring": "exit_code + transcript required_markers/assertions + skill expected terms",
             "execution_scoring_evidence": _fingerprint_payload({"policy": "exit_code + transcript required_markers/assertions + skill expected terms", "exit_code": code, "score": score, "hard_pass": hard_pass, "passed_checks": passed_names, "failed_checks": failed_names}),
             "passed_checks": passed_names,
@@ -659,6 +670,15 @@ class TargetExecutor:
                 runtime = raw_runtime if isinstance(raw_runtime, dict) else {}
                 if runtime.get("available") is not True:
                     missing_runtime.append("runtime_available_true")
+                if metadata.get("real_hermes_runtime_evidence") is not True:
+                    missing_runtime.append("explicit_real_hermes_runtime_evidence")
+                if runtime.get("invokes_hermes_core_or_gateway") is not True:
+                    missing_runtime.append("real_hermes_runtime_invocation")
+                raw_target_params = target_config.get("parameters")
+                target_params = raw_target_params if isinstance(raw_target_params, dict) else {}
+                backend_kind = str(target_params.get("backend_kind") or "")
+                if backend_kind in {"sandbox_fixed_internal_runner", "deterministic_trace_replay", "deterministic_fallback_scorecard"}:
+                    missing_runtime.append("non_production_internal_runner")
                 if metadata.get("sandbox_isolated") is not True:
                     missing_runtime.append("isolated_runtime")
                 if not (metadata.get("trajectory") or metadata.get("trace")):

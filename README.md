@@ -17,11 +17,11 @@ The README diagrams use enhanced PNGs based on the previous detailed generated d
 ## What it is
 
 - **Trainable state:** one Hermes skill document (`$HERMES_HOME/skills/.../SKILL.md`).
-- **Frozen target executor:** evaluates the current skill and each candidate under the same replay/scorecard/sandbox target config. `frozen-hermes` / `frozen_hermes_target_execution_v1` is an MVP alias for the isolated sandbox runner with frozen-target evidence fingerprints; it is not true upstream benchmark parity or arbitrary live Hermes command execution. A disabled-by-default `live-readonly` interface remains report-only unless a future real Hermes runtime adapter supplies the required proof.
+- **Frozen target executor:** evaluates the current skill and each candidate under the same frozen target config, but production adoption for `frozen-hermes` / `frozen_hermes_target_execution_v1` now requires real Hermes runtime proof. The current sandbox/fixed internal runners are isolated review-only evidence: they record fingerprints/transcripts and block task commands, but cannot satisfy production adoption. A disabled-by-default `live-readonly` interface remains report-only unless a future real Hermes runtime adapter supplies the required proof.
 - **Optimizer:** reflects on rollout evidence and proposes bounded skill edits only. It does not write the live profile.
 - **Environment/benchmark:** builds train/validation/test tasks from explicit curated eval files, bundled static review eval packs, session-mined snippets, and fallback synthetic tasks.
 - **Gate:** validation defaults to strict mode. Production adoption additionally requires explicit curated validation and held-out test eligibility; soft/mixed gates and static/keyword packs are review-only/non-production.
-- **Safety shell:** full runs write only staged artifacts; live writes require explicit `adopt`; `rollback` restores from guarded backups. Report/eval outputs share a safe path guard that rejects live/runtime-sensitive profile/plugin/source paths and symlink escapes.
+- **Safety shell:** full runs write only staged artifacts; live writes require explicit `adopt`; `rollback` restores from guarded backups. Active profile resolution first tries Hermes' official home helper, then falls back to `HERMES_HOME`, then `~/.hermes`. Adopt/rollback perform post-write readback verification before reporting success. Report/eval outputs share a safe path guard that rejects live/runtime-sensitive profile/plugin/source paths and symlink escapes.
 
 ## What it is not
 
@@ -57,7 +57,7 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_scout`: read-only notification-ready scout for skills, eval-pack readiness, recent staged runs, artifact hygiene, advisory metadata, and safe next commands. It never calls full-run/optimize/adopt/rollback/fetch, and CLI scout does not write a report unless `--output` is explicitly supplied. Its cron recommendation is scout-only/no-auto-adopt.
 - `hermes_skillopt_doctor`: read-only readiness report for skills, eval-pack inventory, recent runs, upstream parity posture, and recommended next commands; never runs evals, adopts, rolls back, fetches, or writes.
 - `hermes_skillopt_optimize`: guided staged-only alias with intent presets: `smoke`, `review`, and `production`; always sets `auto_adopt=false` and requires a later explicit adopt confirmation.
-- `hermes_skillopt_status`: profile, skill count, recent staged runs, artifact lineage summaries, and stale/incomplete checkpoint rows with cleanup guidance.
+- `hermes_skillopt_status`: profile, skill count, recent staged runs, tool safety/risk metadata, artifact lineage summaries, and stale/incomplete checkpoint rows with cleanup guidance.
 - `hermes_skillopt_run`: defaults to `mode="full"`; `mode="legacy"` calls the legacy review-only dry-run path.
 - `hermes_skillopt_full_run`: executes the current six-stage SkillOpt-inspired lifecycle.
 - `hermes_skillopt_batch_preflight`: read-only validation of an inline batch plan object; enforces schema, budget, gate/backend policy, required production-intent fields, and rejects adopt/writeback fields.
@@ -86,13 +86,15 @@ Toolset: `hermes_skillopt`
 
 Batch, fleet, eval-pack inventory/scaffold, upstream parity status, import/transfer/conformance surfaces are available as Hermes plugin tools and CLI/module commands. `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
 
+Status/scout-style surfaces expose `hermes-skillopt-tool-safety-v1` metadata: read-only tools are low risk and cron-safe; report-only tools may write only explicit guarded reports; staged artifact creators are medium risk and not cron-safe; adopt/rollback/upstream-update are high risk and never cron-safe. Scheduled automation should consume only read-only/status/digest outputs and never trigger optimize, adopt, rollback, cleanup, or upstream update.
+
 Important full-run parameters:
 
 - `skill`, `query`, `eval_file`, `lookback_days`, `limit`, `iterations`, `edit_budget`, `candidate_count`
 - `backend`: `auto|hermes|mock` back-compat alias for the optimizer backend
 - `optimizer_backend`: `auto|hermes|mock`; controls reflection/bounded edit proposal generation
 - `allow_mock`: required before `backend=auto` may fall back to mock outside Hermes.
-- `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard|frozen-hermes|frozen_hermes_target_execution_v1|live-readonly`; controls the frozen evaluator, separate from the optimizer backend. `frozen-hermes` currently routes to the constrained sandbox MVP and records frozen-target evidence; `live-readonly` is disabled/report-only without future real-target evidence.
+- `target_executor` / `target_backend`: `auto|replay|sandbox|scorecard|frozen-hermes|frozen_hermes_target_execution_v1|live-readonly`; controls the frozen evaluator, separate from the optimizer backend. `frozen-hermes` currently routes to the constrained sandbox/fixed internal runner and records review-only frozen-target evidence; it is not production-adoption evidence because it lacks real Hermes runtime invocation proof. `live-readonly` is disabled/report-only without future real-target evidence.
 - `gate_mode`: `soft|hard|mixed|strict`; default `strict` for adoption-capable full runs. `strict` requires soft improvement plus hard pass-rate/per-task non-regression, with LLM/judge text kept explanation-only. `soft`/`mixed` are explicit review/non-production choices and cannot override production hard-fail/test gates.
 - `resume_run_id`: opt-in reuse of a completed checkpointed run only when the stored input/config/provenance fingerprint matches
 - `force`: only affects adopt/rollback current-sha guard behavior where exposed; it does not bypass artifact, profile, validation, production, or test gates.
@@ -120,8 +122,8 @@ python3 -m hermes_skillopt.cli resume-inspect --help
 - **Manual / read-only scouting:** run `python3 -m hermes_skillopt.cli scout --skill <skill>` or `doctor` before any optimization. Scout is notification-safe and, without `--output`, returns JSON without writing a report.
 - **Scheduled read-only usage only:** external cron/systemd/Hermes schedules should be limited to `scout`, `doctor`, `eval-pack-inventory`, and `review --digest` over already-staged runs. If a file artifact is needed, pass an explicit guarded `--output` such as `hermes-skillopt --home <profile> scout --output skillopt/reports/scout.json`; omit `--output` for no write. The emitted `cron_recommendation` deliberately says `create_cron_job: false` and `auto_adopt_from_cron: false`; it is a recommendation surface, not a cron writer. Do not schedule optimize/full-run/adopt/rollback/upstream-update.
 - **Review / authoring loop:** run `python3 -m hermes_skillopt.cli optimize --intent review --skill <skill> --eval-file <review-or-curated-pack>` and inspect with `python3 -m hermes_skillopt.cli review latest --summary`, `python3 -m hermes_skillopt.cli review latest --digest`, or `python3 -m hermes_skillopt.cli review latest --slim`. This is the default safe workflow for proposed skill edits.
-- **Production candidate:** run `python3 -m hermes_skillopt.cli optimize --intent production --skill <skill> --eval-file <curated-production-pack> --optimizer-backend hermes --gate-mode strict --target-executor frozen-hermes` only after `doctor` and eval inventory show an explicit curated train/validation/test pack. Production intent is still staged-only; live writeback requires `hermes-skillopt adopt <run_id> --confirm "ADOPT <run_id>"` and the core re-checks artifact, production, test, provenance, and current-SHA gates.
-- **Gated staged optimize:** smoke/review/production optimize all remain staged. `production` requires explicit curated eval-file evidence, strict gates, and non-mock optimizer provenance before it can become an adoption candidate.
+- **Production candidate:** run `python3 -m hermes_skillopt.cli optimize --intent production --skill <skill> --eval-file <curated-production-pack> --optimizer-backend hermes --gate-mode strict --target-executor frozen-hermes` only after `doctor` and eval inventory show an explicit curated train/validation/test pack **and** the target path can provide the required real Hermes runtime evidence. On the current sandbox/fixed-runner implementation, production intent remains staged/review-only because frozen-target runtime evidence is incomplete. Live writeback requires `hermes-skillopt adopt <run_id> --confirm "ADOPT <run_id>"` and the core re-checks artifact, production, test, provenance, runtime-evidence, and current-SHA gates.
+- **Gated staged optimize:** smoke/review/production optimize all remain staged. `production` requires explicit curated eval-file evidence, strict gates, non-mock optimizer provenance, and complete adoption-eligible target runtime evidence before it can become an adoption candidate.
 - **Explicit typed adopt only:** live writeback is a separate `adopt <run_id> --confirm "ADOPT <run_id>"` action after review says ready; rollback is similarly explicit. No scout, cron, WebUI run, batch, review, mock, static, or report-only path adopts.
 - **CI:** use `python3 -m hermes_skillopt.cli conformance --mode quick --output skillopt/reports/conformance.json` for a smoke contract and `--mode full` for all local pytest tests. CI should publish `scout`, `doctor`, `review --summary`/`--digest`, `fleet-report`, and conformance JSON as evidence; it should not auto-adopt.
 
@@ -151,7 +153,7 @@ python3 -m hermes_skillopt.cli fleet-resume-plan --skill my-skill
 python3 -m hermes_skillopt.cli fleet-rollback-plan --limit 20
 ```
 
-Preflight is read-only and rejects unsupported schema, budget overages, invalid backend/gate values, forbidden writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.), and production-intent jobs missing `skill` or `eval_file`. Current batch target validation accepts `auto|replay|sandbox|scorecard|live-readonly|frozen-hermes|frozen_hermes_target_execution_v1`; the frozen aliases route to the constrained sandbox MVP evidence contract and do not imply upstream parity. `batch-run` always creates a batch parent staging directory and never adopts. Fleet commands are read-only planning/reporting surfaces: they inspect manifests/checkpoints/backups and emit guidance, but do not resume, delete, bulk rollback, or write skills. `fleet-report` now groups runs by skill, advisory skill type, readiness, adoptability, and rollbackability and includes readiness/evidence-contract summaries. `fleet-rollback-plan` reports safely readable backup/current-SHA status and an exact one-run command (`hermes-skillopt rollback <run_id>`); it still never performs rollback itself.
+Preflight is read-only and rejects unsupported schema, budget overages, invalid backend/gate values, forbidden writeback fields (`auto_adopt`, `force`, `adopt`, `rollback`, etc.), and production-intent jobs missing `skill` or `eval_file`. Current batch target validation accepts `auto|replay|sandbox|scorecard|live-readonly|frozen-hermes|frozen_hermes_target_execution_v1`; the frozen aliases route to constrained sandbox/fixed-runner review evidence unless a real Hermes runtime adapter supplies the required proof, and they do not imply upstream parity. `batch-run` always creates a batch parent staging directory and never adopts. Fleet commands are read-only planning/reporting surfaces: they inspect manifests/checkpoints/backups and emit guidance, but do not resume, delete, bulk rollback, or write skills. `fleet-report` now groups runs by skill, advisory skill type, readiness, adoptability, and rollbackability and includes readiness/evidence-contract summaries. `fleet-rollback-plan` reports safely readable backup/current-SHA status and an exact one-run command (`hermes-skillopt rollback <run_id>`); it still never performs rollback itself.
 
 ## Full-run lifecycle
 
@@ -260,8 +262,8 @@ Production adoption gates are intentionally narrow:
 
 - `auto`: chooses sandbox when tasks request `metadata.executor == "sandbox"` or `judge == "hermes_sandbox"`; otherwise replay.
 - `replay`: declarative Hermes replay/assertion runner.
-- `sandbox`: production-safe sandbox executor MVP.
-- `frozen-hermes` / `frozen_hermes_target_execution_v1`: alias for the current sandbox-based frozen Hermes target execution MVP. It records isolated runtime evidence, provider/model/toolset/session fingerprints, trajectory/transcript scoring evidence, blocks task-provided commands, and never writes the live profile. It is still not true external upstream benchmark execution/parity and not arbitrary live agent command execution.
+- `sandbox`: isolated fixed-internal-runner sandbox for review evidence; it is non-production for adoption because it does not invoke real Hermes runtime.
+- `frozen-hermes` / `frozen_hermes_target_execution_v1`: alias for the current sandbox-based frozen Hermes target execution path. The contract requires target config/provider/model/toolset/session fingerprints, isolated runtime, permission policy with task commands disabled, transcript/trajectory artifact, execution-result scoring, and explicit real Hermes runtime invocation proof. Current sandbox/fixed internal runner evidence is review-only/non-production because `real_hermes_runtime_evidence` is false and the backend is an internal runner. It is not upstream benchmark execution/parity or arbitrary live agent command execution.
 - `scorecard`: deterministic keyword scorecard.
 - `live-readonly`: disabled-by-default interface that returns report-only disabled evidence unless a future Hermes runtime adapter supplies the required frozen-target proof; it is not a live runner today and cannot production-adopt.
 
@@ -270,9 +272,9 @@ Eval execution contracts classify whether evidence may ever contribute to adopti
 - `static_keyword_scorecard` / `static_review_only`: review-only; never adoption-eligible.
 - `deterministic_replay_report_only`: report-only; not adoption-eligible.
 - `deterministic_replay_contract_compliant`: eligible only when packaged as an explicit curated v1 pack with complete split/policy/task provenance and passing runtime checks.
-- `frozen_hermes_target_execution_v1`: current sandbox-backed MVP classification plus evidence contract. It requires target config fingerprint, provider/model/toolset/session fingerprints, isolated runtime proof, declared permissions with task-provided commands disabled, transcript/trajectory artifact or fingerprint, and scoring from execution output rather than only static `SKILL.md` text. The current implementation satisfies this through the constrained local sandbox runner only; it does not implement true live Hermes or upstream benchmark execution.
+- `frozen_hermes_target_execution_v1`: evidence contract for adoption-eligible frozen Hermes target execution. It requires target config fingerprint, provider/model/toolset/session/runtime fingerprints, isolated runtime proof, declared permissions with task-provided commands disabled, transcript/trajectory artifact or fingerprint, scoring from execution output rather than only static `SKILL.md` text, and explicit real Hermes runtime invocation proof. Missing real-runtime proof or use of sandbox/replay/scorecard/fixed internal runners makes the evidence review-only and production-ineligible.
 
-Sandbox/frozen-Hermes MVP mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SKILL.md` inside that sandbox, runs a fixed internal runner, captures transcript/exit/timeout, and does not write the live profile. Task-provided commands in `fixtures.command` or `metadata.command` are blocked with `SANDBOX_COMMAND_BLOCKED` and are not production-gate eligible. Do not document or rely on sandbox as an arbitrary shell executor or live agent command path.
+Sandbox/frozen-Hermes mode creates a temporary isolated HOME/HERMES_HOME/workspace, writes `SKILL.md` inside that sandbox, runs a fixed internal runner, captures transcript/exit/timeout, and does not write the live profile. This is useful review evidence only. Task-provided commands in `fixtures.command` or `metadata.command` are blocked with `SANDBOX_COMMAND_BLOCKED` and are not production-gate eligible. Do not document or rely on sandbox as adoption-eligible frozen Hermes evidence, an arbitrary shell executor, or a live agent command path.
 
 ## EnvAdapter, benchmarks, sessions, and sleep foundation
 
@@ -295,9 +297,9 @@ python3 -m hermes_skillopt.cli artifact-hygiene-report --limit 200
 - `artifact-hygiene-report` is a read-only staging artifact classifier for CI/reviewer cleanup decisions. It reports complete verified/tampered runs, checkpoint-only recent or stale runs, orphaned batch/child mismatches, missing manifests, and hash mismatches. It never deletes, resumes, adopts, rolls back, or writes skills.
 - Default `conformance` mode is `quick`, a deterministic smoke/regression subset. Use `--mode full` when you need all local pytest tests; do not report quick mode as full repository health.
 
-Target evidence summaries also treat `task_commands_executed=true` as incomplete evidence: task-provided commands are blocked by default in sandbox/frozen-Hermes paths and cannot be used to make production/adoption claims.
+Target evidence summaries also treat `task_commands_executed=true`, missing `real_hermes_runtime_evidence`, missing `real_hermes_runtime_invocation`, or `non_production_internal_runner` as incomplete evidence: task-provided commands are blocked by default and fixed internal runner output cannot be used to make production/adoption claims.
 
-These utilities are useful for local regression evidence. Upstream benchmark bridge status is **import-only / no-execution**: safe JSON manifest conversion is available, but true upstream benchmark execution remains unsupported. The sandbox-backed frozen-Hermes MVP supplies local Hermes evidence only; it does not turn imported upstream-style manifests into Microsoft SkillOpt benchmark parity. These utilities do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
+These utilities are useful for local regression evidence. Upstream benchmark bridge status is **import-only / no-execution**: safe JSON manifest conversion is available, but true upstream benchmark execution remains unsupported. Sandbox/fixed-runner frozen-Hermes output is review-only local evidence and does not turn imported upstream-style manifests into Microsoft SkillOpt benchmark parity or production adoption proof. These utilities do not claim Microsoft benchmark parity, real cross-model transfer, or production performance improvements unless you supply and verify those evals yourself.
 
 ## Adopt and rollback
 
@@ -307,12 +309,12 @@ These utilities are useful for local regression evidence. Upstream benchmark bri
 - validation gate accepted
 - `production_gate_eligible == true`
 - `test_gate_eligible == true`
-- staged artifact hashes verify, and adopt-time cross-checks re-derive gate/test eligibility, production policy, provenance, candidate summary, and proposed skill SHA from those hashed artifacts
+- staged artifact hashes verify, and adopt-time cross-checks re-derive gate/test eligibility, target runtime-evidence eligibility, production policy, provenance, candidate summary, and proposed skill SHA from those hashed artifacts
 - target path resolves under the active profile `skills/`
 - current live skill SHA matches the staged original SHA unless an explicit force path is used
 - staged proposed skill SHA matches the manifest
 
-Adopt creates `$HERMES_HOME/skillopt/backups/<timestamp-run-id>/` containing the previous `SKILL.md` and backup manifest. `rollback(run_id)` restores only from that verified backup and checks run id, target path, relative path, original/adopted/proposed SHA, and current live SHA unless forced.
+Adopt creates `$HERMES_HOME/skillopt/backups/<timestamp-run-id>/` containing the previous `SKILL.md` and backup manifest, writes the proposed skill, then reads the runtime-visible `SKILL.md` back and verifies SHA/frontmatter before returning success. `rollback(run_id)` restores only from that verified backup and checks run id, target path, relative path, original/adopted/proposed SHA, current live SHA unless forced, and post-restore readback.
 
 Production tool/WebUI live writeback uses the active profile. CLI cross-profile writeback requires explicit offline-maintenance flags and remains guarded.
 
@@ -347,7 +349,7 @@ python3 -m hermes_skillopt.cli upstream-update --fetch-only
 bash scripts/update_upstream.sh
 ```
 
-Updating upstream refreshes clone/lock metadata only. It does not merge upstream code, change plugin behavior, or adopt any skill. Upstream benchmark adapter levels are intentionally conservative: `json_import_only` and `pinned_manifest_replay` are supported data-conversion evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` are future/unsupported. Do not report `benchmark`, `eval-only`, frozen-Hermes sandbox evidence, or imported manifests as full Microsoft SkillOpt benchmark parity today.
+Updating upstream refreshes clone/lock metadata only. It does not merge upstream code, change plugin behavior, or adopt any skill. Upstream benchmark adapter levels are intentionally conservative: `json_import_only` and `pinned_manifest_replay` are supported data-conversion evidence levels; `pinned_upstream_execution` and `parity_evidence_complete` are future/unsupported. Do not report `benchmark`, `eval-only`, sandbox/fixed-runner frozen-Hermes evidence, or imported manifests as full Microsoft SkillOpt benchmark parity today.
 
 ## Multi-agent handoff optimizer
 
@@ -378,4 +380,4 @@ python3 -m hermes_skillopt.cli benchmark-parity-status --help
 python3 -m hermes_skillopt.cli handoff-optimize --help
 ```
 
-Recent P0/P1/P2/P3/P4/P5 hardening verification also includes targeted tests for safe report output paths, protected bounded-edit regions/headings, frozen-Hermes sandbox evidence, production-vs-review score ledgers, batch preflight/run budgets, eval-pack inventory/scaffold gaps, fleet read-only planning, transfer/import/conformance safety, WebUI staged-only wizard/review-console APIs, artifact hygiene reporting, decision-first summaries, staged-only slow/rejected history, and held-out sensitivity warnings.
+Recent P0/P1/P2/P3/P4/P5 hardening verification also includes targeted tests for safe report output paths, protected bounded-edit regions/headings, frozen-Hermes evidence downgrades for non-real-runtime runners, production-vs-review score ledgers, batch preflight/run budgets, eval-pack inventory/scaffold gaps, fleet read-only planning, transfer/import/conformance safety, WebUI staged-only wizard/review-console APIs, artifact hygiene reporting, decision-first summaries, staged-only slow/rejected history, and held-out sensitivity warnings.
