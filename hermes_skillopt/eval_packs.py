@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -599,20 +600,22 @@ def eval_pack_workflow_summary(*, hermes_home_path: str | None = None, skill: st
     rows = [r for r in rows_raw if isinstance(r, dict)] if isinstance(rows_raw, list) else []
     cap = max(1, min(int(limit or 20), 100))
     workflow_rows: list[dict[str, Any]] = []
+    command_home = shlex.quote(str(home))
     for row in rows[:cap]:
         skill_name = str(row.get("skill") or "")
+        skill_arg = shlex.quote(skill_name)
         if not row.get("has_eval_pack"):
             action = "write_or_review_draft_eval_pack"
-            command = f"hermes-skillopt --home {home} eval-pack-autopilot --skill {skill_name} --write-draft"
+            command = f"hermes-skillopt --home {command_home} eval-pack-autopilot --skill {skill_arg} --write-draft"
         elif row.get("invalid_eval_pack_count"):
             action = "fix_invalid_eval_pack"
-            command = f"hermes-skillopt --home {home} eval-pack-doctor --skill {skill_name}"
+            command = f"hermes-skillopt --home {command_home} eval-pack-doctor --skill {skill_arg}"
         elif row.get("production_eligible"):
             action = "production_candidate_requires_separate_strict_optimize_review"
-            command = f"hermes-skillopt --home {home} eval-pack-doctor --skill {skill_name}"
+            command = f"hermes-skillopt --home {command_home} eval-pack-doctor --skill {skill_arg}"
         else:
             action = "promote_or_curate_review_pack_then_explicit_production_policy_contract"
-            command = f"hermes-skillopt --home {home} eval-pack-promote --skill {skill_name} --input <draft.json>"
+            command = f"hermes-skillopt --home {command_home} eval-pack-promote --skill {skill_arg} --input <draft.json>"
         workflow_rows.append({
             "skill": skill_name,
             "has_eval_pack": bool(row.get("has_eval_pack")),

@@ -646,6 +646,7 @@ class TargetExecutor:
             contract = contract_raw if isinstance(contract_raw, dict) else {}
             classification = str(contract.get("classification") or "")
             metadata = result.metadata or {}
+            task_commands_executed = (task.metadata or {}).get("task_commands_executed") is True or metadata.get("task_commands_executed") is True
             missing_runtime: list[str] = []
             if classification == "frozen_hermes_target_execution_v1":
                 if not target_config.get("fingerprint_sha256"):
@@ -693,15 +694,16 @@ class TargetExecutor:
                     missing_runtime.append("execution_scoring_evidence")
                 if metadata.get("live_profile_writes") is not False:
                     missing_runtime.append("live_profile_writes_false")
-                if metadata.get("task_commands_executed") is not False:
+                if task_commands_executed or metadata.get("task_commands_executed") is not False:
                     missing_runtime.append("task_commands_executed_false")
-            contract_checks.append({"task_id": task.id, "classification": classification or None, "runtime_evidence_complete": not missing_runtime, "missing_runtime_evidence": missing_runtime})
+            contract_checks.append({"task_id": task.id, "classification": classification or None, "runtime_evidence_complete": not missing_runtime, "missing_runtime_evidence": missing_runtime, "task_commands_executed": task_commands_executed})
         raw_target_params = target_config.get("parameters")
         target_params = raw_target_params if isinstance(raw_target_params, dict) else {}
         backend_kind = str(target_params.get("backend_kind") or "")
         internal_review_only_runner = self.mode in {"deterministic_mock_scorecard", "hermes_trace_replay_runner_v1", "hermes_sandbox_executor_mvp", "hermes_live_readonly_adapter_v1_disabled"} or backend_kind in {"sandbox_fixed_internal_runner", "deterministic_trace_replay", "deterministic_fallback_scorecard", "live_hermes_readonly_adapter_interface"}
         complete_real_runtime_contract = bool(contract_checks) and all(c.get("classification") == FROZEN_HERMES_CONTRACT and bool(c.get("runtime_evidence_complete")) for c in contract_checks)
-        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility) and complete_real_runtime_contract and not internal_review_only_runner
+        task_commands_executed_any = any((r.metadata or {}).get("task_commands_executed") is True for r in results) or any((task.metadata or {}).get("task_commands_executed") is True for task in tasks)
+        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility) and complete_real_runtime_contract and not internal_review_only_runner and not task_commands_executed_any
         regression_cases = [r.task_id for r in results if not r.passed]
         trajectory_index = self._trajectory_index(results)
         evaluation_scope = "production_curated_pack_eligible" if production_gate_eligible else "review_only_deterministic_fallback"
@@ -733,7 +735,7 @@ class TargetExecutor:
                 "review_only_unless_complete_real_hermes_runtime": True,
                 "internal_review_only_runner": internal_review_only_runner,
                 "complete_real_runtime_contract": complete_real_runtime_contract,
-                "task_commands_executed": any((r.metadata or {}).get("task_commands_executed") is True for r in results),
+                "task_commands_executed": task_commands_executed_any,
             },
             "eval_execution_contract_checks": contract_checks,
             "target_execution_evidence_contract": {"classification": FROZEN_HERMES_CONTRACT, "required_runtime_evidence": list(FROZEN_REQUIRED_RUNTIME_EVIDENCE), "required_permissions": {"task_commands_allowed": False, "profile_write_allowed": False}, "missing_required_evidence_makes_production_eligible": False},

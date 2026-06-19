@@ -8,6 +8,7 @@ import pytest
 from hermes_skillopt import core
 from hermes_skillopt.env import (
     EnvAdapter,
+    EvalResult,
     EvalTask,
     HermesEnvAdapter,
     HermesSkillEnv,
@@ -463,6 +464,61 @@ def test_frozen_hermes_contract_blocks_task_commands_and_runtime_unavailable():
     assert meta["sandbox_command_blocked"] is True
     assert meta["task_commands_executed"] is False
     assert meta["permissions"]["task_commands_allowed"] is False
+
+
+class _RealHermesRuntimeProofRunner:
+    mode = "real_hermes_runtime_unit_test_runner"
+
+    def config_parameters(self) -> dict[str, object]:
+        return {"backend_kind": "real_hermes_runtime_unit_test", "frozen_hermes_contract": "frozen_hermes_target_execution_v1"}
+
+    def score(self, skill_text: str, task: EvalTask) -> EvalResult:
+        trajectory = {"schema_version": "hermes-target-trace-v1", "task_id": task.id, "messages": [], "tool_calls": [], "observations": [], "scores": {"score": 1.0}, "task_commands_executed": False}
+        metadata = {
+            "frozen_hermes_contract": "frozen_hermes_target_execution_v1",
+            "provider_fingerprint": {"fingerprint_sha256": "provider"},
+            "model_fingerprint": {"fingerprint_sha256": "model"},
+            "profile_fingerprint": {"fingerprint_sha256": "profile"},
+            "toolset_fingerprint": {"fingerprint_sha256": "toolset"},
+            "tool_policy_fingerprint": {"fingerprint_sha256": "tool-policy"},
+            "session_fingerprint": {"fingerprint_sha256": "session"},
+            "runtime_fingerprint": {"available": True, "invokes_hermes_core_or_gateway": True, "fingerprint_sha256": "runtime"},
+            "isolated_runtime_evidence": {"fingerprint_sha256": "isolated"},
+            "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False, "fingerprint_sha256": "permissions"},
+            "real_hermes_runtime_evidence": True,
+            "sandbox_isolated": True,
+            "trajectory": trajectory,
+            "trace_fingerprint_sha256": "trace",
+            "transcript_preview": "real hermes runtime invocation transcript",
+            "execution_scoring": "unit-test real runtime scorer proof",
+            "execution_scoring_evidence": {"fingerprint_sha256": "scoring"},
+            "live_profile_writes": False,
+            "task_commands_executed": False,
+            "failure_tags": [],
+        }
+        return EvalResult(task.id, 1.0, True, "real runtime unit-test proof", metadata)
+
+
+def test_task_commands_executed_metadata_blocks_production_even_with_runtime_proof():
+    task = _production_real_target_task("task-command-marker-blocks-production")
+    task.metadata["task_commands_executed"] = True
+
+    out = TargetExecutor(runner=_RealHermesRuntimeProofRunner(), requested_executor="frozen_hermes_target_execution_v1").evaluate("verify SANDBOX_OK", [task])
+    checks = out["eval_execution_contract_checks"]
+    assert isinstance(checks, list)
+    check = checks[0]
+    assert isinstance(check, dict)
+    evidence_ledger = out["evidence_ledger"]
+    assert isinstance(evidence_ledger, dict)
+    eligibility = production_eligibility_for_task(task)
+
+    assert out["production_gate_eligible"] is False
+    assert evidence_ledger["task_commands_executed"] is True
+    assert check["runtime_evidence_complete"] is False
+    assert check["task_commands_executed"] is True
+    assert "task_commands_executed_false" in check["missing_runtime_evidence"]
+    assert eligibility.eligible is False
+    assert any("task-provided commands were executed" in reason for reason in eligibility.reasons)
 
 
 def test_live_readonly_contract_is_disabled_without_runtime_proof():

@@ -270,6 +270,8 @@ def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
         reasons.append("eval pack production policy does not allow adoption")
     if task.metadata.get("review_only") is True or task.metadata.get("allow_production_adoption") is False:
         reasons.append("evidence metadata is review-only and disallows production adoption")
+    if task.metadata.get("task_commands_executed") is True:
+        reasons.append("task-provided commands were executed; production adoption is disabled")
     contract_raw = task.metadata.get("eval_execution_contract")
     contract = contract_raw if isinstance(contract_raw, dict) else {}
     if not bool(contract.get("adoption_eligible")):

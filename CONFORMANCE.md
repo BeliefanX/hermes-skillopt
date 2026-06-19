@@ -45,7 +45,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - `eval-pack-workflow` is a read-only workflow summary over inventory and doctor diagnostics. It reports authoring state, review-only provenance, safe next commands, and a promotion checklist; it never writes packs and never implies one-click production promotion.
 - `skill-readiness-queue` / `readiness-queue` / `skill-queue` is a read-only high-value candidate queue. It prioritizes skills from advisory usage/package/eval signals, carries native/pinned/hub/bundled/curator-managed blockers, and returns safe next diagnostic/authoring commands only.
-- `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and existing-run `review --digest` are the notification surfaces. Their digests are diagnostic summaries, not cron authorization to optimize/adopt/rollback.
+- `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, and `eval-pack-doctor --digest` are the four cron-safe default notification surfaces. Existing-run `review --digest` is digest-only/manual: useful for human review of a staged run, but not a scheduled default. All digests are diagnostic summaries, not authorization to optimize/adopt/rollback.
 - `skill-quality` / `skill-lint` is read-only by default and reports quality/eval-readiness issues. `--create-eval-skeleton` is an explicit guarded review-only eval scaffold write; it never edits live `SKILL.md` and cannot provide production evidence.
 - `review_only` and `production_gate_eligible` are separate booleans. Scaffold/session-mined/sample/synthetic/correction/context/draft/generated/negative/boundary evidence is review-only by default and cannot be production evidence without explicit curated policy, adoption-eligible execution contract, strict gate, held-out test coverage, real runtime evidence, reviewer approval, and all native/artifact guards.
 
@@ -148,7 +148,7 @@ CLI equivalents (console script after editable install, or `python3 -m hermes_sk
 - `hermes-skillopt transfer-eval --run-id RUN --target scorecard --target replay --output report.json`
 - `hermes-skillopt conformance --output conformance.json`
 
-Scheduled automation should stay notification/diagnostic-only: `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and `review --digest` over existing runs are the appropriate cron/default notification inputs. Do not cron `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, eval-pack write/promote/skeleton actions, skill-quality skeleton creation, or cleanup/writeback actions.
+Scheduled automation should stay notification/diagnostic-only: `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, and `eval-pack-doctor --digest` are the cron-safe defaults. `review --digest` over an existing run is digest-only/manual and should not be installed as a scheduled default. Do not cron `status`, `review`, `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, eval-pack write/promote/skeleton actions, skill-quality skeleton creation, or cleanup/writeback actions.
 
 Hermes plugin tool equivalents registered in `plugin.yaml`:
 

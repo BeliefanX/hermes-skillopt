@@ -67,6 +67,7 @@ def promote_run_to_complete_runtime_fixture(out: dict) -> dict:
         return out
     txe = json.loads(txe_path.read_text(encoding="utf-8"))
     rg = json.loads(rg_path.read_text(encoding="utf-8"))
+    required_fp = lambda name: {"fixture": name, "fingerprint_sha256": f"unit-test-{name}"}
     txe.update({
         "classification": "frozen_hermes_target_execution_v1",
         "complete": True,
@@ -77,7 +78,17 @@ def promote_run_to_complete_runtime_fixture(out: dict) -> dict:
         "real_hermes_runtime_invocation": True,
         "internal_review_only_runner": False,
         "task_commands_executed": False,
+        "frozen_target_config_id": "unit-test-frozen-target",
+        "frozen_target_fingerprint_sha256": "unit-test-frozen-target-fingerprint",
+        "provider_fingerprint": required_fp("provider"),
+        "model_fingerprint": required_fp("model"),
+        "toolset_fingerprint": required_fp("toolset"),
+        "tool_policy_fingerprint": required_fp("tool-policy"),
+        "session_fingerprint": required_fp("session"),
         "runtime_fingerprint": {"available": True, "invokes_hermes_core_or_gateway": True, "fingerprint_sha256": "unit-test-runtime"},
+        "isolated_runtime_proof": required_fp("isolated-runtime-proof"),
+        "trajectory_or_transcript_artifact_fingerprint": {"validation": "unit-test-validation-trace", "test": "unit-test-test-trace", "fingerprint_sha256": "unit-test-trajectory"},
+        "execution_scoring_evidence": [required_fp("execution-scoring")],
         "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
         "missing_required_evidence": [],
     })

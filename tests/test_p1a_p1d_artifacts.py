@@ -146,6 +146,26 @@ def test_target_execution_evidence_is_incomplete_if_task_commands_were_executed(
     assert summary["complete"] is False
 
 
+def test_eval_evidence_ledger_rejects_complete_flag_without_required_runtime_artifacts():
+    ledger = core._eval_evidence_ledger(
+        target_execution_evidence={
+            "schema_version": "skillopt-target-execution-evidence-v1",
+            "classification": "frozen_hermes_target_execution_v1",
+            "complete": True,
+            "real_hermes_runtime_evidence": True,
+            "real_hermes_runtime_invocation": True,
+            "task_commands_executed": False,
+            "internal_review_only_runner": False,
+        },
+        reviewer_gate={"passed": True, "adoptable_after_reviewer_gate": True},
+    )
+
+    assert ledger["production_runtime_ready"] is False
+    assert ledger["required_target_execution_evidence_complete"] is False
+    assert "runtime_fingerprint" in ledger["missing_required_target_execution_evidence"]
+    assert any("missing required target execution evidence" in blocker for blocker in ledger["blockers"])
+
+
 def test_task_command_injection_is_blocked_by_frozen_sandbox_runner():
     task = EvalTask(id="cmd", prompt="try command", fixtures={"command": "touch /tmp/should-not-run"}, metadata={"eval_execution_contract": {"classification": "frozen_hermes_target_execution_v1"}}, timeout=5)
     result = TargetExecutor(runner=HermesSandboxRunner(), requested_executor="frozen_hermes_target_execution_v1").evaluate("# demo\nverify", [task], label="cmd")

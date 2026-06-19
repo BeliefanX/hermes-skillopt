@@ -50,7 +50,7 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-doctor --skill my
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-autopilot --skill my-skill
 ```
 
-Default autopilot is plan/read-only (`mode: eval_pack_autopilot_plan_read_only`) and returns a plan plus doctor diagnostics. It is useful for humans, but the scheduled/default notification set should stay to digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and existing-run `review --digest`) rather than write-producing authoring steps. To create a draft, use the explicit review-draft switch:
+Default autopilot is plan/read-only (`mode: eval_pack_autopilot_plan_read_only`) and returns a plan plus doctor diagnostics. It is useful for humans, but the scheduled/default notification set should stay to the four cron-safe digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, and `eval-pack-doctor --digest`) rather than review, optimize, or write-producing authoring steps. `review --digest` remains a manual/digest-only surface for an already-staged run. To create a draft, use the explicit review-draft switch:
 
 ```bash
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
@@ -171,7 +171,7 @@ CI evidence labels:
 
 ## 6a. Scheduled read-only surfaces only
 
-If you want scheduled monitoring, schedule only read-only notification/diagnostic digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
+If you want scheduled monitoring, schedule only the four cron-safe read-only notification/diagnostic digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, and `eval-pack-doctor --digest`) and route JSON/digest output to your notifier. `review --digest` is for manual review of an already-staged run, not a scheduled default. Use explicit guarded `--output` only when you intentionally want a report file:
 
 ```bash
 hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json

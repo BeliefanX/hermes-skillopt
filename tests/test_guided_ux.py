@@ -173,9 +173,132 @@ def test_review_latest_and_summary(tmp_path):
     assert "diff_preview" not in cli_digest
 
 
+def test_forged_runtime_evidence_ledger_blocks_review_adoptability(tmp_path):
+    make_skill(tmp_path)
+    run_id = "forged-ledger"
+    run_dir = tmp_path / "skillopt" / "staging" / run_id
+    run_dir.mkdir(parents=True)
+    for name, text in {
+        "report.md": "report\n",
+        "diff.patch": "diff\n",
+        "evidence.json": "{}\n",
+        "original_SKILL.md": "original\n",
+        "proposed_SKILL.md": "proposed\n",
+    }.items():
+        (run_dir / name).write_text(text, encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "status": "staged_best",
+        "skill_name": "demo",
+        "skill_relpath": "skills/demo/SKILL.md",
+        "adoptable": True,
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "strict_gate_mode": True,
+        "gate_policy": {"mode": "strict"},
+        "gate": {"name": "accepted validation gate", "passed": True},
+        "production_gate": {"name": "accepted production gate", "passed": True},
+        "test_results": {"score": 1.0},
+        "evidence_ledger": {
+            "schema_version": "hermes-skillopt-evidence-ledger-v1",
+            "eval_level": "review_only",
+            "evidence_maturity": "review_only_static_replay_or_incomplete_runtime",
+            "production_runtime_ready": False,
+            "missing_required_target_execution_evidence": ["runtime_fingerprint"],
+            "blockers": ["real Hermes runtime invocation/evidence is missing"],
+        },
+        "files": {
+            "report": "report.md",
+            "diff": "diff.patch",
+            "evidence": "evidence.json",
+            "original": "original_SKILL.md",
+            "proposed": "proposed_SKILL.md",
+        },
+    }
+    manifest["artifact_sha256"] = core.artifact_hashes(run_dir, manifest["files"])
+    core.save_manifest(run_dir, manifest)
+
+    schema = core.readiness_adoptability_schema(manifest)
+    reviewed = core.review(run_id, hermes_home_path=str(tmp_path), slim=True)
+    summary = core.review_decision_summary(run_id, hermes_home_path=str(tmp_path))
+
+    for surface in (schema, reviewed["readiness_adoptability"], summary["readiness_adoptability"]):
+        assert surface["adoptable"] is False
+        assert surface["review_only"] is True
+        assert "production runtime evidence ledger is not ready" in surface["blockers"]
+        assert "missing required target execution evidence: runtime_fingerprint" in surface["blockers"]
+        assert "real Hermes runtime invocation/evidence is missing" in surface["blockers"]
+    assert reviewed["adoptable"] is False
+    assert reviewed["manifest_adoptable"] is True
+    assert reviewed["review_only"] is True
+    assert summary["adoptable"] is False
+    assert summary["decision"] != "ready_for_explicit_adopt"
+    assert summary["evidence_class"] == "review_only_or_not_ready"
+    assert summary["not_adoptable_reasons"] == summary["blockers"]
+
+
+
+def test_omitted_runtime_evidence_ledger_blocks_forged_manifest_adoptability(tmp_path):
+    make_skill(tmp_path)
+    run_id = "omitted-runtime-evidence"
+    run_dir = tmp_path / "skillopt" / "staging" / run_id
+    run_dir.mkdir(parents=True)
+    for name, text in {
+        "report.md": "report\n",
+        "diff.patch": "diff\n",
+        "evidence.json": "{}\n",
+        "original_SKILL.md": "original\n",
+        "proposed_SKILL.md": "proposed\n",
+    }.items():
+        (run_dir / name).write_text(text, encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "status": "staged_best",
+        "skill_name": "demo",
+        "skill_relpath": "skills/demo/SKILL.md",
+        "adoptable": True,
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "strict_gate_mode": True,
+        "gate_policy": {"mode": "strict"},
+        "gate": {"name": "accepted validation gate", "accepted": True, "passed": True},
+        "production_gate": {"name": "accepted production gate", "accepted": True, "passed": True},
+        "test_results": {"score": 1.0},
+        "files": {
+            "report": "report.md",
+            "diff": "diff.patch",
+            "evidence": "evidence.json",
+            "original": "original_SKILL.md",
+            "proposed": "proposed_SKILL.md",
+        },
+    }
+    manifest["artifact_sha256"] = core.artifact_hashes(run_dir, manifest["files"])
+    core.save_manifest(run_dir, manifest)
+
+    reviewed = core.review(run_id, hermes_home_path=str(tmp_path), slim=True)
+    summary = core.review_decision_summary(run_id, hermes_home_path=str(tmp_path))
+
+    assert reviewed["manifest_adoptable"] is True
+    assert reviewed["adoptable"] is False
+    assert reviewed["review_only"] is True
+    assert reviewed["blockers"]
+    assert "production runtime evidence ledger is not ready" in reviewed["blockers"]
+    assert "real Hermes runtime invocation/evidence is missing" in reviewed["blockers"]
+    assert reviewed["readiness_adoptability"]["evidence_ledger"]["production_runtime_ready"] is False
+    assert summary["adoptable"] is False
+    assert summary["review_only"] is True
+    assert summary["decision"] != "ready_for_explicit_adopt"
+    assert summary["evidence_class"] == "review_only_or_not_ready"
+    assert summary["blockers"]
+    assert "production runtime evidence ledger is not ready" in summary["blockers"]
+    assert summary["not_adoptable_reasons"] == summary["blockers"]
+
+
+
 def test_artifact_hygiene_classifies_verified_tampered_and_checkpoint_with_safe_actions(tmp_path):
     make_skill(tmp_path)
     complete = core.guided_optimize(intent="smoke", skill="demo", hermes_home_path=str(tmp_path))
+
     checkpoint_dir = tmp_path / "skillopt" / "staging" / "checkpoint-only"
     checkpoint_dir.mkdir(parents=True)
     (checkpoint_dir / "checkpoint.json").write_text(json.dumps({"status": "reflect", "input": {"skill_name": "demo"}, "input_sha256": "abc"}), encoding="utf-8")
@@ -367,8 +490,11 @@ def test_scheduled_default_safety_metadata_is_conservative(tmp_path):
 
     cron_safe_true = {name for name, meta in plugin.core.TOOL_SAFETY_METADATA.items() if meta.get("cron_safe") is True}
     assert cron_safe_true == scheduled_defaults
+    assert all(isinstance(meta.get("cron_safe"), bool) for meta in plugin.core.TOOL_SAFETY_METADATA.values())
     for name in digest_only_defaults:
-        assert plugin.core.TOOL_SAFETY_METADATA[name]["cron_safe"] == "digest_only"
+        meta = plugin.core.TOOL_SAFETY_METADATA[name]
+        assert meta["cron_safe"] is False
+        assert meta["cron_mode"] == "digest_only"
     for name in manual_read_only_surfaces:
         meta = plugin.SCHEMAS[name]["x-hermes-skillopt-safety"]
         assert meta["safety_group"] == "read_only"
@@ -391,14 +517,16 @@ def test_scheduled_default_safety_metadata_is_conservative(tmp_path):
     assert "workflow/queue surfaces are manual" in read_only_description
 
     plugin_yaml = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text(encoding="utf-8")
-    assert "Schedule only scout, doctor, eval-pack-inventory, eval-pack-doctor, or review --digest" in plugin_yaml
+    assert "Schedule only scout, doctor, eval-pack-inventory, and eval-pack-doctor" in plugin_yaml
+    assert "review --digest is digest-only/manual" in plugin_yaml
     assert "workflow/queue surfaces are manual" in plugin_yaml
 
     make_skill(tmp_path, "demo")
     scout = plugin.core.scout(hermes_home_path=str(tmp_path), skill="demo")
     cron = scout["cron_recommendation"]
-    assert cron["allowed_cron_surfaces"] == ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor", "review --digest"]
-    assert cron["manual_read_only_surfaces"] == ["eval-pack-workflow", "skill-readiness-queue"]
+    assert cron["allowed_cron_surfaces"] == ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor"]
+    assert cron["manual_read_only_surfaces"] == ["review --digest", "eval-pack-workflow", "skill-readiness-queue"]
+    assert "review --digest" not in cron["allowed_cron_surfaces"]
     assert "eval-pack-workflow" not in cron["allowed_cron_surfaces"]
     assert "skill-readiness-queue" not in cron["allowed_cron_surfaces"]
 

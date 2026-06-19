@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 from hermes_skillopt import core
@@ -55,6 +56,22 @@ def test_eval_pack_workflow_and_promotion_are_structured_review_only(tmp_path, m
     assert promoted["production_eligible"] is False
     assert promoted["promotion_requirements"]["production_requires_explicit_policy_contract"] is True
     assert promoted["promotion_requirements"]["no_webui_production_one_click"] is True
+
+
+def test_eval_pack_workflow_quotes_safe_next_command_fragments(tmp_path, monkeypatch):
+    home = tmp_path / "home with spaces;$(touch pwned)"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    skill_name = "demo odd;$(touch pwned)"
+    make_skill(home, skill_name)
+
+    workflow = eval_pack_workflow_summary(hermes_home_path=str(home), skill=skill_name)
+
+    cmd = workflow["workflow"][0]["safe_next_command"]
+    parts = shlex.split(cmd)
+    assert str(home) in parts
+    assert skill_name in parts
+    assert f"--home {home}" not in cmd
+    assert f"--skill {skill_name}" not in cmd
 
 
 def test_skill_readiness_queue_blocks_native_guard_and_cli_is_json(tmp_path, monkeypatch, capsys):

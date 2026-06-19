@@ -47,7 +47,7 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_eval_pack_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_eval_pack_workflow": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "manual_surface": True, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_skill_readiness_queue": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "manual_surface": True, "native_hermes_metadata": "read_only_advisory"},
-    "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": "digest_only", "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "cron_mode": "digest_only", "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_resume_inspect": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_fleet_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_fleet_resume_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
@@ -80,7 +80,7 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_upstream_update": {"safety_group": "upstream", "risk_level": "high", "writes": "pinned_upstream_clone_and_lock", "cron_safe": False},
 }
 TOOL_SAFETY_GROUPS: dict[str, dict[str, Any]] = {
-    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch. Only scout, doctor, eval-pack-inventory, eval-pack-doctor, and review --digest are cron-safe defaults; workflow/queue surfaces are manual, and autopilot/skill-quality are manual unless they add explicit digest-only modes.", "scheduled_default": "limited"},
+    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch. Only scout, doctor, eval-pack-inventory, and eval-pack-doctor are cron-safe scheduled defaults; review --digest is digest-only/manual for an already-staged run, workflow/queue surfaces are manual, and autopilot/skill-quality are manual unless they add explicit digest-only modes.", "scheduled_default": "limited"},
     "read_only_report": {"description": "Read-only checks that may write an explicitly requested report artifact; not cron-safe by default.", "scheduled_default": False},
     "stage_artifacts": {"description": "Creates guarded staging/eval/handoff artifacts for human review; never auto-adopts.", "scheduled_default": False},
     "writeback": {"description": "Writes live SKILL.md after explicit typed confirmation and guard checks.", "scheduled_default": False},
@@ -94,7 +94,7 @@ def tool_safety_catalog() -> dict[str, Any]:
     return {
         "schema_version": "hermes-skillopt-tool-safety-v1",
         "compatibility": "metadata_only_all_existing_tools_remain_available",
-        "scheduled_default_guidance": "Schedule only scout, doctor, eval-pack-inventory, eval-pack-doctor, or review --digest surfaces; eval-pack-autopilot and skill-quality are manual unless explicit digest-only modes are added and cataloged; never cron optimize, full-run, adopt, rollback, writeback, upstream-update, or status.",
+        "scheduled_default_guidance": "Schedule only scout, doctor, eval-pack-inventory, and eval-pack-doctor surfaces; review --digest is digest-only/manual for an already-staged run, not a scheduled default; eval-pack-autopilot and skill-quality are manual unless explicit digest-only modes are added and cataloged; never cron optimize, full-run, adopt, rollback, writeback, upstream-update, or status.",
         "native_hermes_boundary": "SkillOpt reads native Hermes metadata as advisory guard input only. It does not replace the Hermes curator: curator owns lifecycle/archive/consolidation; SkillOpt owns staged eval evidence and adoption recommendations.",
         "groups": json.loads(json.dumps(TOOL_SAFETY_GROUPS, sort_keys=True)),
         "tools": json.loads(json.dumps(TOOL_SAFETY_METADATA, sort_keys=True)),
@@ -348,6 +348,42 @@ def _artifact_path(run_dir: Path, manifest: dict[str, Any], key: str) -> Path:
 
 def _read_hashed_json(run_dir: Path, manifest: dict[str, Any], key: str) -> Any:
     return json.loads(read_text(_artifact_path(run_dir, manifest, key)))
+
+
+def _runtime_evidence_payload(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Hydrate review/readiness decisions with verified runtime evidence artifacts.
+
+    The manifest intentionally stores compact summaries for UX, but the evidence
+    ledger requires the complete target_execution_evidence/reviewer_gate bodies.
+    Only load artifacts that are present in the manifest's hashed file set; forged
+    manifests that omit those artifacts remain review-only.
+    """
+
+    payload = dict(manifest)
+    loaded_txe = None
+    loaded_rg = None
+    raw_files = manifest.get("files")
+    raw_hashes = manifest.get("artifact_sha256")
+    files = raw_files if isinstance(raw_files, dict) else {}
+    hashes = raw_hashes if isinstance(raw_hashes, dict) else {}
+    for key, field in (("target_execution_evidence", "target_execution_evidence"), ("reviewer_gate", "reviewer_gate")):
+        if key not in files or key not in hashes:
+            continue
+        artifact = _read_hashed_json(run_dir, manifest, key)
+        if isinstance(artifact, dict):
+            payload[field] = artifact
+            if key == "target_execution_evidence":
+                loaded_txe = artifact
+            elif key == "reviewer_gate":
+                loaded_rg = artifact
+    if isinstance(loaded_txe, dict) or isinstance(loaded_rg, dict):
+        payload["evidence_ledger"] = _eval_evidence_ledger(
+            target_execution_evidence=loaded_txe if isinstance(loaded_txe, dict) else None,
+            reviewer_gate=loaded_rg if isinstance(loaded_rg, dict) else None,
+        )
+        payload["eval_level"] = payload["evidence_ledger"].get("eval_level")
+        payload["evidence_maturity"] = payload["evidence_ledger"].get("evidence_maturity")
+    return payload
 
 
 def _read_hashed_jsonl(run_dir: Path, manifest: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -1188,15 +1224,41 @@ def _eval_evidence_ledger(payload: dict[str, Any] | None = None, *, target_execu
     if not rg and isinstance(p.get("reviewer_gate"), dict):
         rg = p["reviewer_gate"]
     complete_frozen = txe.get("classification") == "frozen_hermes_target_execution_v1" and txe.get("complete") is True
+    missing_required: list[str] = []
+    for scalar_field in ("frozen_target_config_id", "frozen_target_fingerprint_sha256"):
+        if not txe.get(scalar_field):
+            missing_required.append(scalar_field)
+    for fingerprint_field in ("provider_fingerprint", "model_fingerprint", "toolset_fingerprint", "tool_policy_fingerprint", "session_fingerprint", "runtime_fingerprint", "isolated_runtime_proof"):
+        value = txe.get(fingerprint_field)
+        if not isinstance(value, dict) or not value.get("fingerprint_sha256"):
+            missing_required.append(fingerprint_field)
+    raw_permissions = txe.get("permissions")
+    permissions: dict[str, Any] = raw_permissions if isinstance(raw_permissions, dict) else {}
+    if permissions.get("task_commands_allowed") is not False:
+        missing_required.append("permissions.task_commands_allowed=false")
+    if permissions.get("profile_write_allowed") is not False:
+        missing_required.append("permissions.profile_write_allowed=false")
+    if permissions.get("live_profile_writes") is not False:
+        missing_required.append("permissions.live_profile_writes=false")
+    raw_trajectory_fp = txe.get("trajectory_or_transcript_artifact_fingerprint")
+    trajectory_fp: dict[str, Any] = raw_trajectory_fp if isinstance(raw_trajectory_fp, dict) else {}
+    if not any(trajectory_fp.get(k) for k in ("validation", "production_validation", "test")) and not trajectory_fp.get("per_result_trace_fingerprints"):
+        missing_required.append("trajectory_or_transcript_artifact_fingerprint")
+    scoring = txe.get("execution_scoring_evidence")
+    if not (isinstance(scoring, list) and scoring and all(isinstance(x, dict) and x.get("fingerprint_sha256") for x in scoring)):
+        missing_required.append("execution_scoring_evidence")
+    required_complete = not missing_required
     real_runtime = txe.get("real_hermes_runtime_evidence") is True and txe.get("real_hermes_runtime_invocation") is True
     no_task_commands = txe.get("task_commands_executed") is False
     internal_review_only = txe.get("internal_review_only_runner") is True
     reviewer_adoptable = rg.get("passed") is True and rg.get("adoptable_after_reviewer_gate") is True
-    production_ready = bool(complete_frozen and real_runtime and no_task_commands and not internal_review_only and reviewer_adoptable)
+    production_ready = bool(complete_frozen and required_complete and real_runtime and no_task_commands and not internal_review_only and reviewer_adoptable)
     level = "production" if production_ready else "review_only"
     blockers: list[str] = []
     if not complete_frozen:
         blockers.append("complete frozen target execution evidence is missing")
+    if not required_complete:
+        blockers.extend(f"missing required target execution evidence: {field}" for field in missing_required)
     if not real_runtime:
         blockers.append("real Hermes runtime invocation/evidence is missing")
     if not no_task_commands:
@@ -1212,6 +1274,8 @@ def _eval_evidence_ledger(payload: dict[str, Any] | None = None, *, target_execu
         "review_only_unless_complete_real_hermes_runtime": True,
         "production_runtime_ready": production_ready,
         "complete_frozen_evidence": complete_frozen,
+        "required_target_execution_evidence_complete": required_complete,
+        "missing_required_target_execution_evidence": sorted(set(missing_required)),
         "real_hermes_runtime_evidence": txe.get("real_hermes_runtime_evidence") is True,
         "real_hermes_runtime_invocation": txe.get("real_hermes_runtime_invocation") is True,
         "task_commands_executed": txe.get("task_commands_executed"),
@@ -1258,12 +1322,35 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
     params = raw_params if isinstance(raw_params, dict) else {}
     backend_kind = str(params.get("backend_kind") or "")
     internal_review_only_runner = sandbox_mvp or backend_kind in {"sandbox_fixed_internal_runner", "deterministic_trace_replay", "deterministic_fallback_scorecard"}
-    permissions = exemplar.get("permissions") if isinstance(exemplar.get("permissions"), dict) else {}
+    raw_permissions = exemplar.get("permissions")
+    permissions: dict[str, Any] = raw_permissions if isinstance(raw_permissions, dict) else {}
     task_commands_executed = any(m.get("task_commands_executed") is True for m in metadata_rows)
+    trajectory_or_transcript_artifact_fingerprint = {
+        "validation": (validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(validation_summary, dict) else None,
+        "production_validation": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
+        "test": test_results.get("trajectory_fingerprint_sha256") if isinstance(test_results, dict) else None,
+        "per_result_trace_fingerprints": [m.get("trace_fingerprint_sha256") for m in metadata_rows if m.get("trace_fingerprint_sha256")],
+    }
+    execution_scoring_evidence = [m.get("execution_scoring_evidence") for m in metadata_rows if isinstance(m.get("execution_scoring_evidence"), dict)][:20]
+    required_evidence_missing = set(missing)
+    for field_name in ("provider_fingerprint", "model_fingerprint", "toolset_fingerprint", "tool_policy_fingerprint", "session_fingerprint", "runtime_fingerprint", "isolated_runtime_evidence"):
+        value = exemplar.get(field_name)
+        if not isinstance(value, dict) or not value.get("fingerprint_sha256"):
+            required_evidence_missing.add(field_name)
+    if permissions.get("task_commands_allowed") is not False:
+        required_evidence_missing.add("task_commands_allowed_false")
+    if permissions.get("profile_write_allowed") is not False:
+        required_evidence_missing.add("profile_write_allowed_false")
+    if permissions.get("live_profile_writes") is not False:
+        required_evidence_missing.add("live_profile_writes_false")
+    if not any(trajectory_or_transcript_artifact_fingerprint.get(k) for k in ("validation", "production_validation", "test")) and not trajectory_or_transcript_artifact_fingerprint.get("per_result_trace_fingerprints"):
+        required_evidence_missing.add("trajectory_or_transcript_artifact_fingerprint")
+    if not execution_scoring_evidence:
+        required_evidence_missing.add("execution_scoring_evidence")
     complete = bool(
         frozen_requested
         and contract_checks
-        and not missing
+        and not required_evidence_missing
         and permissions.get("task_commands_allowed") is False
         and permissions.get("profile_write_allowed") is False
         and runtime_available
@@ -1299,15 +1386,10 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
         "permissions": {"task_commands_allowed": permissions.get("task_commands_allowed"), "profile_write_allowed": permissions.get("profile_write_allowed"), "live_profile_writes": permissions.get("live_profile_writes")},
         "task_command_policy": "task-provided commands disabled/blocked by default; task-provided command execution makes evidence non-production",
         "task_commands_executed": task_commands_executed,
-        "trajectory_or_transcript_artifact_fingerprint": {
-            "validation": (validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(validation_summary, dict) else None,
-            "production_validation": (production_validation_summary or {}).get("candidate_eval", {}).get("trajectory_fingerprint_sha256") if isinstance(production_validation_summary, dict) else None,
-            "test": test_results.get("trajectory_fingerprint_sha256") if isinstance(test_results, dict) else None,
-            "per_result_trace_fingerprints": [m.get("trace_fingerprint_sha256") for m in metadata_rows if m.get("trace_fingerprint_sha256")],
-        },
-        "execution_scoring_evidence": [m.get("execution_scoring_evidence") for m in metadata_rows if isinstance(m.get("execution_scoring_evidence"), dict)][:20],
+        "trajectory_or_transcript_artifact_fingerprint": trajectory_or_transcript_artifact_fingerprint,
+        "execution_scoring_evidence": execution_scoring_evidence,
         "contract_checks": contract_checks,
-        "missing_required_evidence": missing,
+        "missing_required_evidence": sorted(required_evidence_missing),
         "evidence_result_count": len(metadata_rows),
     }
     payload["fingerprint_sha256"] = _stable_json_sha(payload)
@@ -2395,18 +2477,43 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
     adoption still reads the manifest guard fields and requires explicit adopt.
     """
 
-    blockers = [str(r) for r in (payload.get("production_eligibility_reasons") or payload.get("not_adoptable_reasons") or []) if r]
+    raw_blockers = payload.get("blockers") or []
+    if isinstance(raw_blockers, str):
+        raw_blockers = [raw_blockers]
+    elif not isinstance(raw_blockers, (list, tuple, set)):
+        raw_blockers = [raw_blockers]
+    raw_reasons = payload.get("production_eligibility_reasons") or payload.get("not_adoptable_reasons") or []
+    if isinstance(raw_reasons, str):
+        raw_reasons = [raw_reasons]
+    elif not isinstance(raw_reasons, (list, tuple, set)):
+        raw_reasons = [raw_reasons]
+    blockers = [str(r) for r in [*raw_blockers, *raw_reasons] if r]
     warnings: list[str] = []
-    adoptable = payload.get("adoptable") is True
+    manifest_adoptable = payload.get("adoptable") is True
     production_gate_eligible = payload.get("production_gate_eligible") is True
     test_gate_eligible = payload.get("test_gate_eligible") is True
     strict_gate_mode = payload.get("strict_gate_mode") is True or (isinstance(payload.get("gate_policy"), dict) and payload["gate_policy"].get("mode") == "strict")
     raw_ledger = payload.get("evidence_ledger")
-    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else _eval_evidence_ledger(payload)
-    if adoptable and evidence_ledger.get("production_runtime_ready") is not True:
+    evaluated_ledger = _eval_evidence_ledger(payload)
+    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else evaluated_ledger
+    ledger_ready = evidence_ledger.get("production_runtime_ready") is True and evaluated_ledger.get("production_runtime_ready") is True
+    if manifest_adoptable and not ledger_ready:
+        blockers.append("production runtime evidence ledger is not ready")
+        for ledger in (evidence_ledger, evaluated_ledger):
+            for field in ledger.get("missing_required_evidence") or ledger.get("missing_required_target_execution_evidence") or []:
+                blockers.append(f"missing required target execution evidence: {field}")
+            for reason in (ledger.get("blockers") or ledger.get("reasons") or []):
+                blockers.append(str(reason))
         warnings.append("inconsistent manifest: adoptable true without production-runtime evidence ledger readiness")
-    if adoptable and (not production_gate_eligible or not test_gate_eligible):
+    if manifest_adoptable and not production_gate_eligible:
+        blockers.append("missing accepted explicit curated production validation gate")
+    if manifest_adoptable and not test_gate_eligible:
+        blockers.append("held-out test split is missing, non-production, or below threshold")
+    if manifest_adoptable and not strict_gate_mode:
+        blockers.append("production adoption requires strict gate mode; requested gate mode is review-only")
+    if manifest_adoptable and (not production_gate_eligible or not test_gate_eligible):
         warnings.append("inconsistent manifest: adoptable true without both production/test eligibility gates")
+    adoptable = manifest_adoptable and production_gate_eligible and test_gate_eligible and strict_gate_mode and ledger_ready
     review_only = not adoptable
     if not blockers and review_only:
         if not production_gate_eligible:
@@ -2452,8 +2559,12 @@ def review_decision_summary(run_id: str | None = None, hermes_home_path: str | N
 
     rid = (run_id or "").strip()
     reviewed = review_latest(hermes_home_path, slim=True) if not rid or rid == "latest" else review(rid, hermes_home_path=hermes_home_path, slim=True)
-    reasons = reviewed.get("not_adoptable_reasons") or []
-    if reviewed.get("adoptable") is True:
+    readiness = readiness_adoptability_schema(reviewed)
+    adoptable = readiness.get("adoptable") is True
+    production_gate_eligible = readiness.get("production_gate_eligible") is True
+    test_gate_eligible = readiness.get("test_gate_eligible") is True
+    reasons = readiness.get("blockers") or reviewed.get("not_adoptable_reasons") or []
+    if adoptable:
         decision = "ready_for_explicit_adopt"
         next_action = f"Review artifacts, then type ADOPT {reviewed['run_id']} with the adopt command if you intend production writeback."
     elif reviewed.get("accepted") is True:
@@ -2462,11 +2573,7 @@ def review_decision_summary(run_id: str | None = None, hermes_home_path: str | N
     else:
         decision = "not_ready_rejected_or_incomplete"
         next_action = "Inspect report/gate reasons; improve eval coverage or skill inputs and rerun staged optimize."
-    adoptable = reviewed.get("adoptable") is True
-    production_gate_eligible = reviewed.get("production_gate_eligible") is True
-    test_gate_eligible = reviewed.get("test_gate_eligible") is True
-    evidence_class = "production_candidate" if adoptable and production_gate_eligible and test_gate_eligible and (reviewed.get("evidence_ledger") or {}).get("production_runtime_ready") else "review_only_or_not_ready"
-    readiness = readiness_adoptability_schema(reviewed)
+    evidence_class = "production_candidate" if adoptable and production_gate_eligible and test_gate_eligible and (readiness.get("evidence_ledger") or {}).get("production_runtime_ready") else "review_only_or_not_ready"
     return {
         "success": True,
         "run_id": reviewed.get("run_id"),
@@ -3109,7 +3216,7 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
         "artifact_hygiene": {"schema_version": hygiene.get("schema_version"), "classification_counts": hygiene_counts, "runs": (hygiene.get("runs") or [])[:cap]},
         "next_actions": next_actions[:6],
         "safe_next_commands": safe_commands,
-        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "allowed_cron_surfaces": ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor", "review --digest"], "manual_read_only_surfaces": ["eval-pack-workflow", "skill-readiness-queue"], "note": "If scheduled externally, run only scout/doctor/eval-pack-inventory/eval-pack-doctor/review --digest and route JSON to notifications; keep workflow/queue surfaces manual unless they expose explicit digest-only modes; never schedule status/full-run/optimize/adopt/rollback/writeback without human review."},
+        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "allowed_cron_surfaces": ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor"], "manual_read_only_surfaces": ["review --digest", "eval-pack-workflow", "skill-readiness-queue"], "note": "If scheduled externally, run only scout/doctor/eval-pack-inventory/eval-pack-doctor and route JSON to notifications; review --digest is digest-only/manual for a human-selected existing run; keep workflow/queue surfaces manual unless they expose explicit digest-only modes; never schedule status/full-run/optimize/adopt/rollback/writeback without human review."},
         "native_hermes_boundary": "Native Hermes metadata is read-only advisory evidence. SkillOpt does not replace Hermes curator lifecycle/archive/consolidation; it produces staged eval evidence and adoption recommendations only.",
         "read_only_guards": ["does not call full_run", "does not call optimize/guided_optimize", "does not adopt", "does not rollback", "does not fetch/update upstream", "does not write live skills/config/cron/memories", "does not archive/consolidate/replace Hermes curator lifecycle ownership"],
         "report_path": None,
@@ -3551,9 +3658,10 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
         native_guard = native_adopt_guard(home, Skill(name=str(m.get("skill_name") or target_path.parent.name), path=target_path, relpath=str(m.get("skill_relpath") or target_path.resolve().relative_to(home.resolve())), sha256=""), m)
     except Exception as exc:
         native_guard = {"schema_version": "hermes-native-adopt-guard-v1", "allowed": False, "blockers": [f"native metadata guard unavailable: {type(exc).__name__}: {exc}"], "force_override_allowed": False}
+    runtime_payload = _runtime_evidence_payload(run_dir, m)
     score_provenance = _score_provenance_summary(m)
-    raw_evidence_ledger = m.get("evidence_ledger")
-    evidence_ledger: dict[str, Any] = raw_evidence_ledger if isinstance(raw_evidence_ledger, dict) else _eval_evidence_ledger(m)
+    raw_evidence_ledger = runtime_payload.get("evidence_ledger")
+    evidence_ledger: dict[str, Any] = raw_evidence_ledger if isinstance(raw_evidence_ledger, dict) else _eval_evidence_ledger(runtime_payload)
     report_summary = {"timeline": {"status": m.get("status"), "created_at": m.get("created_at")}, "eligibility": {"adoptable": m.get("adoptable") is True, "reasons": m.get("production_eligibility_reasons") or [], "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True}, "score_provenance": score_provenance, "split_scores": m.get("split_scores") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "artifact_lineage": artifact_lineage, "provenance_security": {"artifact_integrity": "verified", "provenance_fingerprint": (m.get("provenance_fingerprint") or {}).get("fingerprint_sha256") if isinstance(m.get("provenance_fingerprint"), dict) else None, "production_eval_policy": (m.get("production_eval_policy") or {}).get("policy_version") if isinstance(m.get("production_eval_policy"), dict) else None, "target_executor": m.get("target_executor"), "gate_policy": m.get("gate_policy")}}
     diff_path = run_dir / "diff.patch"
     report_path = run_dir / "report.md"
@@ -3561,8 +3669,8 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
         "diff": {"path": str(diff_path), "sha256": sha256_text(diff) if diff else None, "bytes": len(diff.encode("utf-8")), "preview_chars": 0 if slim else min(len(diff), include_diff_chars)},
         "report": {"path": str(report_path), "sha256": sha256_text(report) if report else None, "bytes": len(report.encode("utf-8")), "preview_chars": 0 if slim else min(len(report), 1200)},
     }
-    readiness = readiness_adoptability_schema({**m, "gate": gate})
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "target_execution_evidence": m.get("target_execution_evidence"), "reviewer_gate": m.get("reviewer_gate"), "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "native_hermes_metadata": m.get("native_hermes_metadata"), "native_hermes_adopt_guard": native_guard, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
+    readiness = readiness_adoptability_schema({**runtime_payload, "gate": gate})
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": readiness["adoptable"], "manifest_adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "target_execution_evidence": runtime_payload.get("target_execution_evidence"), "reviewer_gate": runtime_payload.get("reviewer_gate"), "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "native_hermes_metadata": m.get("native_hermes_metadata"), "native_hermes_adopt_guard": native_guard, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
 
 
 def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
