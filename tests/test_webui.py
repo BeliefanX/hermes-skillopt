@@ -118,6 +118,33 @@ def test_webui_run_api_production_intent_requires_eval_and_strict_no_mock(tmp_pa
         webui_api.run_full({"intent": "production", "skill": "demo", "home": str(tmp_path), "eval_file": str(eval_file), "gate_mode": "strict", "allow_mock": True})
 
 
+def test_webui_eval_pack_api_review_only_doctor_autopilot_promote(tmp_path):
+    make_skill(tmp_path, "demo")
+    doctor = webui_api.eval_pack_doctor(str(tmp_path), "demo")
+    assert doctor["mode"] == "eval_pack_doctor_read_only"
+    assert doctor["read_only"] is True
+    assert doctor["auto_adopt"] is False
+
+    plan = webui_api.eval_pack_autopilot({"skill": "demo", "home": str(tmp_path)})
+    assert plan["mode"] == "eval_pack_autopilot_plan_read_only"
+    assert plan["read_only"] is True
+
+    draft = webui_api.eval_pack_autopilot({"skill": "demo", "home": str(tmp_path), "write_draft": True})
+    draft_path = Path(draft["draft"]["output_path"])
+    assert draft["review_only"] is True
+    assert draft["production_eligible"] is False
+    assert draft["auto_adopt"] is False
+    assert draft_path.exists()
+
+    promoted = webui_api.eval_pack_promote({"skill": "demo", "home": str(tmp_path), "input_path": str(draft_path)})
+    assert promoted["mode"] == "eval_pack_promote_curated_review_default"
+    assert promoted["production_eligible"] is False
+    assert promoted["auto_adopt"] is False
+    assert Path(promoted["output_path"]).exists()
+    with pytest.raises(ValueError, match="review packs only"):
+        webui_api.eval_pack_promote({"skill": "demo", "home": str(tmp_path), "input_path": str(draft_path), "production": True})
+
+
 def test_cli_webui_propagates_home(monkeypatch, tmp_path):
     calls = {}
     def fake_main(argv):
@@ -180,6 +207,20 @@ def test_fastapi_routes_and_static_assets(monkeypatch, tmp_path):
     doctor = client.get("/api/doctor", params={"home": str(tmp_path), "skill": "demo"})
     assert doctor.status_code == 200
     assert doctor.json()["mode"] == "read_only_doctor_no_full_run_no_adopt_no_rollback_no_fetch"
+    eval_doctor = client.get("/api/eval-pack/doctor", params={"home": str(tmp_path), "skill": "demo"})
+    assert eval_doctor.status_code == 200
+    assert eval_doctor.json()["mode"] == "eval_pack_doctor_read_only"
+    draft = client.post("/api/eval-pack/autopilot", json={"skill": "demo", "write_draft": True, "home": str(tmp_path)})
+    assert draft.status_code == 200
+    draft_json = draft.json()
+    assert draft_json["review_only"] is True
+    draft_path = draft_json["draft"]["output_path"]
+    promoted = client.post("/api/eval-pack/promote", json={"skill": "demo", "input_path": draft_path, "home": str(tmp_path)})
+    assert promoted.status_code == 200
+    assert promoted.json()["mode"] == "eval_pack_promote_curated_review_default"
+    prod_promote = client.post("/api/eval-pack/promote", json={"skill": "demo", "input_path": draft_path, "production": True, "home": str(tmp_path)})
+    assert prod_promote.status_code == 400
+    assert "review packs only" in prod_promote.text
     fleet = client.get("/api/fleet/report", params={"home": str(tmp_path), "limit": 5})
     assert fleet.status_code == 200
     assert fleet.json()["mode"].startswith("read_only_report")
@@ -279,6 +320,21 @@ def test_webui_phase4_wizard_and_decision_first_contracts():
         assert field in jsx
     assert "TextBlock title=\"diff.patch\"" in jsx
     assert "RawBlock title={t.rawReview}" in jsx
+
+
+def test_webui_eval_pack_one_click_contracts():
+    repo = Path(__file__).resolve().parents[1]
+    jsx = (repo / "web" / "src" / "main.tsx").read_text(encoding="utf-8")
+    server = (repo / "hermes_skillopt" / "webui_server.py").read_text(encoding="utf-8")
+    api = (repo / "hermes_skillopt" / "webui_api.py").read_text(encoding="utf-8")
+    for label in ("Diagnose eval coverage", "Generate review draft", "Promote draft to curated review pack"):
+        assert label in jsx
+    assert "review-only / no live skill adopt" in jsx
+    assert "production: false" in jsx
+    assert '"/api/eval-pack/doctor"' in server
+    assert '"/api/eval-pack/autopilot"' in server
+    assert '"/api/eval-pack/promote"' in server
+    assert "WebUI promotes review packs only" in api
 
 
 def test_cli_and_module_webui_help_smoke():

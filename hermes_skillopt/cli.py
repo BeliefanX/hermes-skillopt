@@ -97,12 +97,24 @@ def main() -> int:
     hyg.add_argument("--stale-after-hours", type=float, default=24.0)
     inv = sub.add_parser("eval-pack-inventory", help="Read-only inventory of skills and matching eval packs")
     inv.add_argument("--skill")
+    epdoc = sub.add_parser("eval-pack-doctor", help="Focused read-only eval-pack diagnostics; no writes/runs/adopt")
+    epdoc.add_argument("--skill")
+    auto = sub.add_parser("eval-pack-autopilot", help="Plan/read-only eval-pack autopilot by default; --write-draft writes guarded review-only draft")
+    auto.add_argument("--skill", required=True); auto.add_argument("--output"); auto.add_argument("--write-draft", action="store_true"); auto.add_argument("--overwrite", action="store_true")
     scaf = sub.add_parser("eval-pack-scaffold", help="Generate a review-only eval-pack scaffold with train/val/test samples")
     scaf.add_argument("--skill", required=True); scaf.add_argument("--output"); scaf.add_argument("--overwrite", action="store_true")
     cur = sub.add_parser("eval-pack-curate", help="Create a safe curated eval pack from a local tasks JSON file; review-only unless explicit production policy is supplied")
     cur.add_argument("--skill", required=True); cur.add_argument("--tasks", required=True, help="Local JSON list or {'tasks':[...]} file"); cur.add_argument("--output"); cur.add_argument("--pack-id"); cur.add_argument("--version", default="curated-v1"); cur.add_argument("--production-policy", help="Optional local JSON policy file"); cur.add_argument("--eval-execution-contract", help="Optional local JSON execution contract file"); cur.add_argument("--overwrite", action="store_true")
     mine = sub.add_parser("eval-pack-mine-sessions", help="Mine redacted sessions/session-like fixtures into a draft review-only eval pack")
     mine.add_argument("--skill", required=True); mine.add_argument("--output"); mine.add_argument("--query"); mine.add_argument("--lookback-days", type=int, default=14); mine.add_argument("--limit", type=int, default=50); mine.add_argument("--session-fixture"); mine.add_argument("--overwrite", action="store_true")
+    corr = sub.add_parser("eval-pack-ingest-correction", help="Ingest a user correction into review-only regression seed tasks")
+    corr.add_argument("--skill", required=True); corr.add_argument("--correction", required=True); corr.add_argument("--output"); corr.add_argument("--expected-term", action="append", dest="expected_terms"); corr.add_argument("--overwrite", action="store_true")
+    ctxp = sub.add_parser("eval-pack-ingest-context", help="Ingest skill-creation context into review-only eval seed tasks")
+    ctxp.add_argument("--skill", required=True); ctxp.add_argument("--context", required=True); ctxp.add_argument("--output"); ctxp.add_argument("--expected-term", action="append", dest="expected_terms"); ctxp.add_argument("--overwrite", action="store_true")
+    neg = sub.add_parser("eval-pack-negative-boundary", help="Generate deterministic negative/boundary review-only cases")
+    neg.add_argument("--skill", required=True); neg.add_argument("--output"); neg.add_argument("--overwrite", action="store_true")
+    promo = sub.add_parser("eval-pack-promote", help="Promote a draft to curated review pack by default; production requires explicit policy+contract")
+    promo.add_argument("--skill", required=True); promo.add_argument("--input", required=True, dest="input_path"); promo.add_argument("--output"); promo.add_argument("--production", action="store_true"); promo.add_argument("--production-policy"); promo.add_argument("--eval-execution-contract"); promo.add_argument("--overwrite", action="store_true")
     eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
     eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
@@ -179,6 +191,12 @@ def main() -> int:
     elif args.cmd == "eval-pack-inventory":
         from hermes_skillopt.eval_packs import eval_pack_inventory
         out = eval_pack_inventory(hermes_home_path=args.home, skill=args.skill)
+    elif args.cmd == "eval-pack-doctor":
+        from hermes_skillopt.eval_packs import eval_pack_doctor
+        out = eval_pack_doctor(hermes_home_path=args.home, skill=args.skill)
+    elif args.cmd == "eval-pack-autopilot":
+        from hermes_skillopt.eval_packs import eval_pack_autopilot
+        out = eval_pack_autopilot(skill=args.skill, output=args.output, hermes_home_path=args.home, write_draft=args.write_draft, overwrite=args.overwrite)
     elif args.cmd == "eval-pack-scaffold":
         from hermes_skillopt.eval_packs import scaffold_eval_pack
         out = scaffold_eval_pack(skill=args.skill, output=args.output, hermes_home_path=args.home, overwrite=args.overwrite)
@@ -195,6 +213,33 @@ def main() -> int:
     elif args.cmd == "eval-pack-mine-sessions":
         from hermes_skillopt.eval_packs import mine_session_eval_pack
         out = mine_session_eval_pack(skill=args.skill, output=args.output, hermes_home_path=args.home, query=args.query, lookback_days=args.lookback_days, limit=args.limit, session_fixture=args.session_fixture, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-ingest-correction":
+        from hermes_skillopt.eval_packs import ingest_user_correction_eval_seed
+        out = ingest_user_correction_eval_seed(skill=args.skill, correction=args.correction, output=args.output, hermes_home_path=args.home, expected_terms=args.expected_terms, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-ingest-context":
+        from hermes_skillopt.eval_packs import ingest_skill_context_eval_seed
+        out = ingest_skill_context_eval_seed(skill=args.skill, context=args.context, output=args.output, hermes_home_path=args.home, expected_terms=args.expected_terms, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-negative-boundary":
+        from hermes_skillopt.eval_packs import generate_negative_boundary_eval_pack
+        out = generate_negative_boundary_eval_pack(skill=args.skill, output=args.output, hermes_home_path=args.home, overwrite=args.overwrite)
+    elif args.cmd == "eval-pack-promote":
+        from pathlib import Path
+        from hermes_skillopt.eval_packs import promote_eval_pack
+        policy = json.loads(Path(args.production_policy).read_text(encoding="utf-8")) if args.production_policy else None
+        contract = json.loads(Path(args.eval_execution_contract).read_text(encoding="utf-8")) if args.eval_execution_contract else None
+        try:
+            out = promote_eval_pack(skill=args.skill, input_path=args.input_path, output=args.output, hermes_home_path=args.home, production_policy=policy, eval_execution_contract=contract, production=args.production, overwrite=args.overwrite)
+        except ValueError as exc:
+            print(json.dumps({
+                "success": False,
+                "mode": "eval_pack_promote_refused",
+                "error_type": type(exc).__name__,
+                "error": core.redact_secrets(str(exc)),
+                "production": bool(args.production),
+                "auto_adopt": False,
+                "live_skill_writes": False,
+            }, ensure_ascii=False, indent=2))
+            return 2
     elif args.cmd in {"eval-only", "benchmark"}:
         out = core.eval_only(skill=args.skill, skill_file=args.skill_file, eval_file=args.eval_file, hermes_home_path=args.home, target_executor=args.target_executor, target_backend=args.target_backend)
     elif args.cmd == "run" and args.mode == "legacy":

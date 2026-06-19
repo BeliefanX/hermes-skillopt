@@ -37,6 +37,50 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" review latest --summary
 
 Use this for wiring, CLI/WebUI smoke, and staged artifact sanity. Smoke may use mock/review-only evidence and must not be considered adoption proof.
 
+## 2a. Eval-pack authoring autopilot and seeds
+
+Use eval-pack doctor/autopilot to plan coverage before writing anything:
+
+```bash
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-doctor --skill my-skill
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-autopilot --skill my-skill
+```
+
+Default autopilot is plan/read-only (`mode: eval_pack_autopilot_plan_read_only`) and is safe for scheduled notifications because it only returns a plan plus doctor diagnostics. To create a draft, use the explicit review-draft switch:
+
+```bash
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
+  eval-pack-autopilot --skill my-skill --write-draft \
+  --output skillopt/evals/my-skill-autopilot-draft.json
+
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
+  eval-pack-ingest-correction --skill my-skill \
+  --correction "User correction or regression note..." \
+  --expected-term verify \
+  --output skillopt/evals/my-skill-correction-seed.json
+
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
+  eval-pack-ingest-context --skill my-skill \
+  --context "Skill creation context or intended behavior..." \
+  --expected-term safe \
+  --output skillopt/evals/my-skill-context-seed.json
+
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
+  eval-pack-negative-boundary --skill my-skill \
+  --output skillopt/evals/my-skill-negative-boundary.json
+```
+
+These drafts/seeds are deterministic review-only packs: no model calls, no task command execution, no live skill writes, no adoption eligibility. Promote a reviewed draft to a curated review pack with:
+
+```bash
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
+  eval-pack-promote --skill my-skill \
+  --input skillopt/evals/my-skill-autopilot-draft.json \
+  --output skillopt/evals/my-skill-curated-review.json
+```
+
+Production promotion is deliberately not one-click: CLI production promotion requires `--production`, `--production-policy`, and `--eval-execution-contract`, and still does not adopt or write live skills. The WebUI promotion button is review-only by design and refuses production promotion.
+
 ## 3. Review authoring loop
 
 ```bash
@@ -123,13 +167,13 @@ CI evidence labels:
 
 ## 6a. Scheduled read-only surfaces only
 
-If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
+If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, `eval-pack-doctor`, default `eval-pack-autopilot` without `--write-draft`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
 
 ```bash
 hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json
 ```
 
-Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, or cleanup commands from scout output. Treat `next_actions` and `safe_next_commands` as human-review prompts.
+Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, cleanup commands, or eval-pack draft/promotion writes (`--write-draft`, seed writers, `eval-pack-promote`) from scout/doctor/autopilot output. Treat `next_actions`, `safe_next_commands`, and eval-pack `safe_commands` as human-review prompts.
 
 ## 7. WebUI workflow
 
@@ -137,7 +181,7 @@ Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, 
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Use the WebUI scout/status views for read-only readiness, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, digests, and artifacts. Server-side APIs keep scout/review read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
+Use the WebUI scout/status views for read-only readiness, eval-pack doctor/autopilot for coverage planning, the explicit draft action for review-only pack generation, one-click eval-pack promotion for review packs only, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, digests, and artifacts. Server-side APIs keep scout/review/eval-pack doctor/autopilot-plan read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
 
 ## 8. Runtime evidence and no-overclaim checklist
 

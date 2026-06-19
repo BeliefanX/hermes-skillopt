@@ -67,9 +67,15 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_fleet_rollback_plan`: read-only per-run rollback planning surface; no bulk rollback or writeback.
 - `hermes_skillopt_artifact_hygiene_report`: read-only staging hygiene classifier for `complete_verified`, `tampered_hash_mismatch`, `checkpoint_only_recent`, `stale_incomplete_checkpoint_only`/`stale_checkpoint_only`, `missing_manifest_or_checkpoint`, and `orphaned_batch_child`; every row reports `partial_continuation_available: false`, `next_safe_action`, artifact state, and score provenance when available; it never deletes or resumes.
 - `hermes_skillopt_eval_pack_inventory`: read-only inventory of discovered skills and matching eval packs, surfacing split completeness, production eligibility, review-only status, versioned pack id/version/fingerprint, missing-pack gaps, `readiness_adoptability` (`hermes-skillopt-readiness-adoptability-v1`), readiness matrix (`hermes-skillopt-readiness-matrix-v1`), advisory skill type, and package-support awareness for sibling `references/`, `templates/`, `scripts/`, and `assets/` directories.
+- `hermes_skillopt_eval_pack_doctor`: focused read-only eval-pack diagnostics and safe next actions; never writes, runs evals, adopts, or fetches.
+- `hermes_skillopt_eval_pack_autopilot`: plan/read-only by default and cron-safe in that mode; an explicit `write_draft=true`/CLI `--write-draft` writes only a guarded generated review-only draft pack.
 - `hermes_skillopt_eval_pack_scaffold`: creates a review-only train/validation/test scaffold pack; it is a starter template, not production evidence.
 - `hermes_skillopt_eval_pack_curate`: curated eval-pack factory for local task JSON; review-only by default, production-capable only with explicit policy and adoption-eligible execution contract.
 - `hermes_skillopt_eval_pack_mine_sessions`: mines redacted sessions/session-like fixtures into draft review-only eval packs; never production evidence.
+- `hermes_skillopt_eval_pack_ingest_correction`: turns a user correction into redacted review-only regression seed tasks; never production evidence.
+- `hermes_skillopt_eval_pack_ingest_context`: turns skill-creation context into redacted review-only seed tasks; never production evidence.
+- `hermes_skillopt_eval_pack_negative_boundary`: generates deterministic negative/boundary review-only cases; no model calls or user-command execution.
+- `hermes_skillopt_eval_pack_promote`: promotes a draft to a curated review pack by default. Production promotion requires explicit production policy plus execution contract and still never adopts or writes live skills.
 - `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay or unsafe partial continuation.
 - `hermes_skillopt_dry_run`: legacy staged proposal; review-only.
 - `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, lineage, report/diff paths, artifact refs, and previews. Use `summary=true`/CLI `review --summary` for decision-first gate separation, `digest=true`/CLI `review --digest` for Telegram/notification-friendly path/hash refs and score provenance, and `slim=true` to omit large previews.
@@ -84,7 +90,7 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_conformance`: local quick/full compile/pytest conformance report; no upstream execution or external services. By default it returns JSON only and writes no file; an explicit `--output`/`output_path` is required for a guarded `.json` report.
 - `hermes_skillopt_handoff_optimize`: deterministic multi-agent `delegate_task` dispatcher→worker handoff package optimizer; staged output only.
 
-Batch, fleet, eval-pack inventory/scaffold, upstream parity status, import/transfer/conformance surfaces are available as Hermes plugin tools and CLI/module commands. `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
+Batch, fleet, eval-pack inventory/doctor/autopilot/scaffold/seed/promote, upstream parity status, import/transfer/conformance surfaces are available as Hermes plugin tools and CLI/module commands. `eval-only` and `benchmark` are currently CLI/core-only fixed-skill scoring surfaces.
 
 Status/scout-style surfaces expose `hermes-skillopt-tool-safety-v1` metadata: read-only tools are low risk and cron-safe; report-only tools may write only explicit guarded reports; staged artifact creators are medium risk and not cron-safe; adopt/rollback/upstream-update are high risk and never cron-safe. Scheduled automation should consume only read-only/status/digest outputs and never trigger optimize, adopt, rollback, cleanup, or upstream update.
 
@@ -111,6 +117,12 @@ python3 -m hermes_skillopt.cli batch-preflight --help
 python3 -m hermes_skillopt.cli batch-run --help
 python3 -m hermes_skillopt.cli fleet-report --help
 python3 -m hermes_skillopt.cli eval-pack-inventory --help
+python3 -m hermes_skillopt.cli eval-pack-doctor --help
+python3 -m hermes_skillopt.cli eval-pack-autopilot --help
+python3 -m hermes_skillopt.cli eval-pack-ingest-correction --help
+python3 -m hermes_skillopt.cli eval-pack-ingest-context --help
+python3 -m hermes_skillopt.cli eval-pack-negative-boundary --help
+python3 -m hermes_skillopt.cli eval-pack-promote --help
 python3 -m hermes_skillopt.cli import-upstream-benchmark --help
 python3 -m hermes_skillopt.cli benchmark-parity-status --help
 python3 -m hermes_skillopt.cli resume-inspect --help
@@ -206,17 +218,26 @@ It writes an `eval_only_complete` run directory with `evaluated_SKILL.md`, `eval
 
 Curated evals may be JSONL, JSON (`[...]` or `{ "tasks": [...] }`), or a versioned eval pack (`{ "schema_version": "hermes-curated-eval-pack-v1", "pack_id": "...", "version": "...", "tasks": [...] }`). An explicit `eval_file` must resolve to a regular file inside the active `$HERMES_HOME`; default discovery checks `$HERMES_HOME/skillopt/evals/<skill-name>.jsonl` and then `evals/*.jsonl` under the skill directory.
 
-Use inventory/scaffold/curate/mining before assuming coverage exists:
+Use inventory/doctor/autopilot/scaffold/seed/curate/mining before assuming coverage exists:
 
 ```bash
 python3 -m hermes_skillopt.cli eval-pack-inventory
 python3 -m hermes_skillopt.cli eval-pack-inventory --skill my-skill
+python3 -m hermes_skillopt.cli eval-pack-doctor --skill my-skill
+python3 -m hermes_skillopt.cli eval-pack-autopilot --skill my-skill
+python3 -m hermes_skillopt.cli eval-pack-autopilot --skill my-skill --write-draft --output skillopt/evals/my-skill-autopilot-draft.json
+python3 -m hermes_skillopt.cli eval-pack-ingest-correction --skill my-skill --correction "User corrected the expected behavior..." --expected-term verify --output skillopt/evals/my-skill-correction-seed.json
+python3 -m hermes_skillopt.cli eval-pack-ingest-context --skill my-skill --context "Skill creation context..." --expected-term safe --output skillopt/evals/my-skill-context-seed.json
+python3 -m hermes_skillopt.cli eval-pack-negative-boundary --skill my-skill --output skillopt/evals/my-skill-negative-boundary.json
+python3 -m hermes_skillopt.cli eval-pack-promote --skill my-skill --input skillopt/evals/my-skill-autopilot-draft.json --output skillopt/evals/my-skill-curated-review.json
 python3 -m hermes_skillopt.cli eval-pack-scaffold --skill my-skill --output skillopt/evals/my-skill-scaffold.json
 python3 -m hermes_skillopt.cli eval-pack-curate --skill my-skill --tasks local-tasks.json --output skillopt/evals/my-skill-curated.json
 python3 -m hermes_skillopt.cli eval-pack-mine-sessions --skill my-skill --output skillopt/evals/my-skill-session-draft.json
 ```
 
 `eval-pack-inventory` is read-only and reports candidate paths, existing packs, valid/invalid status, split counts, production-eligible task counts, review-only flags, missing reasons, advisory skill type, and a readiness matrix. It recognizes versioned `hermes-curated-eval-pack-v1` metadata (`pack_id`, `version`, fingerprint) from exact/default paths and name-derived pack names such as `<skill>-thermal-v4.json` without broad substring matching. Each skill row includes `readiness_adoptability` using the unified schema `hermes-skillopt-readiness-adoptability-v1`; inventory also includes a top-level `hermes-skillopt-readiness-matrix-v1`. It deliberately surfaces gaps: most skills should be treated as lacking true curated train/validation/test packs until inventory shows a valid production-eligible pack. `eval-pack-scaffold` writes a safe `.json` starter with train/validation/test examples, `sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`, and `eval_execution_contract.classification: static_review_only`; replacing the sample tasks with curated evidence is required before any production claim. `eval-pack-curate` is the canonical curated factory for local task JSON and remains review-only unless explicit production policy and contract evidence are supplied. `eval-pack-mine-sessions` creates redacted session-mined draft packs for review only; mined/session artifacts cannot authorize production adoption.
+
+`eval-pack-doctor` is the focused read-only diagnostic layer over inventory. It emits per-skill `safe_commands` for autopilot planning, explicit draft writing, and review promotion, and never writes, runs evals, adopts, or fetches. `eval-pack-autopilot` is also plan/read-only by default (`mode: eval_pack_autopilot_plan_read_only`) and is safe for cron-style notifications in that default mode; only `--write-draft` writes a guarded generated draft under the eval/report-safe path policy. Autopilot drafts, correction/context seed packs, session-mined packs, scaffolds, and negative/boundary packs are all review-only (`production_gate_eligible: false`) and are intended to help humans build regression coverage, not to create production evidence automatically. `eval-pack-promote` promotes such a draft to a curated review pack by default; production promotion requires `--production` plus explicit `--production-policy` and `--eval-execution-contract`, still never adopts and still never writes live skills. The WebUI one-click promotion intentionally exposes review promotion only; production promotion remains a CLI/tool action with explicit policy/contract files.
 
 Skill packages may include sibling `references/`, `templates/`, `scripts/`, and `assets/` directories. Inventory/scout summarize these as `skill_package_support` with file counts, sizes, and hashes only, skip symlinks/escapes, and mark the data `advisory_only: true` / `content_included: false`. Package awareness helps reviewers and curators find supporting material; it does **not** expand what SkillOpt may rewrite and does **not** change production adoption authority.
 
@@ -329,7 +350,7 @@ python3 -m hermes_skillopt.webui --host 127.0.0.1 --port 7860
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Sections/actions/APIs: status, read-only scout, guided staged optimization wizard, decision-first artifact review console/digest, fleet report/resume-plan/rollback-plan, artifact hygiene report, adopt, rollback, upstream status/parity/update. Scout and review APIs are read-only; artifact review reads only fixed allowlisted files in the selected staging directory and surfaces separated production/test gates, evidence class, blockers, score provenance, artifact refs, and next safe action. Adopt/rollback require exact typed confirmation server-side and still call the core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status/scout/fleet/upstream-status operations and intentionally ignored for writeback/upstream update.
+Sections/actions/APIs: status, read-only scout, guided staged optimization wizard, decision-first artifact review console/digest, eval-pack doctor/autopilot/review-promotion, fleet report/resume-plan/rollback-plan, artifact hygiene report, adopt, rollback, upstream status/parity/update. Scout, eval-pack doctor, autopilot planning, and review APIs are read-only; eval-pack autopilot writes only when the explicit review-draft switch is used; WebUI promotion is one-click review promotion only and refuses production promotion. Artifact review reads only fixed allowlisted files in the selected staging directory and surfaces separated production/test gates, evidence class, blockers, score provenance, artifact refs, and next safe action. Adopt/rollback require exact typed confirmation server-side and still call the core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status/scout/fleet/upstream-status operations and intentionally ignored for writeback/upstream update.
 
 WebUI runs are staged-only by construction: server-side `run_full` passes `auto_adopt=False` and `force=False`. Its default run form uses `gate_mode: soft` for review-oriented exploration, not adoption-capable proof; choose CLI/tool `full-run` with strict gates and curated evals for production intent. In all CLI/WebUI modes, LLM context and judge text are advisory/explanatory only. Strict gate mode plus non-mock optimizer provenance and eligible curated val/test evidence is the adoption-capable path; `soft`, `mixed`, mock, fallback/session/synthetic, and sample/scaffold evidence remain review-only.
 
@@ -375,6 +396,12 @@ python3 -m hermes_skillopt.cli benchmark --help
 python3 -m hermes_skillopt.cli batch-preflight --help
 python3 -m hermes_skillopt.cli fleet-report --help
 python3 -m hermes_skillopt.cli eval-pack-inventory --help
+python3 -m hermes_skillopt.cli eval-pack-doctor --help
+python3 -m hermes_skillopt.cli eval-pack-autopilot --help
+python3 -m hermes_skillopt.cli eval-pack-ingest-correction --help
+python3 -m hermes_skillopt.cli eval-pack-ingest-context --help
+python3 -m hermes_skillopt.cli eval-pack-negative-boundary --help
+python3 -m hermes_skillopt.cli eval-pack-promote --help
 python3 -m hermes_skillopt.cli import-upstream-benchmark --help
 python3 -m hermes_skillopt.cli benchmark-parity-status --help
 python3 -m hermes_skillopt.cli handoff-optimize --help

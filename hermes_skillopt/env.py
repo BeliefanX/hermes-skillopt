@@ -198,7 +198,25 @@ class SessionPipelineRecord:
 
 
 _SPLIT_ALIASES = {"validation": "val", "val": "val", "train": "train", "test": "test"}
-NON_PRODUCTION_ORIGINS = {"synthetic", "curated-fallback", "session-mined", "dream", "session_mined", "builtin-benchmark", "sample-eval-pack", "static-review-eval-pack", "static-keyword-scorecard", "keyword-scorecard"}
+NON_PRODUCTION_ORIGINS = {
+    "synthetic",
+    "curated-fallback",
+    "session-mined",
+    "session_mined",
+    "dream",
+    "builtin-benchmark",
+    "sample-eval-pack",
+    "static-review-eval-pack",
+    "static-keyword-scorecard",
+    "keyword-scorecard",
+    "generated",
+    "scaffold",
+    "user-correction",
+    "skill-creation-context",
+    "negative-case",
+    "boundary-case",
+    "curated-review-promotion",
+}
 PRODUCTION_EVAL_POLICY_VERSION = "production-eval-schema-v1"
 EVAL_PACK_SCHEMA_VERSION = "hermes-curated-eval-pack-v1"
 REAL_TARGET_REQUIRED_EVIDENCE = {
@@ -260,8 +278,8 @@ def production_eligibility_for_task(task: EvalTask) -> ProductionEligibility:
         reasons.append("missing eval pack/policy fingerprint provenance")
     if any(part in NON_PRODUCTION_ORIGINS for part in {task.source, origin}):
         reasons.append("task origin is non-production")
-    if origin in {"dream", "synthetic", "session-mined", "session_mined"}:
-        reasons.append("dream/synthetic/session-mined tasks are review-only")
+    if origin in {"dream", "synthetic", "session-mined", "session_mined", "generated", "scaffold", "user-correction", "skill-creation-context", "negative-case", "boundary-case", "curated-review-promotion"}:
+        reasons.append("generated/scaffold/session/correction/context/negative/boundary tasks are review-only")
     if not bool(task.metadata.get("scorecard_explicit")):
         reasons.append("missing explicit deterministic scorecard")
     if not bool(task.metadata.get("production_gate_eligible")):

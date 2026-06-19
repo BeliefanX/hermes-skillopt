@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from hermes_skillopt import core
+from hermes_skillopt import eval_packs
 from hermes_skillopt import webui as legacy
 
 
@@ -85,6 +86,48 @@ def run_full(payload: dict[str, Any]) -> dict[str, Any]:
 
 def doctor(home: str | None = None, skill: str | None = None) -> dict[str, Any]:
     return core.doctor(home or None, skill=skill or None)
+
+
+def eval_pack_doctor(home: str | None = None, skill: str | None = None) -> dict[str, Any]:
+    """Read-only eval-pack coverage diagnostics for the WebUI."""
+
+    return eval_packs.eval_pack_doctor(hermes_home_path=home or None, skill=skill or None)
+
+
+def eval_pack_autopilot(payload: dict[str, Any]) -> dict[str, Any]:
+    """Plan or write a review-only eval-pack draft; never adopts or edits live skills."""
+
+    skill = str(payload.get("skill") or "").strip()
+    if not skill:
+        raise ValueError("skill is required")
+    return eval_packs.eval_pack_autopilot(
+        skill=skill,
+        output=payload.get("output") or None,
+        hermes_home_path=payload.get("home") or None,
+        write_draft=bool(payload.get("write_draft")),
+        overwrite=bool(payload.get("overwrite")),
+    )
+
+
+def eval_pack_promote(payload: dict[str, Any]) -> dict[str, Any]:
+    """Promote a draft to a curated review pack only; production promotion is not exposed."""
+
+    skill = str(payload.get("skill") or "").strip()
+    input_path = str(payload.get("input_path") or "").strip()
+    if not skill:
+        raise ValueError("skill is required")
+    if not input_path:
+        raise ValueError("input_path is required")
+    if bool(payload.get("production")):
+        raise ValueError("WebUI promotes review packs only; production promotion requires an explicit policy/contract outside this one-click UX")
+    return eval_packs.promote_eval_pack(
+        skill=skill,
+        input_path=input_path,
+        output=payload.get("output") or None,
+        hermes_home_path=payload.get("home") or None,
+        production=False,
+        overwrite=bool(payload.get("overwrite")),
+    )
 
 
 def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]:

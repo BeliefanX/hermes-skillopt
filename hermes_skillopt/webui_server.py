@@ -93,6 +93,21 @@ def create_app(home_default: Any = None):
         fetch_only: bool = False
         home: Optional[str] = None  # ignored server-side
 
+    class EvalPackAutopilotRequest(BaseModel):
+        skill: str
+        output: Optional[str] = None
+        write_draft: bool = False
+        overwrite: bool = False
+        home: Optional[str] = None
+
+    class EvalPackPromoteRequest(BaseModel):
+        skill: str
+        input_path: str
+        output: Optional[str] = None
+        overwrite: bool = False
+        production: bool = False
+        home: Optional[str] = None
+
     app = FastAPI(title="Hermes SkillOpt WebUI", version="0.1.0")
 
     app.add_middleware(
@@ -110,6 +125,24 @@ def create_app(home_default: Any = None):
     @app.get("/api/doctor")
     def api_doctor(home: Optional[str] = None, skill: Optional[str] = None):
         return safe_response(lambda: webui_api.doctor(home or home_default, skill=skill))
+
+    @app.get("/api/eval-pack/doctor")
+    def api_eval_pack_doctor(home: Optional[str] = None, skill: Optional[str] = None):
+        return safe_response(lambda: webui_api.eval_pack_doctor(home or home_default, skill=skill))
+
+    @app.post("/api/eval-pack/autopilot")
+    def api_eval_pack_autopilot(req: EvalPackAutopilotRequest):
+        data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        if not data.get("home") and home_default:
+            data["home"] = str(home_default)
+        return safe_response(lambda: webui_api.eval_pack_autopilot(data))
+
+    @app.post("/api/eval-pack/promote")
+    def api_eval_pack_promote(req: EvalPackPromoteRequest):
+        data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        if not data.get("home") and home_default:
+            data["home"] = str(home_default)
+        return safe_response(lambda: webui_api.eval_pack_promote(data))
 
     @app.post("/api/run")
     def api_run(req: RunRequest):

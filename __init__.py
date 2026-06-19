@@ -57,9 +57,15 @@ SCHEMAS = {
     "hermes_skillopt_fleet_rollback_plan": _schema("Read-only fleet rollback plan listing safely inferable adopted backups, backup/current-sha guard status, and exact one-run rollback commands; no bulk rollback/writeback.", {**COMMON_HOME, "limit": {"type": "integer", "default": 50}, "skill": {"type": "string"}}),
     "hermes_skillopt_artifact_hygiene_report": _schema("Read-only staging artifact hygiene planner/classifier for complete_verified, complete_tampered, checkpoint_only_recent, stale_incomplete, orphaned batch/child mismatch, and missing manifest/hash mismatch. Never deletes.", {**COMMON_HOME, "limit": {"type": "integer", "default": 200}, "stale_after_hours": {"type": "number", "default": 24.0}}),
     "hermes_skillopt_eval_pack_inventory": _schema("Read-only inventory of discovered skills and matching eval packs, including split completeness and production/review-only reasons.", {**COMMON_HOME, "skill": {"type": "string"}}),
+    "hermes_skillopt_eval_pack_doctor": _schema("Focused read-only eval-pack diagnostics and safe next actions; never writes, runs evals, adopts, or fetches.", {**COMMON_HOME, "skill": {"type": "string"}}),
+    "hermes_skillopt_eval_pack_autopilot": _schema("Eval-pack autopilot. Defaults to plan/read-only and cron-safe; write_draft=true explicitly writes only a guarded review-only draft pack.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "write_draft": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_eval_pack_scaffold": _schema("Generate a review-only eval-pack scaffold with complete train/validation/test samples; never production evidence.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_eval_pack_curate": _schema("Create a canonical curated eval pack from inline tasks. Defaults review-only; production eligibility requires explicit production_policy and compliant execution contract.", {**COMMON_HOME, "skill": {"type": "string"}, "tasks": {"type": "array", "items": {"type": "object"}}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string", "default": "curated-v1"}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "tasks"]),
     "hermes_skillopt_eval_pack_mine_sessions": _schema("Read-only/draft mining of redacted sessions or session-like fixture file into a review-only eval pack; never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "query": {"type": "string"}, "lookback_days": {"type": "integer", "default": 14}, "limit": {"type": "integer", "default": 50}, "session_fixture": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
+    "hermes_skillopt_eval_pack_ingest_correction": _schema("Ingest a user correction into deterministic review-only regression seed tasks; redacted and never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "correction": {"type": "string"}, "output": {"type": "string"}, "expected_terms": {"type": "array", "items": {"type": "string"}}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "correction"]),
+    "hermes_skillopt_eval_pack_ingest_context": _schema("Ingest skill-creation context into deterministic review-only eval seed tasks; redacted and never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "context": {"type": "string"}, "output": {"type": "string"}, "expected_terms": {"type": "array", "items": {"type": "string"}}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "context"]),
+    "hermes_skillopt_eval_pack_negative_boundary": _schema("Generate deterministic negative/boundary review-only cases; no model calls, command execution, live skill writes, or production eligibility.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
+    "hermes_skillopt_eval_pack_promote": _schema("Promote a draft to a curated review pack by default. Production promotion requires explicit production_policy and eval_execution_contract and never auto-adopts.", {**COMMON_HOME, "skill": {"type": "string"}, "input_path": {"type": "string"}, "output": {"type": "string"}, "production": {"type": "boolean", "default": False}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "input_path"]),
     "hermes_skillopt_resume_inspect": _schema("Read-only step-level resume inspection: verifies checkpoint/stage fingerprints and artifact hashes; refuses unsafe partial continuation.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview. run_id may be omitted or 'latest'; summary returns decision-first slim output; digest returns Telegram-friendly path/hash refs only.", {**COMMON_HOME, "run_id": {"type": "string"}, "latest": {"type": "boolean", "default": False}, "summary": {"type": "boolean", "default": False}, "digest": {"type": "boolean", "default": False, "description": "Return Telegram-friendly slim digest with separated readiness/adoptability fields and artifact refs, not raw report/diff."}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}),
     "hermes_skillopt_adopt": _schema("Adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup.", ADOPT_PROPS, ["run_id"]),
@@ -195,6 +201,16 @@ def _handle_eval_pack_inventory(args: dict, **kw) -> str:
     return _ok(eval_pack_inventory, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
 
 
+def _handle_eval_pack_doctor(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import eval_pack_doctor
+    return _ok(eval_pack_doctor, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+
+
+def _handle_eval_pack_autopilot(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import eval_pack_autopilot
+    return _ok(eval_pack_autopilot, {"skill": args.get("skill"), "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "write_draft": bool(args.get("write_draft", False)), "overwrite": bool(args.get("overwrite", False))})
+
+
 def _handle_eval_pack_scaffold(args: dict, **kw) -> str:
     from hermes_skillopt.eval_packs import scaffold_eval_pack
     return _ok(scaffold_eval_pack, {"skill": args.get("skill"), "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "overwrite": bool(args.get("overwrite", False))})
@@ -208,6 +224,26 @@ def _handle_eval_pack_curate(args: dict, **kw) -> str:
 def _handle_eval_pack_mine_sessions(args: dict, **kw) -> str:
     from hermes_skillopt.eval_packs import mine_session_eval_pack
     return _ok(mine_session_eval_pack, {"skill": args.get("skill"), "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "query": args.get("query"), "lookback_days": int(args.get("lookback_days") or 14), "limit": int(args.get("limit") or 50), "session_fixture": args.get("session_fixture"), "overwrite": bool(args.get("overwrite", False))})
+
+
+def _handle_eval_pack_ingest_correction(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import ingest_user_correction_eval_seed
+    return _ok(ingest_user_correction_eval_seed, {"skill": args.get("skill"), "correction": args.get("correction") or "", "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "expected_terms": args.get("expected_terms"), "overwrite": bool(args.get("overwrite", False))})
+
+
+def _handle_eval_pack_ingest_context(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import ingest_skill_context_eval_seed
+    return _ok(ingest_skill_context_eval_seed, {"skill": args.get("skill"), "context": args.get("context") or "", "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "expected_terms": args.get("expected_terms"), "overwrite": bool(args.get("overwrite", False))})
+
+
+def _handle_eval_pack_negative_boundary(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import generate_negative_boundary_eval_pack
+    return _ok(generate_negative_boundary_eval_pack, {"skill": args.get("skill"), "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "overwrite": bool(args.get("overwrite", False))})
+
+
+def _handle_eval_pack_promote(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import promote_eval_pack
+    return _ok(promote_eval_pack, {"skill": args.get("skill"), "input_path": args.get("input_path"), "output": args.get("output"), "hermes_home_path": args.get("hermes_home"), "production_policy": args.get("production_policy"), "eval_execution_contract": args.get("eval_execution_contract"), "production": bool(args.get("production", False)), "overwrite": bool(args.get("overwrite", False))})
 
 
 def _handle_resume_inspect(args: dict, **kw) -> str:
@@ -283,9 +319,15 @@ _TOOLS = (
     ("hermes_skillopt_fleet_rollback_plan", SCHEMAS["hermes_skillopt_fleet_rollback_plan"], _handle_fleet_rollback_plan, "↩️"),
     ("hermes_skillopt_artifact_hygiene_report", SCHEMAS["hermes_skillopt_artifact_hygiene_report"], _handle_artifact_hygiene_report, "🧹"),
     ("hermes_skillopt_eval_pack_inventory", SCHEMAS["hermes_skillopt_eval_pack_inventory"], _handle_eval_pack_inventory, "📦"),
+    ("hermes_skillopt_eval_pack_doctor", SCHEMAS["hermes_skillopt_eval_pack_doctor"], _handle_eval_pack_doctor, "🩺"),
+    ("hermes_skillopt_eval_pack_autopilot", SCHEMAS["hermes_skillopt_eval_pack_autopilot"], _handle_eval_pack_autopilot, "🛫"),
     ("hermes_skillopt_eval_pack_scaffold", SCHEMAS["hermes_skillopt_eval_pack_scaffold"], _handle_eval_pack_scaffold, "🧱"),
     ("hermes_skillopt_eval_pack_curate", SCHEMAS["hermes_skillopt_eval_pack_curate"], _handle_eval_pack_curate, "📦"),
     ("hermes_skillopt_eval_pack_mine_sessions", SCHEMAS["hermes_skillopt_eval_pack_mine_sessions"], _handle_eval_pack_mine_sessions, "⛏️"),
+    ("hermes_skillopt_eval_pack_ingest_correction", SCHEMAS["hermes_skillopt_eval_pack_ingest_correction"], _handle_eval_pack_ingest_correction, "🌱"),
+    ("hermes_skillopt_eval_pack_ingest_context", SCHEMAS["hermes_skillopt_eval_pack_ingest_context"], _handle_eval_pack_ingest_context, "🌱"),
+    ("hermes_skillopt_eval_pack_negative_boundary", SCHEMAS["hermes_skillopt_eval_pack_negative_boundary"], _handle_eval_pack_negative_boundary, "🚧"),
+    ("hermes_skillopt_eval_pack_promote", SCHEMAS["hermes_skillopt_eval_pack_promote"], _handle_eval_pack_promote, "⬆️"),
     ("hermes_skillopt_resume_inspect", SCHEMAS["hermes_skillopt_resume_inspect"], _handle_resume_inspect, "🔎"),
     ("hermes_skillopt_review", SCHEMAS["hermes_skillopt_review"], _handle_review, "🔎"),
     ("hermes_skillopt_adopt", SCHEMAS["hermes_skillopt_adopt"], _handle_adopt, "✅"),

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -56,9 +59,58 @@ def _pack(*, allow_production: bool = True, sample_pack: bool = False, task_orig
 
 
 def _write_pack(tmp_path: Path, payload: Any, name: str = "pack.json") -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / name
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def _write_skill(home: Path, name: str = "demo") -> Path:
+    path = home / "skills" / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nname: {name}\ndescription: test\n---\n# {name}\n\nUse tools and verify results.\n", encoding="utf-8")
+    return path
+
+
+def test_cli_eval_pack_promote_production_refusal_is_structured_without_traceback(tmp_path: Path):
+    _write_skill(tmp_path, "demo")
+    pack_path = _write_pack(tmp_path / "skillopt" / "evals", _pack(), name="draft.json")
+    env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else str(repo_root)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "hermes_skillopt.cli",
+            "--home",
+            str(tmp_path),
+            "eval-pack-promote",
+            "--skill",
+            "demo",
+            "--input",
+            str(pack_path),
+            "--production",
+        ],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert "Traceback" not in proc.stdout
+    payload = json.loads(proc.stdout)
+    assert payload["success"] is False
+    assert payload["mode"] == "eval_pack_promote_refused"
+    assert payload["error_type"] == "ValueError"
+    assert "production promotion requires explicit production_policy and eval_execution_contract" in payload["error"]
+    assert payload["production"] is True
+    assert payload["auto_adopt"] is False
+    assert payload["live_skill_writes"] is False
 
 
 def test_explicit_curated_v1_pack_policy_allows_validation_gate_and_binds_provenance(tmp_path: Path):

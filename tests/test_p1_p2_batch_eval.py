@@ -12,7 +12,7 @@ import pytest
 from hermes_skillopt import core
 from hermes_skillopt.env import load_eval_pack
 from hermes_skillopt.batch import batch_preflight, run_batch
-from hermes_skillopt.eval_packs import create_curated_eval_pack, eval_pack_inventory, mine_session_eval_pack, scaffold_eval_pack
+from hermes_skillopt.eval_packs import create_curated_eval_pack, eval_pack_autopilot, eval_pack_doctor, eval_pack_inventory, generate_negative_boundary_eval_pack, ingest_skill_context_eval_seed, ingest_user_correction_eval_seed, mine_session_eval_pack, promote_eval_pack, scaffold_eval_pack
 from hermes_skillopt.skill_types import classify_skill_type
 
 
@@ -306,6 +306,48 @@ def test_session_mined_eval_pack_is_review_only_redacted_and_loadable(tmp_path):
     assert all(task.metadata["task_origin"] == "session-mined" for task in tasks)
 
 
+def test_eval_pack_autopilot_seeds_negative_boundary_and_promotion_are_safe(tmp_path):
+    make_skill(tmp_path, "demo")
+
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    plan = eval_pack_autopilot(skill="demo", hermes_home_path=str(tmp_path))
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert plan["mode"] == "eval_pack_autopilot_plan_read_only"
+    assert plan["read_only"] is True
+    assert before == after
+
+    doctor = eval_pack_doctor(hermes_home_path=str(tmp_path), skill="demo")
+    assert doctor["mode"] == "eval_pack_doctor_read_only"
+    assert doctor["live_skill_writes"] is False
+
+    correction_path = tmp_path / "skillopt" / "evals" / "demo-correction.json"
+    correction = ingest_user_correction_eval_seed(skill="demo", correction="When user corrects output, preserve api_key=SECRET123 redacted and verify regression.", output=correction_path, hermes_home_path=str(tmp_path))
+    assert correction["production_eligible"] is False
+    correction_text = correction_path.read_text(encoding="utf-8")
+    assert "SECRET123" not in correction_text and "<REDACTED>" in correction_text
+    correction_payload = json.loads(correction_text)
+    assert {t["task_origin"] for t in correction_payload["tasks"]} == {"user-correction"}
+    assert all(t["production_gate_eligible"] is False for t in correction_payload["tasks"])
+
+    context = ingest_skill_context_eval_seed(skill="demo", context="Created to verify safe tool use boundaries", output=tmp_path / "skillopt" / "evals" / "demo-context.json", hermes_home_path=str(tmp_path))
+    assert context["review_only"] is True
+    negative = generate_negative_boundary_eval_pack(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-negative.json", hermes_home_path=str(tmp_path))
+    assert negative["mode"] == "negative_boundary_eval_pack_review_only"
+    assert negative["report"]["production_eligible"] is False
+
+    draft = eval_pack_autopilot(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-autopilot.json", hermes_home_path=str(tmp_path), write_draft=True)
+    assert draft["review_only"] is True and draft["auto_adopt"] is False
+    promoted_path = tmp_path / "skillopt" / "evals" / "demo-promoted-review.json"
+    promoted = promote_eval_pack(skill="demo", input_path=draft["draft"]["output_path"], output=promoted_path, hermes_home_path=str(tmp_path))
+    assert promoted["mode"] == "eval_pack_promote_curated_review_default"
+    assert promoted["review_only"] is True
+    promoted_payload = json.loads(promoted_path.read_text(encoding="utf-8"))
+    assert promoted_payload["production_policy"]["allow_production_adoption"] is False
+    assert all(t["task_origin"] == "curated-review-promotion" for t in promoted_payload["tasks"])
+    with pytest.raises(ValueError, match="production promotion requires explicit"):
+        promote_eval_pack(skill="demo", input_path=draft["draft"]["output_path"], output=tmp_path / "skillopt" / "evals" / "bad-prod.json", hermes_home_path=str(tmp_path), production=True)
+
+
 def test_eval_pack_inventory_readiness_matrix_covers_pack_states(tmp_path):
     for name, body in {
         "none": "General helper skill.",
@@ -371,8 +413,14 @@ def test_cli_help_and_plugin_metadata_include_p1_p2_tools():
     assert proc.returncode == 0, proc.stdout
     assert "batch-preflight" in proc.stdout
     assert "eval-pack-scaffold" in proc.stdout
+    assert "eval-pack-autopilot" in proc.stdout
+    assert "eval-pack-doctor" in proc.stdout
     assert "eval-pack-curate" in proc.stdout
     assert "eval-pack-mine-sessions" in proc.stdout
+    assert "eval-pack-ingest-correction" in proc.stdout
+    assert "eval-pack-ingest-context" in proc.stdout
+    assert "eval-pack-negative-boundary" in proc.stdout
+    assert "eval-pack-promote" in proc.stdout
     assert "fleet-report" in proc.stdout
     assert "fleet-resume-plan" in proc.stdout
     assert "fleet-rollback-plan" in proc.stdout
@@ -389,7 +437,7 @@ def test_cli_help_and_plugin_metadata_include_p1_p2_tools():
     provided = [line.strip()[2:] for line in (repo / "plugin.yaml").read_text(encoding="utf-8").splitlines() if line.strip().startswith("- ")]
     registered = [name for name, _schema, _handler, _emoji in plugin._TOOLS]
     assert provided == registered
-    assert {"hermes_skillopt_batch_preflight", "hermes_skillopt_batch_run", "hermes_skillopt_eval_pack_inventory", "hermes_skillopt_eval_pack_scaffold", "hermes_skillopt_eval_pack_curate", "hermes_skillopt_eval_pack_mine_sessions"}.issubset(registered)
+    assert {"hermes_skillopt_batch_preflight", "hermes_skillopt_batch_run", "hermes_skillopt_eval_pack_inventory", "hermes_skillopt_eval_pack_doctor", "hermes_skillopt_eval_pack_autopilot", "hermes_skillopt_eval_pack_scaffold", "hermes_skillopt_eval_pack_curate", "hermes_skillopt_eval_pack_mine_sessions", "hermes_skillopt_eval_pack_ingest_correction", "hermes_skillopt_eval_pack_ingest_context", "hermes_skillopt_eval_pack_negative_boundary", "hermes_skillopt_eval_pack_promote"}.issubset(registered)
     assert {"hermes_skillopt_fleet_report", "hermes_skillopt_fleet_resume_plan", "hermes_skillopt_fleet_rollback_plan", "hermes_skillopt_artifact_hygiene_report"}.issubset(registered)
 
 
