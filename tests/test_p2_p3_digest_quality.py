@@ -11,6 +11,14 @@ from hermes_skillopt.eval_packs import eval_pack_doctor_digest, eval_pack_invent
 from hermes_skillopt.skill_quality import skill_quality_digest, skill_quality_report
 
 
+DEFAULT_CRON_SAFE_TOOLS = {
+    "hermes_skillopt_scout",
+    "hermes_skillopt_doctor",
+    "hermes_skillopt_eval_pack_inventory",
+    "hermes_skillopt_eval_pack_doctor",
+}
+
+
 def make_skill(home: Path, name: str = "demo", text: str | None = None) -> Path:
     path = home / "skills" / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,8 +67,60 @@ def test_read_only_notification_digests_include_boundary_and_flags(tmp_path, mon
     for digest in (scout_digest, doctor_digest, inv_digest, epdoc_digest):
         assert digest["read_only"] is True
         assert digest["auto_adopt"] is False
+        assert digest["max_digest_chars"] <= 3500
+        assert len(digest["digest"]) <= digest["max_digest_chars"]
         assert "scheduled usage is diagnostic only and never auto-adopts" in digest["digest"]
         assert "read_only: True | auto_adopt: False" in digest["digest"]
+        assert "no writeback/fetch" in digest["digest"]
+        assert "no adopt/rollback" in digest["digest"]
+        assert "safe next action" in digest["digest"]
+        assert digest["summary"]["read_only"] is True
+        assert digest["summary"]["auto_adopt"] is False
+        assert digest["summary"].get("live_skill_writes") is not True
+
+    assert inv_digest["surface"] == "eval-pack-inventory"
+    assert "eval_matrix:" in inv_digest["digest"]
+    assert inv_digest["summary"]["mode"] == "eval_pack_inventory_read_only"
+    assert inv_digest["summary"]["skills"][0]["recommended_next_action"]
+    assert epdoc_digest["surface"] == "eval-pack-doctor"
+    assert "diagnostics:" in epdoc_digest["digest"]
+    assert epdoc_digest["summary"]["mode"] == "eval_pack_doctor_read_only"
+    assert epdoc_digest["summary"]["recommended_next_action"] in {"write_review_draft_with_explicit_flag", "inspect_or_promote_review_pack"}
+
+
+def test_notification_digest_bounds_rows_and_preserves_provenance_refs():
+    payload = {
+        "success": True,
+        "mode": "synthetic_read_only",
+        "read_only": True,
+        "auto_adopt": False,
+        "live_skill_writes": False,
+        "next_actions": [
+            {"priority": "high", "action": f"action-{i}", "reason": "x" * 500}
+            for i in range(20)
+        ],
+        "score_provenance": {"target_executor": "scorecard", "optimizer_backend": "hermes", "score_source": "eval_pack"},
+        "artifact_refs": {
+            "report": {"path": "/tmp/report.md", "sha256": "a" * 64},
+            "diff": {"path": "/tmp/diff.patch", "sha256": "b" * 64},
+        },
+        "next_safe_action": "inspect artifacts only; do not adopt",
+    }
+
+    digest = core.notification_digest("review_like", payload, limit=3)
+
+    assert digest["read_only"] is True
+    assert digest["auto_adopt"] is False
+    assert len(digest["digest"]) <= digest["max_digest_chars"]
+    assert digest["digest"].count("action-") == 3
+    assert "action-3" not in digest["digest"]
+    assert "score_provenance: executor=scorecard backend=hermes source=eval_pack" in digest["digest"]
+    assert "artifact_refs:" in digest["digest"]
+    assert "report=/tmp/report.md" in digest["digest"]
+    assert "diff=/tmp/diff.patch" in digest["digest"]
+    assert "no full-run/optimize" in digest["digest"]
+    assert "no writeback/fetch" in digest["digest"]
+    assert "no adopt/rollback" in digest["digest"]
 
 
 def test_cli_digest_flags_for_read_only_surfaces(tmp_path, monkeypatch):
@@ -83,6 +143,44 @@ def test_plugin_metadata_exposes_digest_and_skill_quality():
         assert props["digest"]["type"] == "boolean"
     assert "hermes_skillopt_skill_quality" in plugin.SCHEMAS
     assert plugin.SCHEMAS["hermes_skillopt_skill_quality"]["x-hermes-skillopt-safety"]["auto_adopt"] is False
+
+
+def test_tool_safety_catalog_cron_safe_taxonomy_and_plugin_metadata():
+    catalog = core.tool_safety_catalog()
+    plugin = load_plugin_module()
+    tools = catalog["tools"]
+    cron_safe = {name for name, meta in tools.items() if meta.get("cron_safe") is True}
+
+    assert cron_safe == DEFAULT_CRON_SAFE_TOOLS
+    assert "Schedule only scout, doctor, eval-pack-inventory, and eval-pack-doctor" in catalog["scheduled_default_guidance"]
+    assert "review --digest is digest-only/manual" in catalog["scheduled_default_guidance"]
+    assert "read-only" in catalog["groups"]["read_only"]["description"].lower()
+    assert "Only scout, doctor, eval-pack-inventory, and eval-pack-doctor are cron-safe" in catalog["groups"]["read_only"]["description"]
+
+    for name in DEFAULT_CRON_SAFE_TOOLS:
+        meta = tools[name]
+        assert meta["safety_group"] == "read_only"
+        assert meta["risk_level"] == "low"
+        assert meta["writes"] is False
+        assert plugin.SCHEMAS[name]["x-hermes-skillopt-safety"]["cron_safe"] is True
+
+    review_meta = tools["hermes_skillopt_review"]
+    assert review_meta["safety_group"] == "read_only"
+    assert review_meta["cron_safe"] is False
+    assert review_meta["cron_mode"] == "digest_only"
+    assert plugin.SCHEMAS["hermes_skillopt_review"]["x-hermes-skillopt-safety"]["cron_safe"] is False
+
+    high_risk = {name for name, meta in tools.items() if meta.get("risk_level") == "high"}
+    assert {"hermes_skillopt_adopt", "hermes_skillopt_rollback", "hermes_skillopt_upstream_update"}.issubset(high_risk)
+    for name in high_risk:
+        assert tools[name]["cron_safe"] is False
+        assert plugin.SCHEMAS[name]["x-hermes-skillopt-safety"]["cron_safe"] is False
+
+    assert tools["hermes_skillopt_optimize"]["cron_safe"] is False
+    assert tools["hermes_skillopt_full_run"]["cron_safe"] is False
+    assert tools["hermes_skillopt_run"]["auto_adopt"] is False
+    assert tools["hermes_skillopt_full_run"]["writes"] == "staging_only"
+    assert tools["hermes_skillopt_optimize"]["writes"] == "staging_only"
 
 
 def test_skill_quality_placeholder_fails_and_reasonable_passes_no_live_mutation(tmp_path, monkeypatch):

@@ -129,7 +129,7 @@ def main() -> int:
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
     bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
     run = sub.add_parser("run", help="Alias for full-run; always uses the current eval-gated staged pipeline"); run.add_argument("--mode", choices=["full"], default="full"); add_full_args(run)
-    r = sub.add_parser("review", help="Review a staged eval-gated run. Use --digest for cron-safe slim output; review is advisory and does not replace Hermes curator.")
+    r = sub.add_parser("review", help="Review a staged eval-gated run. --digest is slim/manual for an existing run, not a scheduled cron default; review is advisory and does not replace Hermes curator.")
     r.add_argument("run_id", nargs="?", default="latest")
     r.add_argument("--latest", action="store_true")
     r.add_argument("--summary", action="store_true")

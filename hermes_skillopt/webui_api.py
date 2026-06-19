@@ -327,6 +327,8 @@ def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]
         "native_hermes_adopt_guard": _compact_native_guard(decision.get("native_hermes_adopt_guard")),
         "native_hermes_boundary": "SkillOpt reads native Hermes metadata as advisory guard input only. It does not replace the Hermes curator: curator owns lifecycle/archive/consolidation; SkillOpt owns staged eval evidence and adoption recommendations.",
         "artifacts": decision.get("artifact_refs") or {},
+        "artifact_refs": decision.get("artifact_refs") or {},
+        "score_provenance": decision.get("score_provenance") or review_json.get("score_provenance"),
         "next_safe_action": decision.get("next_action"),
         "report": report,
         "diff": diff,

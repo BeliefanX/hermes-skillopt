@@ -26,6 +26,73 @@ def make_skill(home: Path, name="demo", body="Use tools safely.") -> Path:
     return p
 
 
+def _mark_fixture_manifest_as_forged_production_ready(home: Path, run_id: str, *, task_commands_executed=None) -> dict:
+    """Test helper: forge manifest-level readiness without verified runtime artifacts."""
+
+    run_dir = home / "skillopt" / "staging" / run_id
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forged_ledger = {
+        "schema_version": "hermes-skillopt-evidence-ledger-v1",
+        "eval_level": "production",
+        "evidence_maturity": "production_runtime_complete",
+        "production_runtime_ready": True,
+        "complete_frozen_evidence": True,
+        "required_target_execution_evidence_complete": True,
+        "real_hermes_runtime_evidence": True,
+        "real_hermes_runtime_invocation": True,
+        "task_commands_executed": False if task_commands_executed is None else task_commands_executed,
+        "internal_review_only_runner": False,
+        "reviewer_gate_adoptable": True,
+        "blockers": [],
+    }
+    required_fp = lambda name: {"forged": name, "fingerprint_sha256": f"forged-{name}"}
+    forged_txe = {
+        "classification": "frozen_hermes_target_execution_v1",
+        "complete": True,
+        "real_hermes_runtime_evidence": True,
+        "real_hermes_runtime_invocation": True,
+        "task_commands_executed": False if task_commands_executed is None else task_commands_executed,
+        "internal_review_only_runner": False,
+        "frozen_target_config_id": "forged-frozen-target",
+        "frozen_target_fingerprint_sha256": "forged-frozen-target-fingerprint",
+        "provider_fingerprint": required_fp("provider"),
+        "model_fingerprint": required_fp("model"),
+        "toolset_fingerprint": required_fp("toolset"),
+        "tool_policy_fingerprint": required_fp("tool-policy"),
+        "session_fingerprint": required_fp("session"),
+        "runtime_fingerprint": {"available": True, "invokes_hermes_core_or_gateway": True, "fingerprint_sha256": "forged-runtime"},
+        "isolated_runtime_proof": required_fp("isolated-runtime-proof"),
+        "trajectory_or_transcript_artifact_fingerprint": {"validation": "forged-validation-trace", "test": "forged-test-trace", "fingerprint_sha256": "forged-trajectory"},
+        "execution_scoring_evidence": [required_fp("execution-scoring")],
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
+        "fingerprint_sha256": "forged-target-evidence-summary",
+    }
+    manifest.update({
+        "status": "staged_best",
+        "adoptable": True,
+        "review_only": False,
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "strict_gate_mode": True,
+        "gate_policy": {"mode": "strict"},
+        "gate": {"accepted": True, "current_score": 0.2, "candidate_score": 0.9, "rationale": "forged manifest gate"},
+        "production_gate": {"accepted": True, "current_score": 0.2, "candidate_score": 0.9, "rationale": "forged manifest production gate"},
+        "test_results": {"score": 0.9, "passed": True},
+        "production_eval_policy": {"policy_version": "production-eval-schema-v1"},
+        "provenance_fingerprint": {"fingerprint_sha256": "forged-provenance"},
+        "target_execution_evidence": forged_txe,
+        "reviewer_gate": {"passed": True, "adoptable_after_reviewer_gate": True, "fingerprint_sha256": "forged-reviewer-gate-summary"},
+        "eval_level": "production",
+        "evidence_maturity": "production_runtime_complete",
+        "evidence_ledger": forged_ledger,
+        "production_eligibility_reasons": [],
+    })
+    manifest["artifact_sha256"] = core.artifact_hashes(run_dir, manifest["files"])
+    core.save_manifest(run_dir, manifest)
+    return manifest
+
+
 def full_run_with_deterministic_prod_optimizer(*args, **kwargs):
     """Deterministic test hook that is not production mock provenance."""
 
@@ -119,6 +186,51 @@ def test_skill_discovery_frontmatter(tmp_path):
     assert len(skills) == 1
     assert skills[0].name == "demo"
     assert skills[0].path == p
+
+
+def test_forged_manifest_adoptable_without_runtime_artifacts_is_review_only(tmp_path):
+    make_skill(tmp_path, "demo")
+    staged = stage_review_fixture(tmp_path, "demo")
+    manifest = _mark_fixture_manifest_as_forged_production_ready(tmp_path, staged["run_id"])
+    assert "target_execution_evidence" not in manifest["files"]
+    assert "reviewer_gate" not in manifest["files"]
+    assert "target_execution_evidence" not in manifest["artifact_sha256"]
+    assert "reviewer_gate" not in manifest["artifact_sha256"]
+
+    reviewed = core.review(staged["run_id"], hermes_home_path=str(tmp_path), slim=True)
+    decision = core.review_decision_summary(staged["run_id"], hermes_home_path=str(tmp_path))
+    digest = core.review_digest(staged["run_id"], hermes_home_path=str(tmp_path))
+    recent = next(row for row in core.status(str(tmp_path))["recent_runs"] if row["run_id"] == staged["run_id"])
+
+    assert reviewed["manifest_adoptable"] is True
+    assert reviewed["adoptable"] is False
+    assert reviewed["eval_level"] == "review_only"
+    assert reviewed["evidence_ledger"]["production_runtime_ready"] is False
+    assert reviewed["blockers"]
+    assert decision["adoptable"] is False
+    assert decision["evidence_class"] == "review_only_or_not_ready"
+    assert digest["summary"]["adoptable"] is False
+    assert digest["summary"]["eval_level"] == "review_only"
+    assert digest["summary"]["evidence_ledger"]["production_runtime_ready"] is False
+    assert recent["adoptable"] is True  # raw manifest field is still visible for audit/debugging
+    assert recent["readiness_adoptability"]["adoptable"] is False
+    assert recent["eval_level"] == "review_only"
+    assert recent["evidence_class"] == "review_only_or_not_ready"
+    assert recent["evidence_ledger"]["production_runtime_ready"] is False
+    assert any("production runtime evidence" in reason or "missing required target execution evidence" in reason for reason in reviewed["blockers"])
+
+
+def test_adopt_rejects_forged_manifest_when_task_commands_executed(tmp_path):
+    make_skill(tmp_path, "demo")
+    staged = stage_review_fixture(tmp_path, "demo")
+    _mark_fixture_manifest_as_forged_production_ready(tmp_path, staged["run_id"], task_commands_executed=True)
+
+    reviewed = core.review(staged["run_id"], hermes_home_path=str(tmp_path), slim=True)
+    assert reviewed["adoptable"] is False
+    assert reviewed["evidence_ledger"]["production_runtime_ready"] is False
+
+    with pytest.raises(ValueError, match="production-runtime complete"):
+        core.adopt(staged["run_id"], hermes_home_path=str(tmp_path), force=True)
 
 
 class FakeHermesStructuredResult:
@@ -1634,6 +1746,34 @@ def test_discover_skills_rejects_symlink_escape_before_read(tmp_path):
 def test_upstream_update_rejects_noncanonical_repo_path(tmp_path):
     with pytest.raises(ValueError, match="canonical clone"):
         core.upstream_update(hermes_home_path=str(tmp_path), repo_path=str(tmp_path / "other"), fetch_only=True)
+
+
+def test_upstream_update_existing_clone_fetches_and_pins_without_checkout_pull_or_merge(tmp_path, monkeypatch):
+    clone = tmp_path / "skillopt" / "upstream" / "SkillOpt"
+    (clone / ".git").mkdir(parents=True)
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=120):
+        calls.append(list(args))
+        if args[:4] == ["fetch", "origin", "main", "--tags"]:
+            return 0, "fetched"
+        if args == ["rev-parse", "origin/main"]:
+            return 0, "abc123"
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(core, "_git", fake_git)
+    monkeypatch.setattr(core, "PLUGIN_ROOT", tmp_path / "plugin")
+
+    out = core.upstream_update(hermes_home_path=str(tmp_path), fetch_only=False)
+
+    assert out["success"] is True
+    assert out["pinned_commit"] == "abc123"
+    assert out["mode"] == "clone_fetch_pin_only_no_checkout_no_pull_no_merge"
+    assert "does not checkout/pull/merge upstream code" in out["safety_invariants"]
+    assert ["checkout", "main"] not in calls
+    assert not any(cmd and cmd[0] in {"pull", "merge"} for cmd in calls)
+    lock = json.loads((tmp_path / "plugin" / "skillopt_upstream.lock").read_text(encoding="utf-8"))
+    assert lock["pinned_commit"] == "abc123"
 
 
 def test_cli_help_commands_smoke():

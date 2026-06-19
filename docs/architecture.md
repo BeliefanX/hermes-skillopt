@@ -1,6 +1,6 @@
 # Hermes SkillOpt architecture
 
-This document describes the current architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
+This document describes the current architecture on this branch: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
 
 ## Boundaries
 
@@ -118,18 +118,18 @@ Adopt requires:
 
 Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
 
-## Current closure map
+## Current implementation map
 
-Current code closes the earlier architecture gaps in these bounded ways:
+Current code implements these bounded capabilities:
 
 - P0/P1 core abstraction: `SKILL.md` is explicit trainable state; optimizer and target executor are separate; candidate edits are bounded and staged; curated production eval packs and validation/test gates drive adoption status.
 - P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance returns local compile/pytest reports with no default file write.
-- Phase2/Phase3 orchestration/UX utilities: scout adds read-only notification/cron-safe summaries; batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes real curated-pack coverage gaps; React/FastAPI WebUI surfaces scout/guided wizard/review console/fleet/upstream parity while keeping `auto_adopt=false`.
+- Phase2/Phase3 orchestration/UX utilities: scout adds read-only notification/cron-safe summaries; batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes curated-pack coverage status; React/FastAPI WebUI surfaces scout/guided wizard/review console/fleet/upstream status and parity labels while keeping `auto_adopt=false`.
 - Phase4/Phase5 guided/runtime-evidence/native-boundary hardening: `doctor`, `optimize --intent`, `review --summary`, CLI/WebUI typed adopt confirmation, artifact hygiene reporting, runtime-evidence contract checks, scorecard-vs-frozen-evidence separation, and production hard-fail overrides are encoded in core surfaces and tests.
 
-Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
+Implemented does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
 
 ## Upstream strategy
 
@@ -147,4 +147,4 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 
 ## Current no-parity guardrails
 
-The remaining upstream gap is explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented by a safe disabled-by-default read-only adapter interface; the implemented frozen-Hermes path is sandbox/fixed-runner review evidence only and lacks real Hermes runtime invocation proof. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is still bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.
+Upstream coverage is explicitly surfaced instead of overclaimed: Hermes reports pinned upstream status and Hermes-native benchmark status separately. Live Hermes target execution is represented by a safe disabled-by-default read-only adapter interface; the implemented frozen-Hermes path is sandbox/fixed-runner review evidence only and lacks real Hermes runtime invocation proof. Benchmark execution is factored behind a JSON eval-pack adapter for report-only/staged use; upstream import is supported only as safe manifest conversion, not true upstream benchmark execution. Optimizer depth is bounded by validation gating, edit budgets, mini-batch candidate accumulation, and rejected-edit memory continuity.

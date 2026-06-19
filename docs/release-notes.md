@@ -1,6 +1,6 @@
 # Release notes
 
-## Current release: dd0e43f — runtime evidence and UX policy hardening
+## Current branch release: runtime evidence and UX policy hardening
 
 This changelog records the current release state. Long-lived policy lives in `docs/usage-policy.md`, conformance rules in `CONFORMANCE.md`, upstream/parity policy in `UPSTREAM.md`, and the implementation map in `docs/architecture.md`.
 
@@ -36,5 +36,5 @@ This changelog records the current release state. Long-lived policy lives in `do
 
 ### Documentation cleanup
 
-- The current architecture document is `docs/architecture.md`; obsolete gap-document naming has been removed.
+- The current architecture document is `docs/architecture.md`; obsolete historical gap-document naming has been replaced with current-state safety boundaries.
 - Release notes now summarize the latest changelog only instead of duplicating the long-lived runtime, cron, adoption, upstream, and conformance policies.

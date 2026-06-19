@@ -63,6 +63,8 @@ def test_scout_is_read_only_notification_summary_with_metadata(tmp_path):
     assert out["skills_metadata"]["demo"]["signals"]["pinned"] is True
     package = out["skills_metadata"]["demo"]["package_support"]
     assert package["content_included"] is False
+    assert package["advisory_only"] is True
+    assert package["expands_editable_scope"] is False
     assert package["support_dirs"]["references"]["file_count"] == 1
     assert package["support_dirs"]["references"]["files"][0]["relpath"].endswith("references/guide.md")
     assert package["support_dirs"]["assets"]["unsafe"] is True

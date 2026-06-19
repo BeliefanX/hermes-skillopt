@@ -13,7 +13,7 @@ from hermes_skillopt import core
 from skillopt_test_fixtures import stage_review_fixture
 from hermes_skillopt.env import load_eval_pack
 from hermes_skillopt.batch import batch_preflight, run_batch
-from hermes_skillopt.eval_packs import create_curated_eval_pack, eval_pack_autopilot, eval_pack_doctor, eval_pack_inventory, generate_negative_boundary_eval_pack, ingest_skill_context_eval_seed, ingest_user_correction_eval_seed, mine_session_eval_pack, promote_eval_pack, scaffold_eval_pack
+from hermes_skillopt.eval_packs import create_curated_eval_pack, eval_pack_autopilot, eval_pack_doctor, eval_pack_inventory, eval_pack_workflow_summary, generate_negative_boundary_eval_pack, ingest_skill_context_eval_seed, ingest_user_correction_eval_seed, mine_session_eval_pack, promote_eval_pack, scaffold_eval_pack
 from hermes_skillopt.skill_types import classify_skill_type
 
 
@@ -349,6 +349,88 @@ def test_eval_pack_autopilot_seeds_negative_boundary_and_promotion_are_safe(tmp_
         promote_eval_pack(skill="demo", input_path=draft["draft"]["output_path"], output=tmp_path / "skillopt" / "evals" / "bad-prod.json", hermes_home_path=str(tmp_path), production=True)
 
 
+def test_eval_pack_readiness_diagnostics_and_autopilot_plan_are_read_only(tmp_path):
+    make_skill(tmp_path, "demo")
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+
+    inv = eval_pack_inventory(hermes_home_path=str(tmp_path), skill="demo")
+    doctor = eval_pack_doctor(hermes_home_path=str(tmp_path), skill="demo")
+    workflow = eval_pack_workflow_summary(hermes_home_path=str(tmp_path), skill="demo")
+    plan = eval_pack_autopilot(skill="demo", hermes_home_path=str(tmp_path))
+
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert after == before
+    for report in (inv, doctor, workflow, plan):
+        assert report["success"] is True
+        assert report["read_only"] is True
+        assert report.get("auto_adopt") is not True
+    assert inv["mode"] == "eval_pack_inventory_read_only"
+    assert doctor["mode"] == "eval_pack_doctor_read_only"
+    assert workflow["mode"] == "eval_pack_workflow_summary_read_only"
+    assert workflow["webui_production_one_click"] is False
+    assert "eval-pack-autopilot" in workflow["workflow"][0]["safe_next_command"]
+    assert plan["mode"] == "eval_pack_autopilot_plan_read_only"
+    assert plan["plan"]["would_write"] is False
+    assert plan["plan"]["review_only"] is True
+    assert plan["plan"]["production_eligible"] is False
+    assert plan["plan"]["safety_invariants"]["auto_adopt"] is False
+    assert plan["plan"]["safety_invariants"]["live_skill_writes"] is False
+
+
+def test_generated_review_only_packs_carry_explicit_non_production_evidence(tmp_path):
+    make_skill(tmp_path, "demo")
+    fixture = tmp_path / "sessions_fixture.json"
+    fixture.write_text(json.dumps({"sessions": [{"id": "s1", "text": "demo failed with token=SECRET123 and then passed"}]}), encoding="utf-8")
+
+    outputs = [
+        scaffold_eval_pack(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-scaffold.json", hermes_home_path=str(tmp_path)),
+        mine_session_eval_pack(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-session.json", hermes_home_path=str(tmp_path), session_fixture=fixture),
+        ingest_user_correction_eval_seed(skill="demo", correction="Correct bad answer and redact token=SECRET123", output=tmp_path / "skillopt" / "evals" / "demo-correction.json", hermes_home_path=str(tmp_path)),
+        ingest_skill_context_eval_seed(skill="demo", context="Created for safe tool review boundaries", output=tmp_path / "skillopt" / "evals" / "demo-context.json", hermes_home_path=str(tmp_path)),
+        generate_negative_boundary_eval_pack(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-negative.json", hermes_home_path=str(tmp_path)),
+        eval_pack_autopilot(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-autopilot.json", hermes_home_path=str(tmp_path), write_draft=True)["draft"],
+    ]
+
+    for out in outputs:
+        path = Path(out["output_path"])
+        text = path.read_text(encoding="utf-8")
+        payload = json.loads(text)
+        assert out["review_only"] is True
+        assert out["production_eligible"] is False
+        assert out["report"]["production_eligible"] is False
+        assert payload["review_only"] is True
+        assert payload["allow_production_adoption"] is False
+        assert payload["production_gate_eligible"] is False
+        assert payload["production_policy"]["allow_production_adoption"] is False
+        assert all(t["production_gate_eligible"] is False for t in payload["tasks"])
+        assert all((t.get("provenance") or {}).get("review_only") is True for t in payload["tasks"])
+        assert "SECRET123" not in text
+
+
+def test_invalid_explicit_production_promotion_preserves_existing_output(tmp_path):
+    make_skill(tmp_path, "demo")
+    draft = eval_pack_autopilot(skill="demo", output=tmp_path / "skillopt" / "evals" / "demo-draft.json", hermes_home_path=str(tmp_path), write_draft=True)
+    prod_path = tmp_path / "skillopt" / "evals" / "demo-prod.json"
+    prod_path.parent.mkdir(parents=True, exist_ok=True)
+    sentinel = "sentinel existing promoted eval\n"
+    prod_path.write_text(sentinel, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-production origins"):
+        promote_eval_pack(
+            skill="demo",
+            input_path=draft["draft"]["output_path"],
+            output=prod_path,
+            hermes_home_path=str(tmp_path),
+            production=True,
+            production_policy={"allow_production_adoption": True},
+            eval_execution_contract={"classification": "deterministic_replay_contract_compliant"},
+            overwrite=True,
+        )
+
+    assert prod_path.read_text(encoding="utf-8") == sentinel
+    assert not list(prod_path.parent.glob(f".{prod_path.name}.curated.*.tmp.json"))
+
+
 def test_eval_pack_inventory_readiness_matrix_covers_pack_states(tmp_path):
     for name, body in {
         "none": "General helper skill.",
@@ -477,6 +559,77 @@ def test_fleet_report_resume_and_rollback_plans_are_read_only(tmp_path):
     assert "partial-stage continuation is refused" in " ".join(refused["incomplete-demo"]["refusal_reasons"])
     assert rollback["bulk_rollback_available"] is False
     assert any(r["run_id"] == "adopted-demo" for r in rollback["rollbackable_adopted_runs"])
+
+
+def test_score_provenance_labels_static_and_session_mined_review_only_sources(tmp_path):
+    static = core._score_provenance_summary({
+        "backend": "hermes",
+        "optimizer_backend": "hermes",
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "eval_pack": {"pack_id": "static-pack", "fingerprint_sha256": "fp-static", "eval_execution_contract": {"classification": "static_review_only"}},
+        "eval_pack_governance": {"task_origins": ["curated"]},
+    })
+    session = core._score_provenance_summary({
+        "backend": "hermes",
+        "optimizer_backend": "hermes",
+        "production_gate_eligible": False,
+        "test_gate_eligible": False,
+        "eval_pack": {"pack_id": "session-pack", "fingerprint_sha256": "fp-session"},
+        "eval_pack_governance": {"task_origins": ["session-mined"]},
+    })
+    prod = core._score_provenance_summary({
+        "backend": "hermes",
+        "optimizer_backend": "hermes",
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "eval_pack": {"pack_id": "prod-pack", "fingerprint_sha256": "fp-prod", "eval_execution_contract": {"classification": "deterministic_replay_contract_compliant"}},
+        "eval_pack_governance": {"task_origins": ["curated"]},
+    })
+
+    assert static["score_source"] == "review_only_static_scorecard"
+    assert static["eval_pack"]["execution_contract_classification"] == "static_review_only"
+    assert session["score_source"] == "review_only_session_mined_eval"
+    assert session["eval_pack"]["non_production_origins"] == ["session-mined"]
+    assert prod["score_source"] == "production_curated_eval_pack"
+
+
+def test_status_scout_notification_and_fleet_expose_score_provenance_artifact_refs(tmp_path):
+    make_skill(tmp_path, "demo")
+    run = stage_review_fixture(tmp_path, "demo")
+    run_dir = Path(run["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest.update({
+        "backend": "hermes",
+        "optimizer_backend": "hermes",
+        "target_executor": "deterministic-scorecard",
+        "eval_file": str(tmp_path / "skillopt" / "evals" / "demo.json"),
+        "eval_pack": {"pack_id": "demo-review", "version": "1", "fingerprint_sha256": "fp-review", "eval_execution_contract": {"classification": "static_review_only"}},
+        "eval_pack_fingerprint_sha256": "fp-review",
+        "eval_pack_governance": {"task_origins": ["sample-eval-pack"]},
+        "split_scores": {"validation": {"current": 0.1, "candidate": 0.2}, "test": {"score": 0.2}},
+    })
+    core.save_manifest(run_dir, manifest)
+
+    status = core.status(str(tmp_path))
+    row = next(r for r in status["recent_runs"] if r["run_id"] == run["run_id"])
+    assert row["score_provenance"]["score_source"] == "review_only_static_scorecard"
+    assert row["score_provenance"]["eval_pack"]["fingerprint_sha256"] == "fp-review"
+    assert row["score_provenance"]["split_labels"]["heldout_final_gate"] == "test"
+    assert row["artifact_refs"]["report"]["sha256"]
+
+    scout = core.scout(str(tmp_path), skill="demo")
+    assert scout["score_provenance"]["score_source"] == "review_only_static_scorecard"
+    digest = core.notification_digest("scout", scout)
+    assert "score_provenance:" in digest["digest"]
+    assert "eval_pack:" in digest["digest"]
+    assert "split_labels:" in digest["digest"]
+    assert "artifact_refs:" in digest["digest"]
+
+    fleet = core.fleet_report(str(tmp_path))
+    fleet_row = next(r for r in fleet["latest_runs"] if r["run_id"] == run["run_id"])
+    assert fleet_row["score_provenance"]["eval_pack"]["fingerprint_sha256"] == "fp-review"
+    assert fleet_row["artifact_refs"]["manifest"]["exists"] is True
 
 
 def test_fleet_report_warns_on_tampered_manifest(tmp_path):

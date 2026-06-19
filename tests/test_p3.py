@@ -202,6 +202,9 @@ def test_upstream_import_rejects_executable_fields_and_leakage(tmp_path):
 def test_upstream_import_rejects_remote_network_fields_and_values(tmp_path):
     for name, payload in {
         "endpoint": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "endpoint": "/v1/run"}]},
+        "remote": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "remote": "origin"}]},
+        "repository": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "repository": "microsoft/SkillOpt"}]},
+        "download": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "download": "bench.json"}]},
         "url_value": {"tasks": [{"id": "x", "split": "train", "prompt": "x", "expected_terms": ["x"], "metadata": {"reference": "https://example.invalid/bench.json"}}]},
     }.items():
         manifest = tmp_path / f"{name}.json"
