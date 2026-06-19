@@ -7,12 +7,27 @@ client for these functions and never bypasses staged-only runs or typed writebac
 confirmations.
 """
 
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 from hermes_skillopt import core
 from hermes_skillopt import eval_packs
-from hermes_skillopt import webui as legacy
+
+
+MAX_TEXT_CHARS = 20_000
+ALLOWED_ARTIFACTS = {
+    "manifest.json",
+    "checkpoint.json",
+    "report.md",
+    "diff.patch",
+    "gate_results.json",
+    "candidate_summary.json",
+    "rejected_edits.jsonl",
+    "proposed_SKILL.md",
+    "best_skill.md",
+}
 
 
 def _safe_json(data: Any) -> Any:
@@ -207,12 +222,85 @@ def skill_quality(payload: dict[str, Any]) -> dict[str, Any]:
     return skill_quality_digest(report) if bool(payload.get("digest")) else report
 
 
-def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]:
+def _redacted_json(data: Any) -> str:
+    return core.redact_secrets(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _safe_artifact_path(run_dir: Path, filename: str) -> Path | None:
+    """Return a safe fixed artifact path under run_dir, rejecting symlink escapes."""
+    if filename not in ALLOWED_ARTIFACTS:
+        return None
+    if Path(filename).name != filename:
+        return None
+    base = run_dir.resolve()
+    path = base / filename
     try:
-        rid = (run_id or "").strip() or legacy.latest_run_id(home or None)
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError:
+        return None
+    if path.is_symlink() or not core._is_relative_to(resolved, base) or not resolved.is_file():
+        return None
+    return resolved
+
+
+def _read_artifact_limited(run_dir: Path, filename: str, limit: int = MAX_TEXT_CHARS) -> str:
+    path = _safe_artifact_path(run_dir, filename)
+    if path is None:
+        return ""
+    return core.redact_secrets(path.read_text(encoding="utf-8", errors="replace")[:limit])
+
+
+def _latest_run_id(home: str | None = None) -> str:
+    rows = core.status(home or None).get("recent_runs") or []
+    if not rows:
+        return ""
+    return str(rows[0].get("run_id") or "")
+
+
+def _review_payload(run_id: str | None = None, home: str | None = None) -> tuple[str, str, str, str, str, str]:
+    rid = (run_id or "").strip() or _latest_run_id(home)
+    if not rid:
+        return "No staged runs found.", "", "", "", "", ""
+    try:
+        run_dir = core.resolve_run_dir(core.hermes_home(home or None), rid)
+        manifest_text = _read_artifact_limited(run_dir, "manifest.json")
+        if not manifest_text:
+            raise ValueError("manifest.json missing or unsafe")
+        manifest = json.loads(manifest_text)
+        report = _read_artifact_limited(run_dir, "report.md")
+        diff = _read_artifact_limited(run_dir, "diff.patch")
+        gate_text = _read_artifact_limited(run_dir, "gate_results.json")
+        gate_data = manifest.get("gate")
+        if gate_text:
+            try:
+                gate_data = json.loads(gate_text).get("best_gate")
+            except Exception:
+                gate_data = gate_text
+        gate = gate_text or _redacted_json(gate_data)
+        candidate_summary = _read_artifact_limited(run_dir, "candidate_summary.json")
+        if candidate_summary:
+            gate = (gate + "\n\n## Candidate summary\n" + candidate_summary) if gate else candidate_summary
+        candidate = _read_artifact_limited(run_dir, "proposed_SKILL.md") or _read_artifact_limited(run_dir, "best_skill.md")
+        rejected = _read_artifact_limited(run_dir, "rejected_edits.jsonl")
+        summary = [
+            f"## Review `{rid}`",
+            f"- status: {manifest.get('status')}",
+            f"- skill: {manifest.get('skill_name')}",
+            f"- adoptable: {manifest.get('adoptable')}",
+            f"- production_gate_eligible: {manifest.get('production_gate_eligible')}",
+            f"- test_gate_eligible: {manifest.get('test_gate_eligible')}",
+            f"- run_dir: `{run_dir}`",
+            f"- diff_path: `{run_dir / 'diff.patch'}`",
+            f"- report_path: `{run_dir / 'report.md'}`",
+        ]
+        return "\n".join(summary), report, diff, gate, candidate, rejected
     except Exception as exc:
-        return {"run_id": "", "summary": f"Review failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}", "report": "", "diff": "", "gate": "", "candidate": "", "rejected": "", "success": False}
-    summary, report, diff, gate, candidate, rejected = legacy.review_payload(rid, home or None)
+        return f"Review failed: {type(exc).__name__}: {core.redact_secrets(str(exc))}", "", "", "", "", ""
+
+
+def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]:
+    rid = (run_id or "").strip() or _latest_run_id(home or None)
+    summary, report, diff, gate, candidate, rejected = _review_payload(rid, home or None)
     decision: dict[str, Any] = {}
     review_json: dict[str, Any] = {}
     if not summary.startswith("Review failed:"):

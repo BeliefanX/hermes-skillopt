@@ -15,7 +15,7 @@ Production adoption is intentionally strict. A run is production-eligible only w
 - no `task_commands_executed=true` row;
 - deterministic reviewer gate approval, curated validation/test gates, provenance/current/proposed SHA checks, and native Hermes adopt guard clearance.
 
-Missing evidence, non-production internal runners, or any task command execution downgrades/blocks production eligibility. Current sandbox/fixed/internal, static, scorecard, replay-only, and disabled `live-readonly` paths are review-only unless a future explicit compliant evidence contract proves otherwise. Session-mined, direct/generated, fallback, synthetic, scaffold, sample, correction/context seed, and legacy dry-run evidence also remains review-only unless explicitly curated into a production contract with all runtime and gate evidence above.
+Missing evidence, non-production internal runners, or any task command execution downgrades/blocks production eligibility. Current sandbox/fixed/internal, static, scorecard, replay-only, and disabled `live-readonly` paths are review-only unless a future explicit compliant evidence contract proves otherwise. Session-mined, direct/generated, fallback, synthetic, scaffold, sample, and correction/context seed evidence also remains review-only unless explicitly curated into a production eval pack with a compliant execution contract.
 
 ## Cron-safe and manual surfaces
 

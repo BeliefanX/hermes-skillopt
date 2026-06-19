@@ -85,10 +85,10 @@ The current adapter’s production adoption gates depend on local curated eval f
 - Eval inventory recognizes versioned pack metadata (`pack_id`, `version`, fingerprint) and conservative name-derived versioned pack files, then reports the unified readiness/adoptability schema; inventory readiness is discovery evidence only and does not authorize adoption by itself.
 - Validation adoption evidence requires eligible curated validation tasks and strict candidate improvement.
 - Held-out test eligibility requires eligible curated test tasks passing threshold.
-- Fallback, synthetic, session-mined, sample/static keyword packs, report-only replay contracts, and legacy dry-run evidence remains review-only.
+- Fallback, synthetic, session-mined, sample/static keyword packs, and report-only replay contracts remain review-only.
 - Sandbox eval is isolated and blocks task-provided commands by default.
 - Frozen-Hermes target execution is currently routed through the sandbox/fixed internal runner. It can provide isolated runtime/transcript/scoring review evidence for Hermes-native evals, but production adoption requires `evidence_ledger.production_runtime_ready == true`: complete frozen target execution evidence, explicit real Hermes runtime evidence (`real_hermes_runtime_evidence` plus real core/gateway invocation proof), no task-command execution, non-internal runner status, and reviewer-gate approval. It is not Microsoft upstream benchmark execution, not parity certification, and not arbitrary live agent command execution.
-- Bundled seed packs `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` are currently static review packs (`sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`) despite historical filenames; they cannot satisfy production/adoption gates.
+- Bundled seed packs `examples/evals/hermes_tool_use_static_review_v1.json` and `examples/evals/hermes_skill_safety_static_review_v1.json` are static review-only packs (`sample_pack: true`, `allow_production_adoption: false`, `production_gate_eligible: false`); they cannot satisfy production/adoption gates.
 
 ## Conformance semantics
 

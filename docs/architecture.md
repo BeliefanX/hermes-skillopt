@@ -1,6 +1,6 @@
 # Hermes SkillOpt architecture
 
-This document describes the current Phase0-Phase5 architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
+This document describes the current architecture on this branch. It intentionally replaces obsolete historical gap lists with a current-state map: what is implemented, what is deliberately constrained for Hermes safety, and what remains limited.
 
 ## Boundaries
 
@@ -46,7 +46,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
 7. Write report, diff, stage JSON artifacts, rejected edits, `slow_meta.json` evidence, gate results, manifest, checkpoint, and artifact SHA-256 map.
 8. Mark the run adoptable only if production validation and held-out test gates are eligible and passing, complete real frozen-runtime evidence and reviewer gate are present, provenance/current-SHA hashes match, and the native Hermes conflict guard allows the skill.
 
-`full_run(dry_run=True)` is rejected by code; CLI has no `full-run --dry-run` option. Legacy `dry-run`/`run --mode legacy` remains review-only.
+Use current full-run/staged artifacts for review and explicit adopt; generated runs must pass the staged evidence and reviewer gates before adoption.
 
 `eval_only()`/CLI `eval-only` is a separate fixed-skill scoring path. CLI `benchmark` is an alias for the same read-only report generator. These commands require an explicit eval file, write `evaluated_SKILL.md`, `eval_report.json`, `benchmark_report.json`, `report.md`, and `manifest.json` under a staging run with `status == "eval_only_complete"`, and are always `adoptable: false`. They have no optimizer/training/candidate-selection side effects and cannot production-adopt. `benchmark_report.json` uses `hermes-native-benchmark-report-v1` with skill/eval/target fingerprints, read-only safety flags, and split scorecard summary; it is not an upstream benchmark parity report.
 
@@ -80,7 +80,7 @@ Production adoption is intentionally stricter than generic validation:
 - The final candidate must strictly improve production validation score over current.
 - Any hard-failed production-eligible validation row blocks production gate acceptance/adoptability, even when soft weighted score improves and regardless of gate mode.
 - Held-out curated test tasks must pass threshold.
-- Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
+- Fallback, synthetic, session-mined, and other review-only evidence cannot make a run production-adoptable.
 - LLM judge text is explanatory evidence only and cannot bypass gates.
 - `evidence_ledger` (`hermes-skillopt-evidence-ledger-v1`) exposes `eval_level`, `evidence_maturity`, `production_runtime_ready`, complete frozen evidence, real-runtime invocation/evidence flags, task-command status, internal-runner status, reviewer-gate status, and blockers. Static/replay/sandbox/live-disabled evidence stays review-only unless complete real Hermes runtime evidence and reviewer approval are present.
 
@@ -90,7 +90,7 @@ Gate modes are deterministic metric policies: `strict` is the default for adopti
 
 ## EnvAdapter and evidence foundation
 
-`EnvAdapter` is the contract between Hermes evidence and the trainer. It exposes task splits, rollout metadata, scorer metadata, and production eligibility decisions. Built-in benchmarks, bundled static review packs, and session-mined/synthetic tasks provide train/validation/test scaffolding and slow/sleep-style evidence, but they are non-production unless replaced by explicit curated eval-file scorecards with an adoption-eligible execution contract. The static seed packs in `examples/evals/hermes_tool_use_production_v1.json` and `examples/evals/hermes_skill_safety_production_v1.json` are review-only despite their historical filenames; they use `static-review-eval-pack`/`sample_pack` policy and cannot production-adopt.
+`EnvAdapter` is the contract between Hermes evidence and the trainer. It exposes task splits, rollout metadata, scorer metadata, and production eligibility decisions. Built-in benchmarks, bundled static review packs, and session-mined/synthetic tasks provide train/validation/test scaffolding and slow/sleep-style evidence, but they are non-production unless replaced by explicit curated eval-file scorecards with an adoption-eligible execution contract. The static seed packs in `examples/evals/hermes_tool_use_static_review_v1.json` and `examples/evals/hermes_skill_safety_static_review_v1.json` are review-only; they use `static-review-eval-pack`/`sample_pack` policy and cannot production-adopt.
 
 `eval-pack-inventory` makes that coverage reality explicit by listing candidate eval paths, existing pack validity, versioned pack id/version/fingerprint, split counts, production-eligible task counts, advisory skill type, unified readiness/adoptability schema, readiness matrix, and missing reasons per skill. It discovers exact/default packs and conservative name-derived versioned packs such as `<skill>-thermal-v4.json`. `eval-pack-doctor` is read-only diagnostics over that inventory and emits safe human next commands. `eval-pack-workflow` adds a read-only authoring summary and promotion checklist without writing packs. `skill-readiness-queue` ranks high-value candidates without running optimize/adopt/rollback. `skill-quality` is read-only by default; explicit eval skeleton creation is guarded review-only. `eval-pack-autopilot` is plan/read-only by default for interactive authoring, but the scheduled notification set should use digest surfaces instead; the explicit `--write-draft`/`write_draft=true` path writes only a generated review-only draft. `eval-pack-scaffold`, correction/context ingestion, negative/boundary generation, skeleton creation, and session mining fill only authoring gaps with review-only packs, not production evidence. `eval-pack-curate` is the curated factory for local task JSON and is review-only unless explicit production policy plus an adoption-eligible execution contract are supplied. `eval-pack-promote` promotes drafts to curated review packs by default; production promotion requires explicit policy/contract, and WebUI promotion exposes review-only one-click promotion. Skill package support (`references/`, `templates/`, `scripts/`, `assets/`) is summarized only as advisory path/hash/count metadata after profile-boundary checks and does not change adoption authority.
 
@@ -118,7 +118,7 @@ Adopt requires:
 
 Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
 
-## Phase0-Phase5 closure map
+## Current closure map
 
 Current code closes the earlier architecture gaps in these bounded ways:
 

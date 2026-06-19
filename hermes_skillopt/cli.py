@@ -76,7 +76,6 @@ def main() -> int:
     def add_fleet_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--limit", type=int, default=50, help="Max recent staging run directories to inspect (capped at 200)")
         parser.add_argument("--skill", help="Optional skill_name filter")
-    d = sub.add_parser("dry-run"); d.add_argument("--skill"); d.add_argument("--goal"); d.add_argument("--session-search"); d.add_argument("--use-llm", action="store_true")
     fr = sub.add_parser("full-run", help="Run eval-gated staged optimization only; never auto-adopts and does not replace Hermes curator"); add_full_args(fr)
     doc = sub.add_parser("doctor", help="Read-only readiness/guided UX report; cron-safe; no full_run/adopt/rollback/fetch; not a curator replacement")
     doc.add_argument("--skill")
@@ -129,7 +128,7 @@ def main() -> int:
     qual.add_argument("--skill"); qual.add_argument("--skill-path"); qual.add_argument("--digest", action="store_true"); qual.add_argument("--create-eval-skeleton", action="store_true", help="Explicitly write a guarded review-only eval scaffold; never edits live SKILL.md"); qual.add_argument("--output"); qual.add_argument("--overwrite", action="store_true")
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
     bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
-    run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
+    run = sub.add_parser("run", help="Alias for full-run; always uses the current eval-gated staged pipeline"); run.add_argument("--mode", choices=["full"], default="full"); add_full_args(run)
     r = sub.add_parser("review", help="Review a staged eval-gated run. Use --digest for cron-safe slim output; review is advisory and does not replace Hermes curator.")
     r.add_argument("run_id", nargs="?", default="latest")
     r.add_argument("--latest", action="store_true")
@@ -170,9 +169,7 @@ def main() -> int:
         out = core.doctor(args.home, skill=args.skill)
         if args.digest:
             out = core.notification_digest("doctor", out)
-    elif args.cmd == "dry-run":
-        out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
-    elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
+    elif args.cmd == "full-run" or args.cmd == "run":
         out = core.full_run(**_full_kwargs(args))
     elif args.cmd == "optimize":
         kw = _full_kwargs(args)
@@ -266,8 +263,6 @@ def main() -> int:
         out = skill_quality_report(hermes_home_path=args.home, skill=args.skill, skill_path=args.skill_path, create_eval_skeleton=args.create_eval_skeleton, output=args.output, overwrite=args.overwrite)
         if args.digest:
             out = skill_quality_digest(out)
-    elif args.cmd == "run" and args.mode == "legacy":
-        out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":
         rid = "latest" if args.latest else args.run_id
         if args.digest:

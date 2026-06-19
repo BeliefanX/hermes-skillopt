@@ -31,7 +31,7 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 
 - Upstream benchmark bridge is JSON-data-only. It rejects executable or remote fields such as `code`, `script`, `command`, `module`, `entrypoint`, `url`, and container/image fields.
 - Imported sample packs are review-only by default. Production gate eligibility is disabled unless a caller explicitly imports as curated, the pack is not static/keyword/sample/report-only, an adoption-eligible eval execution contract is declared, and tasks also satisfy Hermes production eval policy.
-- Static keyword/text scorecard packs (`static_keyword_scorecard`, `static_review_only`, `static-review-eval-pack`, `keyword-scorecard`) are always review-only/non-adoption evidence, including the bundled example packs whose filenames still contain `production_v1`.
+- Static keyword/text scorecard packs (`static_keyword_scorecard`, `static_review_only`, `static-review-eval-pack`, `keyword-scorecard`) are always review-only/non-adoption evidence, including the bundled `examples/evals/*static_review_v1.json` packs.
 - Eval pack validation rejects invalid splits, missing required splits for versioned curated packs, declared fingerprint tampering, and leakage by duplicate ids/prompts across train/val/test splits.
 - Transfer evaluation is report-only/read-only: it evaluates staged/proposed skill text or an explicit file and never writes live skills.
 - Cross-profile evaluation records profile fingerprints but does not mutate target profiles.
@@ -160,7 +160,7 @@ Hermes plugin tool equivalents registered in `plugin.yaml`:
 
 ## Known limitations
 
-- The bundled `examples/evals/*production_v1.json` files are static review fixtures, not production certification suites for any skill.
+- The bundled `examples/evals/*static_review_v1.json` files are static review fixtures, not production certification suites for any skill.
 - Eval-pack inventory/scaffold intentionally exposes that many skills have no true curated pack yet. Do not treat scaffold/sample/static packs as production evidence.
 - Batch/fleet surfaces are orchestration/reporting helpers only; batch never adopts, and fleet resume/rollback commands never perform resume/rollback/delete/writeback themselves.
 - `benchmark`/`eval-only` reports are local fixed-skill reports and do not establish Microsoft SkillOpt benchmark parity or external model performance.

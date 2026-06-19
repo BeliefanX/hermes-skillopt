@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import builtins
 import json
 import subprocess
 import sys
@@ -8,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from hermes_skillopt import cli, core, webui, webui_api
+from hermes_skillopt import cli, core, webui, webui_api, webui_pwa
 from hermes_skillopt.webui_server import create_app
+from skillopt_test_fixtures import stage_review_fixture
 
 
 def make_skill(home: Path, name="demo", body="Use tools safely.") -> Path:
@@ -23,17 +23,10 @@ def test_webui_import_does_not_import_gradio():
     assert "gradio" not in webui.__dict__
 
 
-def test_require_gradio_is_no_longer_live_path(monkeypatch):
-    real_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "gradio":
-            raise ImportError("no gradio in test")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(RuntimeError, match="FastAPI and Uvicorn"):
-        webui.require_gradio()
+def test_webui_shim_has_no_legacy_gradio_entrypoints():
+    assert not hasattr(webui, "require_gradio")
+    assert not hasattr(webui, "build_app")
+    assert not hasattr(webui, "launch_webui")
 
 
 def test_webui_run_api_forces_staged_only(monkeypatch, tmp_path):
@@ -59,7 +52,7 @@ def test_webui_run_api_forces_staged_only(monkeypatch, tmp_path):
 
 def test_webui_adopt_and_rollback_require_exact_confirmation(tmp_path):
     make_skill(tmp_path, "demo")
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     rid = run["run_id"]
     with pytest.raises(PermissionError):
         webui_api.adopt(rid, "ADOPT wrong")
@@ -99,10 +92,10 @@ def test_cli_writeback_unsafe_flag_is_explicit(monkeypatch, tmp_path, capsys):
 
 def test_webui_review_latest_reads_only_staging_artifacts(tmp_path):
     make_skill(tmp_path, "demo")
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     payload = webui_api.review("", str(tmp_path))
     assert run["run_id"] in payload["summary"]
-    assert "SkillOpt dry run" in payload["report"]
+    assert "SkillOpt staged review fixture" in payload["report"]
     assert "SkillOpt Candidate Improvements" in payload["diff"]
     assert "SkillOpt Candidate Improvements" in payload["candidate"]
     for field in ("decision", "adoptable", "blockers", "production_gate", "test_gate", "evidence_class", "artifacts", "next_safe_action"):
@@ -158,9 +151,9 @@ def test_cli_webui_propagates_home(monkeypatch, tmp_path):
 
 
 def test_pwa_static_contracts_no_dynamic_private_cache():
-    head = webui.pwa_head_html()
-    manifest = webui.pwa_manifest()
-    sw = webui.service_worker_js()
+    head = webui_pwa.pwa_head_html()
+    manifest = webui_pwa.pwa_manifest()
+    sw = webui_pwa.service_worker_js()
     assert 'rel="manifest" href="/manifest.webmanifest"' in head
     assert manifest["display"] == "standalone"
     assert manifest["start_url"] == "/"
@@ -168,13 +161,13 @@ def test_pwa_static_contracts_no_dynamic_private_cache():
     assert 'url.pathname === "/"' in sw
     assert 'cache: "no-store"' in sw
     assert "await cache.put(\"/\"" not in sw
-    for path in webui.PWA_ASSET_PATHS:
+    for path in webui_pwa.PWA_ASSET_PATHS:
         assert json.dumps(path) in sw
 
 
 def test_webui_review_rejects_symlink_artifact_escape(tmp_path):
     make_skill(tmp_path, "demo")
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     rid = run["run_id"]
     run_dir = tmp_path / "skillopt" / "staging" / rid
     outside = tmp_path / "outside-secret.txt"
@@ -226,7 +219,7 @@ def test_fastapi_routes_and_static_assets(monkeypatch, tmp_path):
     assert fleet.json()["mode"].startswith("read_only_report")
     assert client.get("/api/fleet/resume-plan", params={"home": str(tmp_path)}).status_code == 200
     assert client.get("/api/fleet/rollback-plan", params={"home": str(tmp_path)}).status_code == 200
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     latest = client.get("/api/review/latest", params={"home": str(tmp_path)})
     assert latest.status_code == 200
     assert latest.json()["run_id"] == run["run_id"]

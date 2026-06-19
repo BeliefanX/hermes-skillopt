@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from hermes_skillopt import core
-from hermes_skillopt import webui as pwa
 from hermes_skillopt import webui_api
+from hermes_skillopt import webui_pwa as pwa
 
 
 INSTALL_HINT = (

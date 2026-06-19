@@ -212,12 +212,15 @@ def test_fallback_synthetic_and_session_mined_tasks_remain_non_production_even_w
         assert any("review-only" in reason or "non-production" in reason for reason in decision.reasons)
 
 
-def test_bundled_production_eval_packs_are_loadable_and_gate_eligible():
+def test_bundled_static_review_eval_packs_are_loadable_and_not_gate_eligible():
     examples_dir = Path(__file__).resolve().parents[1] / "examples" / "evals"
-    pack_paths = sorted(examples_dir.glob("hermes_*_production_v1.json"))
+    pack_paths = [
+        examples_dir / "hermes_skill_safety_static_review_v1.json",
+        examples_dir / "hermes_tool_use_static_review_v1.json",
+    ]
 
-    assert len(pack_paths) >= 2
     for path in pack_paths:
+        assert path.exists()
         tasks, metadata = load_eval_pack(path)
         assert metadata.schema_version == EVAL_PACK_SCHEMA_VERSION
         assert metadata.split_counts["train"] >= 1
@@ -225,6 +228,8 @@ def test_bundled_production_eval_packs_are_loadable_and_gate_eligible():
         assert metadata.split_counts["test"] >= 1
         assert metadata.production_policy["allow_production_adoption"] is False
         assert metadata.production_eligible_task_count == 0
+        assert metadata.production_policy["sample_pack"] is True
+        assert metadata.production_policy["static_review_only"] is True
         assert metadata.fingerprint_sha256
         assert metadata.production_policy_fingerprint_sha256
         assert metadata.eval_execution_contract["adoption_eligible"] is False

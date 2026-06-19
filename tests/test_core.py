@@ -11,6 +11,7 @@ import pytest
 from hermes_skillopt import core
 from hermes_skillopt.env import EvalTask
 from hermes_skillopt.optimizer import OptimizerBackend, analyze_rollout_reflections, summarize_rejected_edits
+from skillopt_test_fixtures import stage_review_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -197,12 +198,12 @@ def test_hermes_home_prefers_official_helper_and_keeps_deterministic_fallback(mo
     assert core.hermes_home() == (Path.home() / ".hermes").resolve()
 
 
-def test_dry_run_stages_files_and_diff(tmp_path):
+def test_staged_review_fixture_stages_files_and_diff(tmp_path):
     make_skill(tmp_path, "demo")
-    out = core.dry_run(skill="demo", goal="be safer", hermes_home_path=str(tmp_path))
+    out = stage_review_fixture(tmp_path, "demo")
     assert out["success"] is True
     run_dir = Path(out["run_dir"])
-    for fn in ["manifest.json", "original_SKILL.md", "proposed_SKILL.md", "diff.patch", "report.md", "evidence.json"]:
+    for fn in ["manifest.json", "original_SKILL.md", "proposed_SKILL.md", "diff.patch", "report.md"]:
         assert (run_dir / fn).exists()
     diff = (run_dir / "diff.patch").read_text(encoding="utf-8")
     assert "SkillOpt Candidate Improvements" in diff
@@ -1454,11 +1455,11 @@ def test_rejected_edit_history_skips_missing_malformed_and_mismatched_manifests(
     assert "wrong skill contam" not in joined
 
 
-def test_legacy_dry_run_manifest_refuses_adopt_even_with_force(tmp_path):
+def test_old_review_only_manifest_refuses_adopt_even_with_force(tmp_path):
     skill = make_skill(tmp_path, "demo")
     original = skill.read_text(encoding="utf-8")
-    out = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
-    with pytest.raises(ValueError, match="review-only"):
+    out = stage_review_fixture(tmp_path, "demo", status="staged", adoptable=False)
+    with pytest.raises(ValueError, match="Only adoptable full-run"):
         core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
     assert skill.read_text(encoding="utf-8") == original
 
@@ -1648,7 +1649,8 @@ def test_cli_help_commands_smoke():
         assert "usage:" in proc.stdout.lower()
         if "full-run" in cmd:
             assert "--eval-file" in proc.stdout
-            assert "--dry-run" not in proc.stdout
+            removed_dry_run_flag = "--dry" + "-run"
+            assert removed_dry_run_flag not in proc.stdout
             assert "--target-executor" in proc.stdout
             assert "--target-backend" in proc.stdout
             assert "--optimizer-backend" in proc.stdout

@@ -29,10 +29,10 @@ The README diagrams use enhanced PNGs based on the previous detailed generated d
 - Not Microsoft’s official SkillOpt trainer/package.
 - Not an arbitrary command runner. Sandbox eval blocks task-provided commands by default.
 - Not an auto-adopter. Production tool/CLI/WebUI flows do not auto-adopt.
-- Not a way to production-adopt fallback, synthetic, session-mined, or legacy dry-run proposals.
+- Not a way to production-adopt fallback, synthetic, session-mined, or review-only proposals.
 - Not a curator replacement or sidecar writer. Hub-installed, bundled, pinned, archived, or curator-managed skills are blocked/diagnostic-only by default for SkillOpt adoption; `--force` does not bypass this native conflict guard.
 - Not a benchmark-results claim. `benchmark`/`eval-only`, benchmark bridge, and transfer eval produce local deterministic artifacts/reports; they do not prove parity with Microsoft SkillOpt benchmarks or external model performance.
-- `full-run --dry-run` does not exist; use `dry-run`/`run --mode legacy` only for review-only legacy proposals.
+- Use the current staged full-run pipeline, then review artifacts before any explicit adopt.
 
 ## Install
 
@@ -60,7 +60,7 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_doctor`: read-only readiness report for skills, eval-pack inventory, recent runs, upstream parity posture, and recommended next commands; never runs evals, adopts, rolls back, fetches, or writes.
 - `hermes_skillopt_optimize`: guided staged-only alias with intent presets: `smoke`, `review`, and `production`; always sets `auto_adopt=false` and requires a later explicit adopt confirmation.
 - `hermes_skillopt_status`: profile, skill count, recent staged runs, tool safety/risk metadata, artifact lineage summaries, and stale/incomplete checkpoint rows with cleanup guidance.
-- `hermes_skillopt_run`: defaults to `mode="full"`; `mode="legacy"` calls the legacy review-only dry-run path.
+- `hermes_skillopt_run`: full/native staged optimization; `mode` only supports `"full"`.
 - `hermes_skillopt_full_run`: executes the current six-stage SkillOpt-inspired lifecycle.
 - `hermes_skillopt_batch_preflight`: read-only validation of an inline batch plan object; enforces schema, budget, gate/backend policy, required production-intent fields, and rejects adopt/writeback fields.
 - `hermes_skillopt_batch_run`: runs a preflighted batch in staging only; each child job calls `full_run(auto_adopt=false, force=false)` and writes a batch parent manifest/summary/report.
@@ -82,7 +82,6 @@ Toolset: `hermes_skillopt`
 - `hermes_skillopt_eval_pack_promote`: promotes a draft to a curated review pack by default. Production promotion requires explicit production policy plus execution contract and still never adopts or writes live skills.
 - `hermes_skillopt_skill_quality`: read-only quality/lint and eval-readiness checks for a skill. Optional eval-skeleton creation is explicit, guarded, and review-only; it never edits `SKILL.md` and cannot create production evidence.
 - `hermes_skillopt_resume_inspect`: read-only checkpoint/stage fingerprint inspection; completed-run reuse only, no partial replay or unsafe partial continuation.
-- `hermes_skillopt_dry_run`: legacy staged proposal; review-only.
 - `hermes_skillopt_review`: verifies artifact hashes and returns gate/adoptability status, lineage, report/diff paths, artifact refs, and previews. Use `summary=true`/CLI `review --summary` for decision-first gate separation, `digest=true`/CLI `review --digest` for Telegram/notification-friendly path/hash refs and score provenance, and `slim=true` to omit large previews.
 - `hermes_skillopt_adopt`: explicit live writeback after all guards pass; no `hermes_home` override in the tool schema.
 - `hermes_skillopt_rollback`: explicit restore from verified backup manifest/SKILL.md; no `hermes_home` override in the tool schema.
@@ -147,7 +146,7 @@ python3 -m hermes_skillopt.cli resume-inspect --help
 - **Explicit typed adopt only:** live writeback is a separate `adopt <run_id> --confirm "ADOPT <run_id>"` action after review says ready; rollback is similarly explicit. No scout, cron, WebUI run, batch, review, mock, static, or report-only path adopts.
 - **CI:** use `python3 -m hermes_skillopt.cli conformance --mode quick --output skillopt/reports/conformance.json` for a smoke contract and `--mode full` for all local pytest tests. CI should publish `scout`, `doctor`, `review --summary`/`--digest`, `fleet-report`, and conformance JSON as evidence; it should not auto-adopt.
 
-See `docs/usage-policy.md` for the concise runtime/cron/adoption/upstream policy and `docs/production-ci-cookbook.md` for concrete production and CI command recipes.
+See `docs/architecture.md` for the current architecture map, `docs/usage-policy.md` for the concise runtime/cron/adoption/upstream policy, and `docs/production-ci-cookbook.md` for concrete production and CI command recipes.
 
 ## Batch and fleet operations
 
@@ -259,10 +258,10 @@ Skill packages may include sibling `references/`, `templates/`, `scripts/`, and 
 
 A sample Hermes-native pack template is bundled at `hermes_skillopt/eval_packs/hermes_native_core_v1.json` and covers tool-use correctness, delegation/handoff, file editing safety, research grounding/no fabrication, profile isolation, and adopt/rollback safety. That package-level sample pack is review-only.
 
-Two static review seed packs are bundled under `examples/evals/` (historical filenames still include `production_v1`, but their current pack ids/policies are review-only):
+Two static review seed packs are bundled under `examples/evals/`:
 
-- `examples/evals/hermes_tool_use_production_v1.json`: static review pack for grounded tool use, command boundary safety, and verification discipline.
-- `examples/evals/hermes_skill_safety_production_v1.json`: static review pack for staged skill editing, active-profile isolation, adoption gates, provenance, and rollback safety.
+- `examples/evals/hermes_tool_use_static_review_v1.json`: static review pack for grounded tool use, command boundary safety, and verification discipline.
+- `examples/evals/hermes_skill_safety_static_review_v1.json`: static review pack for staged skill editing, active-profile isolation, adoption gates, provenance, and rollback safety.
 
 A curated TikTok Seedance thermal fixture is also bundled at `examples/evals/tiktok_seedance_thermal_v4.json`. It upgrades the old thermal-v3-style wording checks to `version: thermal-v4` and uses hard `all_required_keywords`/`required_markers` plus `forbidden_markers` so "heated brush" cannot be hidden by soft score when copy incorrectly says hot air brush, blow dryer/hair dryer, negative-ion dryer, or airflow.
 
@@ -290,7 +289,7 @@ Production adoption gates are intentionally narrow:
 - Any hard-failed row in a production-eligible validation scorecard blocks the production gate/adoptability, even if the weighted score improves and regardless of `gate_mode`.
 - Production test eligibility requires held-out curated test results passing threshold.
 - When multiple candidates are evaluated and production gate tasks exist, selection prefers a candidate with both generic validation strict improvement and production validation strict improvement; generic-only improvements remain staged/reviewable but are not allowed to crowd out an adoptable production candidate.
-- Fallback, synthetic, session-mined, and legacy dry-run evidence is review-only and cannot be production-adopted.
+- Fallback, synthetic, session-mined, and other review-only evidence cannot be production-adopted.
 - LLM/judge text is evidence only; it cannot override validation/test gates.
 
 ## Target executors and sandbox safety

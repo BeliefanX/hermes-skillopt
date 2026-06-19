@@ -6,7 +6,6 @@ provides_tools:
   - hermes_skillopt_status
   - hermes_skillopt_scout
   - hermes_skillopt_doctor
-  - hermes_skillopt_dry_run
   - hermes_skillopt_run
   - hermes_skillopt_full_run
   - hermes_skillopt_optimize
@@ -55,6 +54,6 @@ safety_metadata:
   tool_groups:
     read_only: [hermes_skillopt_status, hermes_skillopt_scout, hermes_skillopt_doctor, hermes_skillopt_eval_pack_inventory, hermes_skillopt_eval_pack_doctor, hermes_skillopt_eval_pack_workflow, hermes_skillopt_skill_readiness_queue, hermes_skillopt_review, hermes_skillopt_resume_inspect, hermes_skillopt_fleet_report, hermes_skillopt_fleet_resume_plan, hermes_skillopt_fleet_rollback_plan, hermes_skillopt_artifact_hygiene_report, hermes_skillopt_upstream_status, hermes_skillopt_compare_upstream_pin, hermes_skillopt_benchmark_parity_status, hermes_skillopt_batch_preflight]
     read_only_report: [hermes_skillopt_conformance, hermes_skillopt_transfer_eval, hermes_skillopt_skill_quality]
-    stage_artifacts: [hermes_skillopt_dry_run, hermes_skillopt_run, hermes_skillopt_full_run, hermes_skillopt_optimize, hermes_skillopt_batch_run, hermes_skillopt_eval_pack_autopilot, hermes_skillopt_eval_pack_scaffold, hermes_skillopt_eval_pack_curate, hermes_skillopt_eval_pack_mine_sessions, hermes_skillopt_eval_pack_ingest_correction, hermes_skillopt_eval_pack_ingest_context, hermes_skillopt_eval_pack_negative_boundary, hermes_skillopt_eval_pack_promote, hermes_skillopt_import_upstream_benchmark, hermes_skillopt_handoff_optimize]
+    stage_artifacts: [hermes_skillopt_run, hermes_skillopt_full_run, hermes_skillopt_optimize, hermes_skillopt_batch_run, hermes_skillopt_eval_pack_autopilot, hermes_skillopt_eval_pack_scaffold, hermes_skillopt_eval_pack_curate, hermes_skillopt_eval_pack_mine_sessions, hermes_skillopt_eval_pack_ingest_correction, hermes_skillopt_eval_pack_ingest_context, hermes_skillopt_eval_pack_negative_boundary, hermes_skillopt_eval_pack_promote, hermes_skillopt_import_upstream_benchmark, hermes_skillopt_handoff_optimize]
     writeback: [hermes_skillopt_adopt, hermes_skillopt_rollback]
     upstream: [hermes_skillopt_upstream_update]

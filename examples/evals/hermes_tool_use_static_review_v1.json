@@ -13,8 +13,8 @@
   "provenance": {
     "curator": "hermes-skillopt-maintainers",
     "curation_date": "2026-06-17",
-    "source": "hand-authored Hermes production eval seed",
-    "stability": "frozen task ids and prompts for full-run/adopt eligibility"
+    "source": "hand-authored Hermes static review eval seed",
+    "stability": "frozen task ids and prompts for deterministic review evidence"
   },
   "production_policy": {
     "allow_production_adoption": false,

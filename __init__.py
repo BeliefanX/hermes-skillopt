@@ -47,8 +47,7 @@ SCHEMAS = {
     "hermes_skillopt_status": _schema("Show SkillOpt plugin status, eval_level/evidence_maturity, read-only native Hermes metadata, recent staged runs, lineage summaries, and stale/incomplete checkpoint rows. " + BOUNDARY_NOTE, COMMON_HOME),
     "hermes_skillopt_scout": _schema("Cron-safe read-only notification-ready SkillOpt scout summary: skills/eval-pack inventory, recent staged runs, artifact hygiene, read-only native Hermes metadata, and exact safe next commands. digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. Never runs full_run/optimize/adopt/rollback/fetch; optional output is guarded report-only JSON. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 5}, "stale_after_hours": {"type": "number", "default": 24.0}, "output": {"type": "string", "description": "Optional guarded .json report path; default returns JSON only and writes nothing."}, "digest": {"type": "boolean", "default": False}}),
     "hermes_skillopt_doctor": _schema("Cron-safe read-only SkillOpt readiness/guided UX report: profile paths, skill/eval readiness, recent runs, upstream/parity posture, production checklist, and next actions. digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. Never runs full_run/adopt/rollback/fetch. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "digest": {"type": "boolean", "default": False}}),
-    "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
-    "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only. No auto-adopt and not cron-safe. " + BOUNDARY_NOTE, {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter: trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only. No auto-adopt and not cron-safe. " + BOUNDARY_NOTE, {**FULL_PROPS, "mode": {"type": "string", "enum": ["full"], "default": "full"}}),
     "hermes_skillopt_full_run": _schema("Run full eval-gated core pipeline: load skill state, build eval tasks, frozen target eval, optimizer reflect/edit, strict validation/test gates, hard production-failure blocking, and staged artifacts only. No auto-adopt and not cron-safe. " + BOUNDARY_NOTE, FULL_PROPS),
     "hermes_skillopt_optimize": _schema("Guided eval-gated staged-only optimization alias with intent presets. smoke/review clearly remain review-only; production requires strict/no-mock/explicit eval_file and still never auto-adopts. Not cron-safe. " + BOUNDARY_NOTE, OPTIMIZE_PROPS),
     "hermes_skillopt_batch_preflight": _schema("Read-only deterministic validation of a staged-only SkillOpt batch plan; enforces budget and rejects adopt/writeback fields.", {**COMMON_HOME, "plan": {"type": "object", "description": "Inline batch plan object. Use CLI for JSON path input."}}, ["plan"]),
@@ -142,19 +141,14 @@ def _handle_doctor(args: dict, **kw) -> str:
     return _ok(core.doctor, out_args)
 
 
-def _handle_dry_run(args: dict, **kw) -> str:
-    ctx = kw.get("ctx") or kw.get("context")
-    return _ok(lambda **a: core.dry_run(ctx=ctx, **a), {"skill": args.get("skill"), "goal": args.get("goal"), "session_search": args.get("session_search"), "hermes_home_path": args.get("hermes_home"), "use_llm": bool(args.get("use_llm", False))})
-
-
 def _handle_run(args: dict, **kw) -> str:
     ctx = kw.get("ctx") or kw.get("context")
     if args.get("auto_adopt") and args.get("force"):
         return tool_error("hermes-skillopt failed: auto_adopt cannot be combined with force")
     if args.get("auto_adopt"):
         return tool_error("hermes-skillopt failed: auto_adopt is disabled; run full-run, review, then adopt explicitly")
-    if (args.get("mode") or "full") == "legacy":
-        return _handle_dry_run(args, **kw)
+    if (args.get("mode") or "full") != "full":
+        return tool_error("hermes-skillopt failed: only mode='full' is supported")
     return _ok(core.full_run, _full_args(args, ctx))
 
 
@@ -337,7 +331,6 @@ _TOOLS = (
     ("hermes_skillopt_status", SCHEMAS["hermes_skillopt_status"], _handle_status, "🧰"),
     ("hermes_skillopt_scout", SCHEMAS["hermes_skillopt_scout"], _handle_scout, "🔭"),
     ("hermes_skillopt_doctor", SCHEMAS["hermes_skillopt_doctor"], _handle_doctor, "🩺"),
-    ("hermes_skillopt_dry_run", SCHEMAS["hermes_skillopt_dry_run"], _handle_dry_run, "🧪"),
     ("hermes_skillopt_run", SCHEMAS["hermes_skillopt_run"], _handle_run, "🧠"),
     ("hermes_skillopt_full_run", SCHEMAS["hermes_skillopt_full_run"], _handle_run, "🧠"),
     ("hermes_skillopt_optimize", SCHEMAS["hermes_skillopt_optimize"], _handle_optimize, "🎯"),

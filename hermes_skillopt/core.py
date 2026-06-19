@@ -59,7 +59,6 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_batch_preflight": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_conformance": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_transfer_eval": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
-    "hermes_skillopt_dry_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_full_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
@@ -2015,7 +2014,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     if force and auto_adopt:
         raise ValueError("auto_adopt cannot be combined with force")
     if dry_run:
-        raise ValueError("full_run(dry_run=True) is no longer supported; use dry_run/legacy mode for review-only proposals")
+        raise ValueError("full_run(dry_run=True) is no longer supported; run the staged full-run pipeline and review artifacts before adopt")
     if auto_adopt:
         raise ValueError("auto_adopt is disabled in production; run full-run, review artifacts, then call adopt explicitly")
     from hermes_skillopt.env import HermesEnvAdapter, HermesSkillEnv, is_production_gate_task
@@ -2322,43 +2321,6 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     save_manifest(run_dir, manifest)
     result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "heldout_test_sensitivity": heldout_test_sensitivity, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
     return result
-
-
-def propose_skill(original: str, evidence: list[str] | None = None, goal: str | None = None, ctx: Any = None, use_llm: bool = False) -> tuple[str, str]:
-    fm, body = _frontmatter_split(original)
-    bullets = []
-    if goal:
-        bullets.append(f"- Candidate rule: when this skill is invoked, explicitly check the user's goal: {goal.strip()[:240]}")
-    if evidence:
-        bullets.append("- Evidence-informed TODO: review recent redacted session snippets and convert recurring successful patterns into stable instructions.")
-        for i, snip in enumerate(evidence[:3], 1):
-            bullets.append(f"  - Redacted snippet {i}: {snip[:220]}")
-    if not bullets:
-        bullets = ["- Candidate rule: add a short self-check before final answers: confirm scope, required tools, and safety constraints."]
-    appendix = "\n\n## SkillOpt Candidate Improvements (staged)\n\n" + "\n".join(bullets) + "\n"
-    return fm + body.rstrip() + appendix, "deterministic-legacy"
-
-
-def dry_run(skill: str | None = None, goal: str | None = None, session_search: str | None = None, hermes_home_path: str | None = None, ctx: Any = None, use_llm: bool = False) -> dict[str, Any]:
-    home = hermes_home(hermes_home_path)
-    dirs = ensure_dirs(home)
-    target = find_skill(home, skill)
-    original = read_text(target.path)
-    evidence = evidence_from_state(home, session_search or goal)
-    proposed, engine = propose_skill(original, evidence, goal, ctx, use_llm)
-    rid = now_id() + "-" + target.name.replace("/", "-")
-    run_dir = dirs["staging"] / rid
-    run_dir.mkdir(parents=True, exist_ok=False)
-    diff = make_diff(original, proposed, target.relpath)
-    manifest = {"run_id": rid, "status": "staged", "adoptable": False, "review_only": True, "created_at": datetime.now(timezone.utc).isoformat(), "hermes_home": str(home), "skill_name": target.name, "skill_path": str(target.path), "skill_relpath": target.relpath, "original_sha256": sha256_text(original), "proposed_sha256": sha256_text(proposed), "engine": engine, "files": {"original": "original_SKILL.md", "proposed": "proposed_SKILL.md", "diff": "diff.patch", "report": "report.md", "evidence": "evidence.json"}}
-    write_text(run_dir / "original_SKILL.md", original)
-    write_text(run_dir / "proposed_SKILL.md", proposed)
-    write_text(run_dir / "diff.patch", diff)
-    write_text(run_dir / "evidence.json", json.dumps({"snippets": evidence, "session_harvest_provenance": {"schema_version": "hermes-skillopt-session-harvest-provenance-v1", "source": "direct-state-db-and-log-fallback", "review_only": True, "allow_production_adoption": False, "warning": "Dry-run direct/session-mined evidence is review-only and cannot satisfy production adoption."}}, ensure_ascii=False, indent=2) + "\n")
-    write_text(run_dir / "report.md", f"# SkillOpt dry run\n\n- run_id: {rid}\n- skill: {target.name}\n- engine: {engine}\n- changed: {bool(diff)}\n\n```diff\n{diff[:4000]}\n```\n")
-    manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
-    save_manifest(run_dir, manifest)
-    return {"success": True, "run_id": rid, "status": "staged", "adoptable": False, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(run_dir / "diff.patch"), "report_path": str(run_dir / "report.md"), "changed": bool(diff)}
 
 
 def status(hermes_home_path: str | None = None) -> dict[str, Any]:
@@ -3684,7 +3646,7 @@ def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: boo
     if mock_reasons:
         raise ValueError("Mock/non-production optimizer provenance is review-only and cannot be adopted: " + "; ".join(mock_reasons))
     if m.get("status") != "staged_best" or m.get("adoptable") is not True:
-        raise ValueError("Only adoptable full-run staged_best manifests may be adopted; legacy/fallback/dry-run proposals are review-only")
+        raise ValueError("Only adoptable full-run staged_best manifests may be adopted; fallback/review-only proposals are not eligible")
     gate_policy = m.get("gate_policy")
     if not isinstance(gate_policy, dict) or str(gate_policy.get("mode") or "").lower() != "strict":
         raise ValueError("Production adoption requires strict gate mode; soft/mixed/hard gate manifests are review-only")

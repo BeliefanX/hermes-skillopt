@@ -69,10 +69,10 @@ def test_cli_help_and_plugin_schema_expose_phase4_surface():
     assert full_props["gate_mode"]["default"] == "strict"
 
 
-def test_docs_reference_current_phase4_invariants():
+def test_docs_reference_current_invariants():
     combined = "\n".join(
         (REPO / path).read_text(encoding="utf-8")
-        for path in ("README.md", "UPSTREAM.md", "docs/architecture-gap.md", "docs/release-notes.md")
+        for path in ("README.md", "UPSTREAM.md", "docs/architecture.md", "docs/release-notes.md")
     )
     combined_lower = combined.lower()
     for phrase in (

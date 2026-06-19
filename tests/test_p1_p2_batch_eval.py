@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from hermes_skillopt import core
+from skillopt_test_fixtures import stage_review_fixture
 from hermes_skillopt.env import load_eval_pack
 from hermes_skillopt.batch import batch_preflight, run_batch
 from hermes_skillopt.eval_packs import create_curated_eval_pack, eval_pack_autopilot, eval_pack_doctor, eval_pack_inventory, generate_negative_boundary_eval_pack, ingest_skill_context_eval_seed, ingest_user_correction_eval_seed, mine_session_eval_pack, promote_eval_pack, scaffold_eval_pack
@@ -443,7 +444,7 @@ def test_cli_help_and_plugin_metadata_include_p1_p2_tools():
 
 def test_fleet_report_resume_and_rollback_plans_are_read_only(tmp_path):
     make_skill(tmp_path, "demo")
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     incomplete_dir = tmp_path / "skillopt" / "staging" / "incomplete-demo"
     incomplete_dir.mkdir(parents=True)
     cp = {"status": "running", "input": {"skill_name": "demo", "skill_relpath": "skills/demo/SKILL.md"}, "input_sha256": "abc", "completed_stages": ["rollout"]}
@@ -480,7 +481,7 @@ def test_fleet_report_resume_and_rollback_plans_are_read_only(tmp_path):
 
 def test_fleet_report_warns_on_tampered_manifest(tmp_path):
     make_skill(tmp_path, "demo")
-    run = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    run = stage_review_fixture(tmp_path, "demo")
     run_dir = tmp_path / "skillopt" / "staging" / run["run_id"]
     (run_dir / "report.md").write_text("tampered", encoding="utf-8")
     report = core.fleet_report(str(tmp_path))
@@ -491,11 +492,11 @@ def test_fleet_report_warns_on_tampered_manifest(tmp_path):
 
 def test_artifact_hygiene_report_classifies_verified_tampered_checkpoint_stale_and_orphaned(tmp_path):
     make_skill(tmp_path, "demo")
-    verified = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    verified = stage_review_fixture(tmp_path, "demo")
     verified_dir = tmp_path / "skillopt" / "staging" / verified["run_id"]
     assert verified_dir.is_dir()
 
-    tampered = core.dry_run(skill="demo", hermes_home_path=str(tmp_path))
+    tampered = stage_review_fixture(tmp_path, "demo")
     tampered_dir = tmp_path / "skillopt" / "staging" / tampered["run_id"]
     (tampered_dir / "report.md").write_text("tampered", encoding="utf-8")
 
