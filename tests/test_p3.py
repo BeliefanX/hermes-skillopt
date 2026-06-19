@@ -378,7 +378,7 @@ def test_fleet_report_groups_readiness_and_rollback_plan_verifies_backup(tmp_pat
     row = report["latest_runs"][0]
 
     assert report["schema_version"] == "hermes-skillopt-fleet-report-v2"
-    assert {g["key"] for g in report["groups"]["by_readiness"]} == {"production_candidate"}
+    assert {g["key"] for g in report["groups"]["by_readiness"]} == {"review_only_or_not_ready"}
     assert {g["key"] for g in report["groups"]["by_rollbackability"]} == {"rollbackable"}
     assert row["skill_type"]["advisory_only"] is True
     assert row["evidence_contract"]["target_execution"]["complete"] is True

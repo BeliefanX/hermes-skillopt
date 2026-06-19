@@ -40,27 +40,27 @@ SECRET_PATTERNS = [
 ]
 
 TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
-    "hermes_skillopt_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_scout": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_eval_pack_inventory": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_eval_pack_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_resume_inspect": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_fleet_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_fleet_resume_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_fleet_rollback_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_artifact_hygiene_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_upstream_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_compare_upstream_pin": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_benchmark_parity_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_batch_preflight": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True},
-    "hermes_skillopt_conformance": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": True},
-    "hermes_skillopt_transfer_eval": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": True},
-    "hermes_skillopt_dry_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
-    "hermes_skillopt_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
-    "hermes_skillopt_full_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
-    "hermes_skillopt_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
+    "hermes_skillopt_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_scout": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_eval_pack_inventory": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_eval_pack_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": "digest_only", "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_resume_inspect": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_fleet_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_fleet_resume_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_fleet_rollback_plan": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_artifact_hygiene_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_upstream_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_compare_upstream_pin": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_benchmark_parity_status": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_batch_preflight": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_conformance": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_transfer_eval": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_report_only", "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_dry_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
+    "hermes_skillopt_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
+    "hermes_skillopt_full_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
+    "hermes_skillopt_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_batch_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
     "hermes_skillopt_eval_pack_autopilot": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output_only_when_write_draft_true", "cron_safe": "plan_only_without_write_draft"},
     "hermes_skillopt_eval_pack_scaffold": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
@@ -72,13 +72,13 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_eval_pack_promote": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output_no_auto_adopt", "cron_safe": False},
     "hermes_skillopt_import_upstream_benchmark": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_handoff_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "handoff_artifact_only", "cron_safe": False},
-    "hermes_skillopt_adopt": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_with_backup", "cron_safe": False},
-    "hermes_skillopt_rollback": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_restore", "cron_safe": False},
+    "hermes_skillopt_adopt": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_with_backup", "cron_safe": False, "auto_adopt": False, "requires_typed_confirmation": True, "curator_replacement": False},
+    "hermes_skillopt_rollback": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_restore", "cron_safe": False, "auto_adopt": False, "requires_typed_confirmation": True, "curator_replacement": False},
     "hermes_skillopt_upstream_update": {"safety_group": "upstream", "risk_level": "high", "writes": "pinned_upstream_clone_and_lock", "cron_safe": False},
 }
 TOOL_SAFETY_GROUPS: dict[str, dict[str, Any]] = {
-    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch.", "scheduled_default": True},
-    "read_only_report": {"description": "Read-only checks that may write an explicitly requested report artifact.", "scheduled_default": True},
+    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch. Only scout, doctor, eval-pack-inventory, and review --digest are cron-safe defaults.", "scheduled_default": "limited"},
+    "read_only_report": {"description": "Read-only checks that may write an explicitly requested report artifact; not cron-safe by default.", "scheduled_default": False},
     "stage_artifacts": {"description": "Creates guarded staging/eval/handoff artifacts for human review; never auto-adopts.", "scheduled_default": False},
     "writeback": {"description": "Writes live SKILL.md after explicit typed confirmation and guard checks.", "scheduled_default": False},
     "upstream": {"description": "Touches the pinned upstream clone/lock only; not plugin code, but network/write side effects remain human-triggered.", "scheduled_default": False},
@@ -91,7 +91,8 @@ def tool_safety_catalog() -> dict[str, Any]:
     return {
         "schema_version": "hermes-skillopt-tool-safety-v1",
         "compatibility": "metadata_only_all_existing_tools_remain_available",
-        "scheduled_default_guidance": "Schedule only read-only scout/doctor/status/eval-pack-inventory/review digest surfaces; never cron optimize/full-run/adopt/rollback/upstream-update.",
+        "scheduled_default_guidance": "Schedule only scout, doctor, eval-pack-inventory, or review --digest surfaces; never cron optimize, full-run, adopt, rollback, writeback, upstream-update, or status.",
+        "native_hermes_boundary": "SkillOpt reads native Hermes metadata as advisory guard input only. It does not replace the Hermes curator: curator owns lifecycle/archive/consolidation; SkillOpt owns staged eval evidence and adoption recommendations.",
         "groups": json.loads(json.dumps(TOOL_SAFETY_GROUPS, sort_keys=True)),
         "tools": json.loads(json.dumps(TOOL_SAFETY_METADATA, sort_keys=True)),
     }
@@ -463,10 +464,14 @@ def _adopt_time_artifact_crosscheck(run_dir: Path, manifest: dict[str, Any]) -> 
 
     if not isinstance(target_execution_evidence, dict) or target_execution_evidence.get("schema_version") != "skillopt-target-execution-evidence-v1":
         raise ValueError("Manifest target execution evidence artifact is invalid; refusing to adopt")
-    if target_execution_evidence.get("classification") == "frozen_hermes_target_execution_v1" and target_execution_evidence.get("complete") is not True:
-        raise ValueError("Frozen Hermes target execution evidence is incomplete; refusing to adopt")
+    reviewer_gate_for_ledger: dict[str, Any] = reviewer_gate if isinstance(reviewer_gate, dict) else {}
+    evidence_ledger = _eval_evidence_ledger(target_execution_evidence=target_execution_evidence, reviewer_gate=reviewer_gate_for_ledger)
+    if evidence_ledger.get("production_runtime_ready") is not True:
+        raise ValueError("Frozen Hermes target execution evidence is not production-runtime complete; refusing to adopt: " + "; ".join(str(x) for x in (evidence_ledger.get("blockers") or [])))
     manifest_txe = manifest.get("target_execution_evidence") if isinstance(manifest.get("target_execution_evidence"), dict) else {}
     _manifest_equal(target_execution_evidence.get("fingerprint_sha256"), manifest_txe.get("fingerprint_sha256"), "target_execution_evidence")
+    for field in ("complete", "classification", "real_hermes_runtime_evidence", "real_hermes_runtime_invocation", "task_commands_executed", "internal_review_only_runner"):
+        _manifest_equal(target_execution_evidence.get(field), manifest_txe.get(field), f"target_execution_evidence.{field}")
     if not isinstance(reviewer_gate, dict) or reviewer_gate.get("schema_version") != "skillopt-reviewer-gate-v1":
         raise ValueError("Manifest reviewer gate artifact is invalid; refusing to adopt")
     if reviewer_gate.get("adoptable_after_reviewer_gate") is not True or reviewer_gate.get("passed") is not True:
@@ -1169,6 +1174,50 @@ def _production_eval_policy(evidence: dict[str, Any], production_gate_available:
     return policy
 
 
+def _eval_evidence_ledger(payload: dict[str, Any] | None = None, *, target_execution_evidence: dict[str, Any] | None = None, reviewer_gate: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Explicit maturity ledger for all review/status/adopt surfaces."""
+
+    p: dict[str, Any] = payload if isinstance(payload, dict) else {}
+    txe: dict[str, Any] = target_execution_evidence if isinstance(target_execution_evidence, dict) else {}
+    if not txe and isinstance(p.get("target_execution_evidence"), dict):
+        txe = p["target_execution_evidence"]
+    rg: dict[str, Any] = reviewer_gate if isinstance(reviewer_gate, dict) else {}
+    if not rg and isinstance(p.get("reviewer_gate"), dict):
+        rg = p["reviewer_gate"]
+    complete_frozen = txe.get("classification") == "frozen_hermes_target_execution_v1" and txe.get("complete") is True
+    real_runtime = txe.get("real_hermes_runtime_evidence") is True and txe.get("real_hermes_runtime_invocation") is True
+    no_task_commands = txe.get("task_commands_executed") is False
+    internal_review_only = txe.get("internal_review_only_runner") is True
+    reviewer_adoptable = rg.get("passed") is True and rg.get("adoptable_after_reviewer_gate") is True
+    production_ready = bool(complete_frozen and real_runtime and no_task_commands and not internal_review_only and reviewer_adoptable)
+    level = "production" if production_ready else "review_only"
+    blockers: list[str] = []
+    if not complete_frozen:
+        blockers.append("complete frozen target execution evidence is missing")
+    if not real_runtime:
+        blockers.append("real Hermes runtime invocation/evidence is missing")
+    if not no_task_commands:
+        blockers.append("task-provided command execution is absent/unknown or executed")
+    if internal_review_only:
+        blockers.append("internal deterministic/replay/sandbox/live-disabled runner is review-only")
+    if not reviewer_adoptable:
+        blockers.append("deterministic reviewer gate is missing or not adoptable")
+    return {
+        "schema_version": "hermes-skillopt-evidence-ledger-v1",
+        "eval_level": level,
+        "evidence_maturity": "production_runtime_complete" if production_ready else "review_only_static_replay_or_incomplete_runtime",
+        "review_only_unless_complete_real_hermes_runtime": True,
+        "production_runtime_ready": production_ready,
+        "complete_frozen_evidence": complete_frozen,
+        "real_hermes_runtime_evidence": txe.get("real_hermes_runtime_evidence") is True,
+        "real_hermes_runtime_invocation": txe.get("real_hermes_runtime_invocation") is True,
+        "task_commands_executed": txe.get("task_commands_executed"),
+        "internal_review_only_runner": internal_review_only,
+        "reviewer_gate_adoptable": reviewer_adoptable,
+        "blockers": sorted(set(blockers)),
+    }
+
+
 def _flatten_eval_results(*evals: dict[str, Any] | None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for ev in evals:
@@ -1223,7 +1272,10 @@ def _target_execution_evidence_summary(*, target_config: dict[str, Any], validat
     payload = {
         "schema_version": "skillopt-target-execution-evidence-v1",
         "classification": "frozen_hermes_target_execution_v1" if frozen_requested else "non_frozen_or_scorecard_target",
-        "implementation_label": "sandbox_mvp_fixed_runner_review_only" if sandbox_mvp else "deterministic_or_readonly_target",
+        "implementation_label": "sandbox_mvp_fixed_runner_review_only" if sandbox_mvp else (backend_kind or "deterministic_or_readonly_target"),
+        "eval_level": "production" if complete else "review_only",
+        "evidence_maturity": "production_runtime_complete" if complete else "review_only_static_replay_or_incomplete_runtime",
+        "production_gate_eligible": complete,
         "production_adoption_requires_complete_evidence": True,
         "complete": complete,
         "review_only_unless_complete": True,
@@ -1316,6 +1368,7 @@ def _resume_input_payload(*, home: Path, target: Skill, original: str, query: st
     from hermes_skillopt.target import TRACE_SCHEMA_VERSION, TargetExecutor
 
     state = SkillState(name=target.name, path=target.path, relpath=target.relpath, text=original, sha256=sha256_text(original), hermes_home=home)
+    native_metadata = native_skill_metadata_snapshot(home, target)
     resolved_eval = resolve_eval_file(home, state, eval_file)
     eval_path = str(resolved_eval) if resolved_eval else None
     eval_pack_identity: dict[str, Any] | None = None
@@ -1331,6 +1384,7 @@ def _resume_input_payload(*, home: Path, target: Skill, original: str, query: st
         "skill_name": target.name,
         "skill_relpath": target.relpath,
         "original_sha256": sha256_text(original),
+        "native_hermes_metadata": native_metadata,
         "query": query,
         "lookback_days": int(lookback_days),
         "limit": int(limit),
@@ -1893,6 +1947,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     optimizer_backend = optimizer_backend or backend
     target_backend = target_backend or target_executor
     resume_input = _resume_input_payload(home=home, target=target, original=original, query=query, lookback_days=lookback_days, limit=limit, iterations=iterations, edit_budget=edit_budget, candidate_count=candidate_count, optimizer_backend=optimizer_backend, target_backend=target_backend, gate_mode=gate_mode, eval_file=eval_file, allow_mock=allow_mock)
+    native_metadata = resume_input.get("native_hermes_metadata") if isinstance(resume_input.get("native_hermes_metadata"), dict) else native_skill_metadata_snapshot(home, target)
     if resume_run_id:
         resume_dir = resolve_run_dir(home, resume_run_id)
         try:
@@ -2047,6 +2102,12 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         if reason not in adoptability_reasons:
             adoptability_reasons.append(reason)
     write_text(artifacts.reviewer_gate, json.dumps(reviewer_gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    evidence_ledger = _eval_evidence_ledger(target_execution_evidence=target_execution_evidence, reviewer_gate=reviewer_gate)
+    if adoptable and evidence_ledger.get("production_runtime_ready") is not True:
+        adoptable = False
+        for reason in evidence_ledger.get("blockers") or ["evidence ledger is not production-runtime ready"]:
+            if reason not in adoptability_reasons:
+                adoptability_reasons.append(str(reason))
     production_eval_policy = _production_eval_policy(evidence, production_gate_available, test_gate_eligible)
     optimizer_config = optimizer.config.as_dict()
     optimizer_prompt_fingerprints = list(getattr(optimizer, "prompt_fingerprints", []) or [])
@@ -2107,6 +2168,8 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "skill_path": str(target.path),
         "skill_relpath": target.relpath,
         "original_sha256": sha256_text(original),
+        "native_hermes_metadata": native_metadata,
+        "native_hermes_adopt_guard_at_stage": native_adopt_guard(home, target, {"native_hermes_metadata": native_metadata}),
         "proposed_sha256": sha256_text(proposed),
         "engine": "hermes-native-skillopt-core-adapter",
         "algorithm_version": ALGORITHM_VERSION,
@@ -2132,7 +2195,10 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
         "benchmark_parity_status": benchmark_parity,
         "provenance_fingerprint": provenance,
         "production_eval_policy": production_eval_policy,
-        "target_execution_evidence": {"file": "target_execution_evidence.json", "complete": target_execution_evidence.get("complete"), "classification": target_execution_evidence.get("classification"), "fingerprint_sha256": target_execution_evidence.get("fingerprint_sha256")},
+        "eval_level": evidence_ledger.get("eval_level"),
+        "evidence_maturity": evidence_ledger.get("evidence_maturity"),
+        "evidence_ledger": evidence_ledger,
+        "target_execution_evidence": {"file": "target_execution_evidence.json", "complete": target_execution_evidence.get("complete"), "classification": target_execution_evidence.get("classification"), "eval_level": target_execution_evidence.get("eval_level"), "evidence_maturity": target_execution_evidence.get("evidence_maturity"), "real_hermes_runtime_evidence": target_execution_evidence.get("real_hermes_runtime_evidence"), "real_hermes_runtime_invocation": target_execution_evidence.get("real_hermes_runtime_invocation"), "task_commands_executed": target_execution_evidence.get("task_commands_executed"), "internal_review_only_runner": target_execution_evidence.get("internal_review_only_runner"), "fingerprint_sha256": target_execution_evidence.get("fingerprint_sha256")},
         "reviewer_gate": {"file": "reviewer_gate.json", "passed": reviewer_gate.get("passed"), "adoptable_after_reviewer_gate": reviewer_gate.get("adoptable_after_reviewer_gate"), "fingerprint_sha256": reviewer_gate.get("fingerprint_sha256")},
         "per_task_delta": per_task_delta,
         "heldout_test_sensitivity": heldout_test_sensitivity,
@@ -2169,7 +2235,7 @@ def full_run(skill: str | None = None, query: str | None = None, lookback_days: 
     manifest["artifact_lineage"] = _artifact_lineage_status(run_dir, manifest)
     manifest["artifact_sha256"] = artifact_hashes(run_dir, manifest["files"])
     save_manifest(run_dir, manifest)
-    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "heldout_test_sensitivity": heldout_test_sensitivity, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
+    result = {"success": True, "run_id": rid, "status": final_status, "adoptable": adoptable, "production_gate_eligible": production_gate_eligible, "test_gate_eligible": test_gate_eligible, "strict_gate_mode": strict_gate_mode, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "not_adoptable_reasons": adoptability_reasons, "run_dir": str(run_dir), "skill": target.name, "diff_path": str(artifacts.diff), "report_path": str(artifacts.report), "gate": best_gate, "production_gate": production_validation_summary, "test_results": test_results, "heldout_test_sensitivity": heldout_test_sensitivity, "split_scores": split_scores, "per_task_delta": per_task_delta, "candidate_comparison": candidate_comparison, "regression_cases": regression_cases, "candidate_summary": candidate_summary, "optimizer_backend_config": optimizer_config, "target_backend_config": target_config, "gate_policy": gate_policy, "provenance_fingerprint": provenance, "artifact_lineage": manifest["artifact_lineage"], "benchmark_parity_status": benchmark_parity, "changed": bool(diff), "eval_file": eval_file_used, "task_counts": evidence.get("task_counts", {k: len(v) for k, v in tasks.items()}), "current_score": current_score, "candidate_score": candidate_score, "production_current_score": production_current_score, "production_candidate_score": production_candidate_score, "gate_reason": gate_reason, "checkpoint_path": str(run_dir / "checkpoint.json"), "slow_meta_path": str(artifacts.slow_meta)}
     return result
 
 
@@ -2215,7 +2281,7 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
     dirs = skillopt_paths(home)
     runs = []
     seen_dirs: set[Path] = set()
-    manifest_keys = ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "target_executor", "target_execution_evidence", "reviewer_gate", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score")
+    manifest_keys = ("run_id", "status", "skill_name", "created_at", "engine", "backend", "adoptable", "production_gate_eligible", "test_gate_eligible", "eval_level", "evidence_maturity", "evidence_ledger", "target_executor", "target_execution_evidence", "reviewer_gate", "split_scores", "production_eligibility_reasons", "validation_current_score", "validation_candidate_score", "test_score", "native_hermes_metadata", "native_hermes_adopt_guard_at_stage")
     for m in sorted(dirs["staging"].glob("*/manifest.json"), reverse=True)[:20]:
         try:
             d = json.loads(read_text(m))
@@ -2223,7 +2289,10 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             seen_dirs.add(run_dir)
             row = {k: d.get(k) for k in manifest_keys}
             row["readiness_adoptability"] = readiness_adoptability_schema(d)
-            row["evidence_class"] = "production_candidate" if row["readiness_adoptability"].get("adoptable") and row["readiness_adoptability"].get("production_gate_eligible") and row["readiness_adoptability"].get("test_gate_eligible") else "review_only_or_not_ready"
+            row["evidence_ledger"] = d.get("evidence_ledger") if isinstance(d.get("evidence_ledger"), dict) else _eval_evidence_ledger(d)
+            row["eval_level"] = row["evidence_ledger"].get("eval_level")
+            row["evidence_maturity"] = row["evidence_ledger"].get("evidence_maturity")
+            row["evidence_class"] = "production_candidate" if row["readiness_adoptability"].get("adoptable") and row["readiness_adoptability"].get("production_gate_eligible") and row["readiness_adoptability"].get("test_gate_eligible") and row["evidence_ledger"].get("production_runtime_ready") else "review_only_or_not_ready"
             row["score_provenance"] = _score_provenance_summary(d)
             row["run_dir"] = str(run_dir)
             hygiene = _hygiene_row(run_dir, stale_after_hours=24.0)
@@ -2274,6 +2343,9 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             "run_dir": str(run_dir),
             "artifact_state": _slim_artifact_state(run_dir),
             "artifact_lineage": lineage,
+            "eval_level": "review_only",
+            "evidence_maturity": "review_only_static_replay_or_incomplete_runtime",
+            "evidence_ledger": _eval_evidence_ledger({}),
             "evidence_class": "review_only_or_not_ready",
         }
         checkpoint_only.append(row)
@@ -2326,6 +2398,10 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
     production_gate_eligible = payload.get("production_gate_eligible") is True
     test_gate_eligible = payload.get("test_gate_eligible") is True
     strict_gate_mode = payload.get("strict_gate_mode") is True or (isinstance(payload.get("gate_policy"), dict) and payload["gate_policy"].get("mode") == "strict")
+    raw_ledger = payload.get("evidence_ledger")
+    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else _eval_evidence_ledger(payload)
+    if adoptable and evidence_ledger.get("production_runtime_ready") is not True:
+        warnings.append("inconsistent manifest: adoptable true without production-runtime evidence ledger readiness")
     if adoptable and (not production_gate_eligible or not test_gate_eligible):
         warnings.append("inconsistent manifest: adoptable true without both production/test eligibility gates")
     review_only = not adoptable
@@ -2358,6 +2434,9 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
         "adoptable": adoptable,
         "production_gate_eligible": production_gate_eligible,
         "test_gate_eligible": test_gate_eligible,
+        "eval_level": evidence_ledger.get("eval_level"),
+        "evidence_maturity": evidence_ledger.get("evidence_maturity"),
+        "evidence_ledger": evidence_ledger,
         "review_only": review_only,
         "blockers": sorted(set(blockers)),
         "warnings": warnings,
@@ -2383,7 +2462,7 @@ def review_decision_summary(run_id: str | None = None, hermes_home_path: str | N
     adoptable = reviewed.get("adoptable") is True
     production_gate_eligible = reviewed.get("production_gate_eligible") is True
     test_gate_eligible = reviewed.get("test_gate_eligible") is True
-    evidence_class = "production_candidate" if adoptable and production_gate_eligible and test_gate_eligible else "review_only_or_not_ready"
+    evidence_class = "production_candidate" if adoptable and production_gate_eligible and test_gate_eligible and (reviewed.get("evidence_ledger") or {}).get("production_runtime_ready") else "review_only_or_not_ready"
     readiness = readiness_adoptability_schema(reviewed)
     return {
         "success": True,
@@ -2396,6 +2475,11 @@ def review_decision_summary(run_id: str | None = None, hermes_home_path: str | N
         "production_gate_eligible": production_gate_eligible,
         "test_gate_eligible": test_gate_eligible,
         "evidence_class": evidence_class,
+        "eval_level": reviewed.get("eval_level") or readiness.get("eval_level"),
+        "evidence_maturity": reviewed.get("evidence_maturity") or readiness.get("evidence_maturity"),
+        "evidence_ledger": reviewed.get("evidence_ledger") or readiness.get("evidence_ledger"),
+        "native_hermes_metadata": reviewed.get("native_hermes_metadata"),
+        "native_hermes_adopt_guard": reviewed.get("native_hermes_adopt_guard"),
         "validation_gate": readiness["validation_gate"],
         "production_best_gate": readiness["production_best_gate"],
         "heldout_test_gate": readiness["heldout_test_gate"],
@@ -2426,7 +2510,9 @@ def review_digest(run_id: str | None = None, hermes_home_path: str | None = None
         f"decision: {summary.get('decision')}",
         f"adoptable: {summary.get('adoptable')} | production_gate_eligible: {summary.get('production_gate_eligible')} | test_gate_eligible: {summary.get('test_gate_eligible')}",
         f"review_only: {summary.get('review_only')}",
+        f"eval_level: {summary.get('eval_level')} | evidence_maturity: {summary.get('evidence_maturity')}",
         f"evidence_class: {summary.get('evidence_class')}",
+        "boundary: SkillOpt is staged eval evidence/adoption recommendations only; Hermes curator owns lifecycle/archive/consolidation.",
         f"score_provenance: executor={score_prov.get('target_executor')} backend={score_prov.get('optimizer_backend')} source={score_prov.get('score_source')}",
         f"eval_pack: id={eval_pack.get('id')} version={eval_pack.get('version')} path={eval_pack.get('path')} fingerprint={eval_pack.get('fingerprint_sha256')}",
     ]
@@ -2534,6 +2620,164 @@ def _truthy_metadata_value(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "pinned", "archived"}
 
 
+def _native_sidecar_json(path: Path) -> tuple[Any | None, dict[str, Any]]:
+    """Best-effort read of Hermes-owned skill metadata sidecars; never writes."""
+
+    meta = {"path": str(path), "present": path.is_file(), "readable": False, "sha256": None, "error": None}
+    if not path.is_file() or path.is_symlink():
+        if path.is_symlink():
+            meta["error"] = "symlink sidecar skipped"
+        return None, meta
+    try:
+        meta["sha256"] = sha256_file(path)
+        data = json.loads(read_text(path))
+        meta["readable"] = True
+        return data, meta
+    except Exception as exc:
+        meta["error"] = f"{type(exc).__name__}: {exc}"
+        return None, meta
+
+
+def _native_record_for_skill(data: Any, skill: Skill) -> dict[str, Any]:
+    if not isinstance(data, (dict, list)):
+        return {}
+    keys = {
+        skill.name.lower(),
+        skill.relpath.lower(),
+        str(Path(skill.relpath).parent).lower(),
+        skill.path.parent.name.lower(),
+    }
+
+    def score_record(key: str | None, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        candidates = {str(key or "").lower()}
+        for field in ("name", "skill", "skill_name", "relpath", "path", "skill_relpath", "directory", "id"):
+            if value.get(field) is not None:
+                candidates.add(str(value.get(field)).lower())
+        if candidates & keys:
+            return dict(value)
+        return {}
+
+    if isinstance(data, dict):
+        containers = [data]
+        for field in ("skills", "skill_usage", "usage", "installed", "bundled", "manifests", "entries"):
+            child = data.get(field)
+            if isinstance(child, dict):
+                containers.append(child)
+            elif isinstance(child, list):
+                for row in child:
+                    hit = score_record(None, row)
+                    if hit:
+                        return hit
+        for container in containers:
+            for key, value in container.items():
+                hit = score_record(str(key), value)
+                if hit:
+                    return hit
+                if str(key).lower() in keys and not isinstance(value, dict):
+                    return {"value": value}
+    if isinstance(data, list):
+        for row in data:
+            hit = score_record(None, row)
+            if hit:
+                return hit
+    return {}
+
+
+def _native_bool(record: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, bool):
+            if value:
+                return True
+            continue
+        if _truthy_metadata_value(str(value) if value is not None else None):
+            return True
+    return False
+
+
+def native_skill_metadata_snapshot(home: Path, skill: Skill) -> dict[str, Any]:
+    """Read-only snapshot of native Hermes skill metadata used for advisory UX and adopt guards."""
+
+    sidecar_paths = {
+        "usage": home / "skills" / ".usage.json",
+        "curator_state": home / "skills" / ".curator_state",
+        "hub_manifest": home / "skills" / ".hub_manifest.json",
+        "bundled_manifest": home / "skills" / ".bundled_manifest.json",
+        "manifest": home / "skills" / ".manifest.json",
+        "provenance": home / "skills" / ".provenance.json",
+        "skill_provenance": home / "skills" / ".skill_provenance.json",
+        "per_skill_provenance": skill.path.parent / ".provenance.json",
+        "per_skill_skill_provenance": skill.path.parent / ".skill_provenance.json",
+    }
+    sidecars: dict[str, Any] = {}
+    records: dict[str, dict[str, Any]] = {}
+    per_skill_sidecars = {"per_skill_provenance", "per_skill_skill_provenance"}
+    for name, path in sidecar_paths.items():
+        data, meta = _native_sidecar_json(path)
+        sidecars[name] = meta
+        record = _native_record_for_skill(data, skill) if data is not None else {}
+        # Per-skill provenance sidecars are already scoped by their path, so a
+        # bare record like {"created_by": "agent", "origin": "hub"} is valid.
+        if not record and name in per_skill_sidecars and isinstance(data, dict):
+            record = dict(data)
+        records[name] = record
+    usage = records.get("usage", {})
+    curator = records.get("curator_state", {})
+    hub = records.get("hub_manifest", {})
+    bundled = records.get("bundled_manifest", {}) or records.get("manifest", {})
+    merged_text = " ".join(json.dumps(r, sort_keys=True, ensure_ascii=False).lower() for r in records.values() if r)
+    provenance_text = " ".join(str(r.get(field, "")).lower() for r in records.values() for field in ("created_by", "origin", "source", "createdBy", "created-by") if isinstance(r, dict))
+    agent_tokens = ("agent", "agent_created", "agent-created", "background_review", "background-review")
+    user_tokens = ("user", "manual", "human", "local")
+    hub_installed = bool(hub) or _native_bool(usage, "hub_installed", "installed_from_hub") or "hub" in provenance_text or "hub" in str(usage.get("origin") or usage.get("source") or "").lower()
+    bundled_signal = bool(bundled) or _native_bool(usage, "bundled", "is_bundled") or "bundled" in merged_text
+    agent_created = _native_bool(curator, "agent_created", "background_review") or any(token in merged_text for token in agent_tokens) or any(token in provenance_text for token in agent_tokens)
+    background_review = _native_bool(curator, "background_review", "reviewed_in_background") or "background_review" in merged_text or "background-review" in merged_text
+    user_created = any(token in provenance_text for token in user_tokens) or any(f'"created_by": "{token}"' in merged_text for token in user_tokens)
+    signals = {
+        "hub_installed": hub_installed,
+        "bundled": bundled_signal,
+        "agent_created": agent_created,
+        "user_created": user_created,
+        "background_review": background_review,
+        "local_manual_unknown": not bool(hub_installed or bundled_signal or agent_created or background_review or user_created) and not any(token in merged_text for token in ("hub", "bundled", "agent_created", "background_review")),
+        "pinned": _native_bool(usage, "pinned", "pin") or _native_bool(curator, "pinned", "pin") or "pinned" in merged_text,
+        "archived": _native_bool(usage, "archived") or _native_bool(curator, "archived") or "archived" in merged_text,
+        "curator_managed": bool(curator) or _native_bool(curator, "managed", "curator_managed"),
+        "stale": _native_bool(usage, "stale") or "stale" in str(usage.get("state") or usage.get("status") or "").lower(),
+        "active": _native_bool(usage, "active") or str(usage.get("state") or usage.get("status") or "").lower() == "active",
+    }
+    labels = [k for k, v in signals.items() if v and k != "curator_managed"] or ["local_manual_unknown"]
+    snapshot = {
+        "schema_version": "hermes-native-skill-metadata-snapshot-v1",
+        "read_only": True,
+        "skill_name": skill.name,
+        "skill_relpath": skill.relpath,
+        "labels": labels,
+        "signals": signals,
+        "records": {k: v for k, v in records.items() if v},
+        "sidecars": sidecars,
+    }
+    snapshot["fingerprint_sha256"] = _stable_json_sha({"signals": signals, "records": snapshot["records"], "sidecars": {k: {"present": v.get("present"), "readable": v.get("readable"), "sha256": v.get("sha256")} for k, v in sidecars.items()}})
+    return snapshot
+
+
+def native_adopt_guard(home: Path, skill: Skill, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    current = native_skill_metadata_snapshot(home, skill)
+    signals = current.get("signals") if isinstance(current.get("signals"), dict) else {}
+    blockers = []
+    for key in ("hub_installed", "bundled", "pinned", "archived", "curator_managed"):
+        if signals.get(key):
+            blockers.append(f"native Hermes metadata marks skill as {key}; adopt is blocked by default and force does not override")
+    base = (manifest or {}).get("native_hermes_metadata") if isinstance(manifest, dict) else None
+    base_fingerprint = base.get("fingerprint_sha256") if isinstance(base, dict) else None
+    if base_fingerprint and base_fingerprint != current.get("fingerprint_sha256"):
+        blockers.append("native Hermes metadata changed since staging; rerun SkillOpt after reviewing native sidecars")
+    return {"schema_version": "hermes-native-adopt-guard-v1", "allowed": not blockers, "blockers": blockers, "current": current, "base_fingerprint_sha256": base_fingerprint, "current_fingerprint_sha256": current.get("fingerprint_sha256"), "force_override_allowed": False}
+
+
 def _skill_metadata_summary(skill: Skill, home: Path | None = None) -> dict[str, Any]:
     """Advisory curator/package metadata; never an adoption authority."""
 
@@ -2561,12 +2805,16 @@ def _skill_metadata_summary(skill: Skill, home: Path | None = None) -> dict[str,
     if signals["archived"]:
         warnings.append("archived skill: scout treats this as advisory/skip-by-default; prefer no optimization")
     package_support = _safe_skill_package_support(skill, home) if home is not None else {"schema_version": "hermes-skillopt-skill-package-support-v1", "advisory_only": True, "content_included": False, "skill_relpath": skill.relpath, "support_dirs": {}, "total_file_count": 0, "warnings": ["home unavailable; package support not scanned"]}
+    native = native_skill_metadata_snapshot(home, skill) if home is not None else {"schema_version": "hermes-native-skill-metadata-snapshot-v1", "read_only": True, "labels": ["unavailable"], "signals": {}, "sidecars": {}}
+    native_signals = native.get("signals") if isinstance(native.get("signals"), dict) else {}
+    combined_signals = {**signals, **{f"native_{k}": v for k, v in native_signals.items()}}
     return {
         "schema_version": "hermes-skillopt-skill-metadata-advisory-v1",
         "advisory_only": True,
         "hard_gate": False,
-        "labels": labels or ["unlabeled"],
-        "signals": signals,
+        "labels": sorted(set((labels or ["unlabeled"]) + [f"native:{x}" for x in (native.get("labels") or [])])),
+        "signals": combined_signals,
+        "native_hermes_metadata": native,
         "frontmatter_keys": sorted(fm.keys()),
         "package_summary": {
             "name": skill.name,
@@ -2604,7 +2852,7 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
         except Exception:
             skills = []
     metadata_by_name = {sk.name: _skill_metadata_summary(sk, home) for sk in skills}
-    skipped_by_default = [name for name, meta in metadata_by_name.items() if meta["signals"].get("pinned") or meta["signals"].get("archived")]
+    skipped_by_default = [name for name, meta in metadata_by_name.items() if meta["signals"].get("pinned") or meta["signals"].get("archived") or meta["signals"].get("native_pinned") or meta["signals"].get("native_archived") or meta["signals"].get("native_hub_installed") or meta["signals"].get("native_bundled")]
     inv_skills_raw = inv.get("skills") if isinstance(inv, dict) else []
     inv_skills = inv_skills_raw if isinstance(inv_skills_raw, list) else []
     production_ready = [row for row in inv_skills if isinstance(row, dict) and row.get("production_eligible")]
@@ -2663,17 +2911,21 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
             "invalid_eval_pack_count": inv.get("invalid_pack_count", len(invalid_pack)),
             "recent_staged_run_count": len(recent_runs),
             "latest_run_id": latest_run_id or None,
+            "latest_eval_level": (latest or {}).get("eval_level"),
+            "latest_evidence_maturity": (latest or {}).get("evidence_maturity"),
             "artifact_hygiene_attention": hygiene_attention,
             "pinned_or_archived_skipped_by_default": skipped_by_default[:20],
         },
         "skills_metadata": metadata_by_name,
         "eval_pack_inventory": {"schema_version": inv.get("schema_version"), "readiness_matrix": inv.get("readiness_matrix"), "skills": inv_skills[:cap], "error": inv.get("error")},
         "recent_runs": recent_runs[:cap],
+        "evidence_ledger": (latest or {}).get("evidence_ledger") if latest else _eval_evidence_ledger({}),
         "artifact_hygiene": {"schema_version": hygiene.get("schema_version"), "classification_counts": hygiene_counts, "runs": (hygiene.get("runs") or [])[:cap]},
         "next_actions": next_actions[:6],
         "safe_next_commands": safe_commands,
-        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "note": "If scheduled externally, run scout only and route JSON to notifications; never schedule adopt/rollback/optimize without human review."},
-        "read_only_guards": ["does not call full_run", "does not call optimize/guided_optimize", "does not adopt", "does not rollback", "does not fetch/update upstream", "does not write live skills/config/cron/memories"],
+        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "allowed_cron_surfaces": ["scout", "doctor", "eval-pack-inventory", "review --digest"], "note": "If scheduled externally, run only scout/doctor/eval-pack-inventory/review --digest and route JSON to notifications; never schedule status/full-run/optimize/adopt/rollback/writeback without human review."},
+        "native_hermes_boundary": "Native Hermes metadata is read-only advisory evidence. SkillOpt does not replace Hermes curator lifecycle/archive/consolidation; it produces staged eval evidence and adoption recommendations only.",
+        "read_only_guards": ["does not call full_run", "does not call optimize/guided_optimize", "does not adopt", "does not rollback", "does not fetch/update upstream", "does not write live skills/config/cron/memories", "does not archive/consolidate/replace Hermes curator lifecycle ownership"],
         "report_path": None,
     }
     if output_path:
@@ -2741,7 +2993,9 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
     gate_policy: dict[str, Any] = raw_gate_policy if isinstance(raw_gate_policy, dict) else {}
     raw_provenance = manifest.get("provenance_fingerprint")
     provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
-    production_ready = manifest.get("adoptable") is True and manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict"
+    raw_ledger = manifest.get("evidence_ledger")
+    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else _eval_evidence_ledger(manifest)
+    production_ready = manifest.get("adoptable") is True and manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict" and evidence_ledger.get("production_runtime_ready") is True
     backup_dir = manifest.get("backup_dir")
     rollback_available = False
     rollback_reason = "run is not adopted"
@@ -2812,7 +3066,10 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
         "status": manifest.get("status") or ("batch_complete" if manifest.get("batch_id") else None),
         "adoptable": manifest.get("adoptable") is True,
         "production_eligible": production_ready,
-        "readiness": {"status": "production_candidate" if production_ready else "review_only_or_not_ready", "adoptable": manifest.get("adoptable") is True, "production_gate_eligible": manifest.get("production_gate_eligible") is True, "test_gate_eligible": manifest.get("test_gate_eligible") is True, "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True, "reasons": manifest.get("production_eligibility_reasons") or []},
+        "readiness": {"status": "production_candidate" if production_ready else "review_only_or_not_ready", "adoptable": manifest.get("adoptable") is True, "production_gate_eligible": manifest.get("production_gate_eligible") is True, "test_gate_eligible": manifest.get("test_gate_eligible") is True, "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "reasons": manifest.get("production_eligibility_reasons") or []},
+        "eval_level": evidence_ledger.get("eval_level"),
+        "evidence_maturity": evidence_ledger.get("evidence_maturity"),
+        "evidence_ledger": evidence_ledger,
         "skill_type": skill_type,
         "evidence_contract": {"target_execution": manifest.get("target_execution_evidence") if isinstance(manifest.get("target_execution_evidence"), dict) else {"complete": False, "classification": None}, "reviewer_gate": manifest.get("reviewer_gate") if isinstance(manifest.get("reviewer_gate"), dict) else {"passed": False}, "eval_pack_governance": manifest.get("eval_pack_governance") or {}, "production_eval_policy_version": (manifest.get("production_eval_policy") or {}).get("policy_version") if isinstance(manifest.get("production_eval_policy"), dict) else None, "manifest_artifacts_verified": verified},
         "test_eligible": manifest.get("test_gate_eligible") is True,
@@ -2841,7 +3098,7 @@ def _fleet_checkpoint_row(run_dir: Path, checkpoint: dict[str, Any] | None, warn
     reasons.append("completed-run reuse unavailable until a manifest exists and artifact hashes verify")
     classification = "checkpoint_only_recent" if cp.get("status") == "complete" else "stale_or_incomplete_checkpoint_only"
     next_safe_action = "Inspect checkpoint artifacts only; retry as a new full run if abandoned. Do not resume partial stages, adopt, or delete automatically."
-    return {"run_id": run_dir.name, "run_dir": str(run_dir), "kind": "checkpoint_only", "artifact_classification": classification, "skill_name": lineage.get("skill_name"), "skill_relpath": lineage.get("skill_relpath"), "status": cp.get("status") or "checkpoint_only", "adoptable": False, "production_eligible": False, "test_eligible": False, "split_scores": {}, "resume": {"checkpoint_present": True, "checkpoint_status": cp.get("status"), "checkpoint_input_sha256": cp.get("input_sha256"), "safe_completed_reuse": False, "partial_continuation_available": False}, "rollback": {"available": False, "reason": "checkpoint-only run has no adopted manifest", "backup_dir": None}, "artifact_lineage": lineage, "fingerprints": {"manifest_artifacts_verified": False}, "partial_continuation_available": False, "next_safe_action": next_safe_action, "refusal_reasons": sorted(set(reasons)), "cleanup_guidance": ["No automatic cleanup is performed. Inspect run_dir, ensure no process is writing it, then remove or retry with a new full-run if desired."], "warnings": sorted(set(warnings))}
+    return {"run_id": run_dir.name, "run_dir": str(run_dir), "kind": "checkpoint_only", "artifact_classification": classification, "skill_name": lineage.get("skill_name"), "skill_relpath": lineage.get("skill_relpath"), "status": cp.get("status") or "checkpoint_only", "adoptable": False, "production_eligible": False, "test_eligible": False, "eval_level": "review_only", "evidence_maturity": "review_only_static_replay_or_incomplete_runtime", "evidence_ledger": _eval_evidence_ledger({}), "split_scores": {}, "resume": {"checkpoint_present": True, "checkpoint_status": cp.get("status"), "checkpoint_input_sha256": cp.get("input_sha256"), "safe_completed_reuse": False, "partial_continuation_available": False}, "rollback": {"available": False, "reason": "checkpoint-only run has no adopted manifest", "backup_dir": None}, "artifact_lineage": lineage, "fingerprints": {"manifest_artifacts_verified": False}, "partial_continuation_available": False, "next_safe_action": next_safe_action, "refusal_reasons": sorted(set(reasons)), "cleanup_guidance": ["No automatic cleanup is performed. Inspect run_dir, ensure no process is writing it, then remove or retry with a new full-run if desired."], "warnings": sorted(set(warnings))}
 
 
 def _scan_fleet_runs(home: Path, limit: int = 50) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
@@ -3101,7 +3358,16 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
     report = read_text(run_dir / "report.md") if (run_dir / "report.md").exists() else ""
     gate = m.get("gate") or (json.loads(read_text(run_dir / "gate_results.json")).get("best_gate") if (run_dir / "gate_results.json").exists() else None)
     artifact_lineage = m.get("artifact_lineage") or _artifact_lineage_status(run_dir, m)
+    native_guard = None
+    try:
+        target_path = manifest_skill_path(home, m)
+        guard_manifest_skill_path(home, m, target_path)
+        native_guard = native_adopt_guard(home, Skill(name=str(m.get("skill_name") or target_path.parent.name), path=target_path, relpath=str(m.get("skill_relpath") or target_path.resolve().relative_to(home.resolve())), sha256=""), m)
+    except Exception as exc:
+        native_guard = {"schema_version": "hermes-native-adopt-guard-v1", "allowed": False, "blockers": [f"native metadata guard unavailable: {type(exc).__name__}: {exc}"], "force_override_allowed": False}
     score_provenance = _score_provenance_summary(m)
+    raw_evidence_ledger = m.get("evidence_ledger")
+    evidence_ledger: dict[str, Any] = raw_evidence_ledger if isinstance(raw_evidence_ledger, dict) else _eval_evidence_ledger(m)
     report_summary = {"timeline": {"status": m.get("status"), "created_at": m.get("created_at")}, "eligibility": {"adoptable": m.get("adoptable") is True, "reasons": m.get("production_eligibility_reasons") or [], "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True}, "score_provenance": score_provenance, "split_scores": m.get("split_scores") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "artifact_lineage": artifact_lineage, "provenance_security": {"artifact_integrity": "verified", "provenance_fingerprint": (m.get("provenance_fingerprint") or {}).get("fingerprint_sha256") if isinstance(m.get("provenance_fingerprint"), dict) else None, "production_eval_policy": (m.get("production_eval_policy") or {}).get("policy_version") if isinstance(m.get("production_eval_policy"), dict) else None, "target_executor": m.get("target_executor"), "gate_policy": m.get("gate_policy")}}
     diff_path = run_dir / "diff.patch"
     report_path = run_dir / "report.md"
@@ -3110,7 +3376,7 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
         "report": {"path": str(report_path), "sha256": sha256_text(report) if report else None, "bytes": len(report.encode("utf-8")), "preview_chars": 0 if slim else min(len(report), 1200)},
     }
     readiness = readiness_adoptability_schema({**m, "gate": gate})
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "target_execution_evidence": m.get("target_execution_evidence"), "reviewer_gate": m.get("reviewer_gate"), "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "native_hermes_metadata": m.get("native_hermes_metadata"), "native_hermes_adopt_guard": native_guard, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
 
 
 def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
@@ -3144,6 +3410,11 @@ def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: boo
         raise ValueError("Manifest missing provenance fingerprint; refusing to adopt")
     target = manifest_skill_path(home, m)
     guard_manifest_skill_path(home, m, target)
+    target_skill = Skill(name=str(m.get("skill_name") or target.parent.name), path=target, relpath=str(m.get("skill_relpath") or target.resolve().relative_to(home.resolve())), sha256="")
+    native_guard = native_adopt_guard(home, target_skill, m)
+    if not native_guard.get("allowed"):
+        raise ValueError("Native Hermes metadata conflict guard blocked adopt; force=true does not override: " + "; ".join(str(x) for x in (native_guard.get("blockers") or [])))
+    m["native_hermes_adopt_guard_at_adopt"] = native_guard
     if not target.exists():
         raise ValueError(f"target skill missing: {target}")
     current = read_text(target)

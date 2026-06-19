@@ -206,6 +206,7 @@ def eval_pack_inventory(*, hermes_home_path: str | None = None, skill: str | Non
             "skill_relpath": sk.relpath,
             "skill_sha256": sk.sha256,
             "skill_package_support": core._safe_skill_package_support(sk, home),
+            "native_hermes_metadata": core.native_skill_metadata_snapshot(home, sk),
             "skill_type": classify_skill_type(sk),
             "candidate_eval_paths": [str(p) for p in candidates],
             "eval_packs": packs,

@@ -1,7 +1,7 @@
 [project]
 name = "hermes-skillopt"
 version = "0.1.0"
-description = "Hermes plugin for safe staged skill optimization with pinned Microsoft SkillOpt upstream tracking"
+description = "Hermes plugin for native-metadata-aware, eval-gated staged skill optimization with pinned Microsoft SkillOpt upstream tracking"
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [

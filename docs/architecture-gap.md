@@ -4,13 +4,13 @@ This document describes the current Phase0-Phase5 architecture on this branch. I
 
 ## Boundaries
 
-`hermes-skillopt` is a Hermes-safe adapter inspired by Microsoft SkillOpt. It does not modify Hermes core, does not vendor upstream SkillOpt code, and does not auto-adopt generated skill changes.
+`hermes-skillopt` is a Hermes-safe adapter inspired by Microsoft SkillOpt. It does not modify Hermes core, does not vendor upstream SkillOpt code, does not auto-adopt generated skill changes, and does not replace the Hermes curator. Curator owns lifecycle/archive/consolidation and native skill ownership; SkillOpt owns staged eval evidence and adoption recommendations.
 
-The only trainable object is a target `SKILL.md` under the active Hermes profile. All optimization output is staged under `$HERMES_HOME/skillopt/staging/<run-id>/` until an explicit guarded `adopt` call.
+The only trainable object is a target `SKILL.md` under the active Hermes profile. All optimization output is staged under `$HERMES_HOME/skillopt/staging/<run-id>/` until an explicit guarded `adopt` call. Native Hermes sidecars such as `skills/.usage.json`, `.curator_state`, `.hub_manifest.json`, `.bundled_manifest.json`, and `.manifest.json` are read best-effort for advisory metadata and guards only; SkillOpt never writes them.
 
 ## Main modules
 
-- `core.py`: orchestration, status/review/adopt/rollback, guided `scout`/`doctor`/`optimize` decision UX, review digests, eval-only/benchmark fixed-skill reports, artifact hygiene reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, and held-out sensitivity reporting.
+- `core.py`: orchestration, status/review/adopt/rollback, guided `scout`/`doctor`/`optimize` decision UX, review digests, eval-only/benchmark fixed-skill reports, artifact hygiene reports, artifact hashing, upstream status/update wrappers, profile/path guards, score ledgers, held-out sensitivity reporting, read-only native Hermes metadata snapshots, native adopt conflict guard, and evidence maturity ledger.
 - `batch.py`: data-only batch preflight and staged-only batch runner with budget enforcement and forbidden writeback field rejection.
 - `env.py`: eval-file resolution, curated/session/fallback task construction, production-gate eligibility checks.
 - `eval_packs.py`: read-only eval-pack inventory/doctor, plan-by-default autopilot with explicit review-draft writes, safe review-only scaffold/session/correction/context/negative-boundary seed generation, curated pack factory, and draft promotion. Draft/seed/autopilot outputs are review-only; production promotion requires explicit policy plus execution contract and still never adopts.
@@ -43,7 +43,7 @@ The only trainable object is a target `SKILL.md` under the active Hermes profile
    - evaluate and gate on held-out validation
 6. Evaluate the final best candidate on held-out test.
 7. Write report, diff, stage JSON artifacts, rejected edits, `slow_meta.json` evidence, gate results, manifest, checkpoint, and artifact SHA-256 map.
-8. Mark the run adoptable only if production validation and held-out test gates are eligible and passing.
+8. Mark the run adoptable only if production validation and held-out test gates are eligible and passing, complete real frozen-runtime evidence and reviewer gate are present, provenance/current-SHA hashes match, and the native Hermes conflict guard allows the skill.
 
 `full_run(dry_run=True)` is rejected by code; CLI has no `full-run --dry-run` option. Legacy `dry-run`/`run --mode legacy` remains review-only.
 
@@ -59,9 +59,13 @@ Guided UX functions are also safety-scoped. `scout()` is a notification-ready re
 
 Run directories contain the current/proposed skill copies, eval task JSONL files, validation/test results, reflections, candidate edits, candidate rank/select summary, rejected edits, `slow_meta.json`, `target_binding.json`, `provenance_binding.json`, `history.json`, gate results, report, diff, manifest, `checkpoint.json`, and per-stage JSON under `stages/`. Stage records use `skillopt-stage-v1` and include deterministic batch metadata (`skillopt-deterministic-batch-v1`, stable `batch_id`, seed `0`, stable input ordering/ranking note, input/output fingerprints).
 
-The manifest stores SHA-256 hashes for staged files. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, production-curated vs review-only score ledgers, per-task deltas including expected-term/assertion changes, held-out test sensitivity warnings, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. Slim notification/status surfaces include `score_provenance` with target executor/backend, optimizer backend, eval pack id/version/path/fingerprint, score source, split labels, score fields, and warnings; a held-out test score without `heldout_test_sensitivity` stays caveated. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
+The manifest stores SHA-256 hashes for staged files plus native Hermes metadata fingerprints when available. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, production-curated vs review-only score ledgers, per-task deltas including expected-term/assertion changes, held-out test sensitivity warnings, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. Slim notification/status surfaces include `score_provenance` with target executor/backend, optimizer backend, eval pack id/version/path/fingerprint, score source, split labels, score fields, and warnings; a held-out test score without `heldout_test_sensitivity` stays caveated. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
 
 Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed. `status`, `resume-inspect`, and hygiene rows expose stale/incomplete checkpoint rows, tracked artifact path/hash state, lineage summaries, `next_safe_action`, and `partial_continuation_available: false`; no code auto-deletes or resumes partial stage output.
+
+## Native Hermes boundary
+
+SkillOpt treats native Hermes metadata as read-only guard input. `native_skill_metadata_snapshot()` reads `.usage.json`, curator state, hub/bundled manifests, and manifest sidecars best-effort, records path/readability/SHA diagnostics, and computes a fingerprint over native signals and records. It does not write or repair these sidecars. Hub-installed, bundled, pinned, archived, and curator-managed skills are blocked/diagnostic-only by default for SkillOpt adoption; `force` does not override this native conflict guard. If native metadata changes between staging and adopt, reviewers must rerun or restage after reviewing the native sidecars.
 
 ## Eval and adoption gates
 
@@ -77,6 +81,7 @@ Production adoption is intentionally stricter than generic validation:
 - Held-out curated test tasks must pass threshold.
 - Fallback, synthetic, session-mined, and legacy dry-run evidence cannot make a run production-adoptable.
 - LLM judge text is explanatory evidence only and cannot bypass gates.
+- `evidence_ledger` (`hermes-skillopt-evidence-ledger-v1`) exposes `eval_level`, `evidence_maturity`, `production_runtime_ready`, complete frozen evidence, real-runtime invocation/evidence flags, task-command status, internal-runner status, reviewer-gate status, and blockers. Static/replay/sandbox/live-disabled evidence stays review-only unless complete real Hermes runtime evidence and reviewer approval are present.
 
 Eval execution contract classifications are part of this policy: `static_keyword_scorecard`/`static_review_only` and `deterministic_replay_report_only` are non-adoption evidence; `deterministic_replay_contract_compliant` can be adoption-eligible only inside an explicit curated v1 pack with passing provenance/runtime checks; `frozen_hermes_target_execution_v1` requires frozen target config, provider/model/toolset/session/runtime fingerprints, isolated runtime proof, declared permissions with task commands disabled, transcript/trajectory evidence, execution-based scoring, and explicit real Hermes runtime invocation proof. Current sandbox/replay/scorecard/fixed internal runners fail that real-runtime requirement and remain review-only. This is not upstream benchmark execution/parity or arbitrary live agent command execution. The current `live-readonly` surface is an interface/disabled report path, not a true live Hermes runner.
 
@@ -107,6 +112,8 @@ Adopt requires:
 - target path under active profile `skills/`
 - current live skill SHA matching staged original unless forced
 - proposed skill SHA matching manifest
+- complete frozen target runtime evidence with real Hermes runtime invocation/evidence, no task command execution, and a passing/adoptable reviewer gate
+- native Hermes adopt guard allowing the target skill and unchanged native metadata fingerprint; force does not bypass this guard
 
 Rollback restores only from the verified backup directory created by adopt. It validates backup path containment, backup manifest, run id, target path, skill relpath, original/proposed/adopted SHA, and current live SHA unless forced.
 
@@ -119,7 +126,7 @@ Current code closes the earlier architecture gaps in these bounded ways:
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance returns local compile/pytest reports with no default file write.
 - Phase2/Phase3 orchestration/UX utilities: scout adds read-only notification/cron-safe summaries; batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes real curated-pack coverage gaps; React/FastAPI WebUI surfaces scout/guided wizard/review console/fleet/upstream parity while keeping `auto_adopt=false`.
-- Phase4/Phase5 guided/runtime-evidence hardening: `doctor`, `optimize --intent`, `review --summary`, CLI/WebUI typed adopt confirmation, artifact hygiene reporting, runtime-evidence contract checks, scorecard-vs-frozen-evidence separation, and production hard-fail overrides are encoded in core surfaces and tests.
+- Phase4/Phase5 guided/runtime-evidence/native-boundary hardening: `doctor`, `optimize --intent`, `review --summary`, CLI/WebUI typed adopt confirmation, artifact hygiene reporting, runtime-evidence contract checks, scorecard-vs-frozen-evidence separation, and production hard-fail overrides are encoded in core surfaces and tests.
 
 Closed does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
 

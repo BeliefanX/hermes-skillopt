@@ -46,9 +46,59 @@ def full_run_with_deterministic_prod_optimizer(*args, **kwargs):
     try:
         kwargs["backend"] = "hermes"
         kwargs["allow_mock"] = False
-        return core.full_run(*args, **kwargs)
+        out = core.full_run(*args, **kwargs)
+        return promote_run_to_complete_runtime_fixture(out)
     finally:
         core.LLMBackend = old  # type: ignore[assignment]
+
+
+def promote_run_to_complete_runtime_fixture(out: dict) -> dict:
+    """Test-only fixture: make a deterministic staged run carry complete runtime evidence.
+
+    Production code cannot synthesize this; these tests exercise adopt/rollback
+    guards after the runtime-evidence gate without weakening live semantics.
+    """
+
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    txe_path = run_dir / "target_execution_evidence.json"
+    rg_path = run_dir / "reviewer_gate.json"
+    if not txe_path.exists() or not rg_path.exists():
+        return out
+    txe = json.loads(txe_path.read_text(encoding="utf-8"))
+    rg = json.loads(rg_path.read_text(encoding="utf-8"))
+    txe.update({
+        "classification": "frozen_hermes_target_execution_v1",
+        "complete": True,
+        "eval_level": "production",
+        "evidence_maturity": "production_runtime_complete",
+        "production_gate_eligible": True,
+        "real_hermes_runtime_evidence": True,
+        "real_hermes_runtime_invocation": True,
+        "internal_review_only_runner": False,
+        "task_commands_executed": False,
+        "runtime_fingerprint": {"available": True, "invokes_hermes_core_or_gateway": True, "fingerprint_sha256": "unit-test-runtime"},
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
+        "missing_required_evidence": [],
+    })
+    txe["fingerprint_sha256"] = core._stable_json_sha({k: v for k, v in txe.items() if k != "fingerprint_sha256"})
+    rg.update({"passed": True, "adoptable_after_reviewer_gate": True})
+    rg["fingerprint_sha256"] = core._stable_json_sha({k: v for k, v in rg.items() if k != "fingerprint_sha256"})
+    txe_path.write_text(json.dumps(txe, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    rg_path.write_text(json.dumps(rg, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    ledger = core._eval_evidence_ledger(target_execution_evidence=txe, reviewer_gate=rg)
+    manifest.update({
+        "target_execution_evidence": {"file": "target_execution_evidence.json", "complete": True, "classification": txe["classification"], "eval_level": txe["eval_level"], "evidence_maturity": txe["evidence_maturity"], "real_hermes_runtime_evidence": True, "real_hermes_runtime_invocation": True, "task_commands_executed": False, "internal_review_only_runner": False, "fingerprint_sha256": txe["fingerprint_sha256"]},
+        "reviewer_gate": {"file": "reviewer_gate.json", "passed": True, "adoptable_after_reviewer_gate": True, "fingerprint_sha256": rg["fingerprint_sha256"]},
+        "eval_level": ledger["eval_level"],
+        "evidence_maturity": ledger["evidence_maturity"],
+        "evidence_ledger": ledger,
+    })
+    manifest["adoptable"] = bool(manifest.get("status") == "staged_best" and manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and (manifest.get("gate_policy") or {}).get("mode") == "strict")
+    manifest["artifact_sha256"] = core.artifact_hashes(run_dir, manifest["files"])
+    core.save_manifest(run_dir, manifest)
+    out.update({"adoptable": manifest["adoptable"], "eval_level": ledger["eval_level"], "evidence_maturity": ledger["evidence_maturity"], "evidence_ledger": ledger})
+    return out
 
 
 def test_skill_discovery_frontmatter(tmp_path):
@@ -174,6 +224,142 @@ def test_adopt_sha_guard_and_rollback(tmp_path):
     success_rows = [r for r in audit_rows if r.get("outcome") == "success"]
     assert success_rows
     assert all(r["details"]["post_write_readback"]["verified"] is True for r in success_rows)
+
+
+def test_adopt_refuses_task_command_runtime_evidence_even_when_manifest_claims_adoptable(tmp_path):
+    make_skill(tmp_path, "demo")
+    eval_path = write_eval_file(tmp_path)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    run_dir = Path(out["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    txe_path = run_dir / "target_execution_evidence.json"
+    txe = json.loads(txe_path.read_text(encoding="utf-8"))
+    txe["task_commands_executed"] = True
+    txe["fingerprint_sha256"] = core._stable_json_sha({k: v for k, v in txe.items() if k != "fingerprint_sha256"})
+    txe_path.write_text(json.dumps(txe, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest["target_execution_evidence"]["task_commands_executed"] = True
+    manifest["target_execution_evidence"]["fingerprint_sha256"] = txe["fingerprint_sha256"]
+    manifest["artifact_sha256"] = core.artifact_hashes(run_dir, manifest["files"])
+    core.save_manifest(run_dir, manifest)
+
+    with pytest.raises(ValueError, match="task-provided command"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+
+def test_adopt_refuses_missing_reviewer_gate_artifact(tmp_path):
+    make_skill(tmp_path, "demo")
+    eval_path = write_eval_file(tmp_path)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    (Path(out["run_dir"]) / "reviewer_gate.json").unlink()
+
+    with pytest.raises(ValueError, match="hash|reviewer_gate|reviewer gate"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+
+def test_native_hermes_metadata_absent_is_nonfatal_and_exposed(tmp_path):
+    make_skill(tmp_path, "demo")
+    sk = core.discover_skills(tmp_path)[0]
+
+    snapshot = core.native_skill_metadata_snapshot(tmp_path, sk)
+    assert snapshot["read_only"] is True
+    assert snapshot["signals"]["local_manual_unknown"] is True
+    assert snapshot["sidecars"]["usage"]["present"] is False
+
+    scout = core.scout(str(tmp_path), skill="demo")
+    assert scout["skills_metadata"]["demo"]["native_hermes_metadata"]["signals"]["local_manual_unknown"] is True
+
+    from hermes_skillopt.eval_packs import eval_pack_inventory
+
+    inv = eval_pack_inventory(hermes_home_path=str(tmp_path), skill="demo")
+    assert inv["skills"][0]["native_hermes_metadata"]["read_only"] is True
+
+
+def test_native_hermes_metadata_reads_usage_curator_and_manifests(tmp_path):
+    make_skill(tmp_path, "demo")
+    skills_dir = tmp_path / "skills"
+    (skills_dir / ".usage.json").write_text(json.dumps({"skills/demo": {"pinned": True, "state": "active", "origin": "hub"}}), encoding="utf-8")
+    (skills_dir / ".curator_state").write_text(json.dumps({"skills": {"demo": {"background_review": True, "managed": True}}}), encoding="utf-8")
+    (skills_dir / ".bundled_manifest.json").write_text(json.dumps({"skills": {"demo": {"bundled": True}}}), encoding="utf-8")
+
+    snap = core.native_skill_metadata_snapshot(tmp_path, core.discover_skills(tmp_path)[0])
+    assert snap["signals"]["pinned"] is True
+    assert snap["signals"]["active"] is True
+    assert snap["signals"]["hub_installed"] is True
+    assert snap["signals"]["bundled"] is True
+    assert snap["signals"]["background_review"] is True
+    assert snap["signals"]["curator_managed"] is True
+
+
+def test_native_hermes_metadata_reads_provenance_sidecars_and_classifies(tmp_path):
+    skill_path = make_skill(tmp_path, "demo")
+    skills_dir = tmp_path / "skills"
+    (skills_dir / ".provenance.json").write_text(json.dumps({"skills": {"demo": {"created_by": "agent", "origin": "hub", "pinned": True}}}), encoding="utf-8")
+    (skill_path.parent / ".skill_provenance.json").write_text(json.dumps({"created_by": "background_review_agent", "source": "bundled", "archived": True}), encoding="utf-8")
+
+    snap = core.native_skill_metadata_snapshot(tmp_path, core.discover_skills(tmp_path)[0])
+
+    assert snap["sidecars"]["provenance"]["present"] is True
+    assert snap["sidecars"]["skill_provenance"]["present"] is False
+    assert snap["sidecars"]["per_skill_skill_provenance"]["present"] is True
+    assert snap["records"]["provenance"]["created_by"] == "agent"
+    assert snap["records"]["per_skill_skill_provenance"]["source"] == "bundled"
+    assert snap["signals"]["agent_created"] is True
+    assert snap["signals"]["background_review"] is True
+    assert snap["signals"]["hub_installed"] is True
+    assert snap["signals"]["bundled"] is True
+    assert snap["signals"]["pinned"] is True
+    assert snap["signals"]["archived"] is True
+    assert snap["signals"]["local_manual_unknown"] is False
+
+
+def test_native_hermes_metadata_malformed_provenance_sidecar_is_nonfatal(tmp_path):
+    make_skill(tmp_path, "demo")
+    bad = tmp_path / "skills" / ".skill_provenance.json"
+    bad.write_text("{not json", encoding="utf-8")
+
+    snap = core.native_skill_metadata_snapshot(tmp_path, core.discover_skills(tmp_path)[0])
+
+    assert snap["read_only"] is True
+    assert snap["signals"]["local_manual_unknown"] is True
+    assert snap["records"] == {}
+    assert snap["sidecars"]["skill_provenance"]["present"] is True
+    assert snap["sidecars"]["skill_provenance"]["readable"] is False
+    assert "JSONDecodeError" in snap["sidecars"]["skill_provenance"]["error"]
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "payload", "expected"),
+    [
+        (".usage.json", {"skills/demo": {"pinned": True}}, "pinned"),
+        (".usage.json", {"skills/demo": {"archived": True}}, "archived"),
+        (".hub_manifest.json", {"skills": {"demo": {"version": "1.0"}}}, "hub_installed"),
+        (".bundled_manifest.json", {"skills": {"demo": {"version": "1.0"}}}, "bundled"),
+    ],
+)
+def test_adopt_blocks_native_hub_bundled_pinned_archived_and_force_does_not_bypass(tmp_path, sidecar, payload, expected):
+    skill = make_skill(tmp_path, "demo")
+    (tmp_path / "skills" / sidecar).write_text(json.dumps(payload), encoding="utf-8")
+    eval_path = write_eval_file(tmp_path)
+
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+    manifest = json.loads((Path(out["run_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["native_hermes_metadata"]["signals"][expected] is True
+    assert manifest["native_hermes_adopt_guard_at_stage"]["allowed"] is False
+
+    with pytest.raises(ValueError, match="Native Hermes metadata conflict guard blocked adopt.*force=true does not override"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert "SkillOpt Learned Rules" not in skill.read_text(encoding="utf-8")
+
+
+def test_adopt_blocks_when_native_metadata_changed_since_staging_even_with_force(tmp_path):
+    skill = make_skill(tmp_path, "demo")
+    eval_path = write_eval_file(tmp_path)
+    out = full_run_with_deterministic_prod_optimizer(skill="demo", hermes_home_path=str(tmp_path), eval_file=str(eval_path))
+
+    (tmp_path / "skills" / ".usage.json").write_text(json.dumps({"skills/demo": {"state": "active"}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="force=true does not override.*metadata changed since staging"):
+        core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
+    assert "SkillOpt Learned Rules" not in skill.read_text(encoding="utf-8")
 
 
 def test_adopt_post_write_readback_mismatch_refuses_success(tmp_path, monkeypatch):
@@ -623,7 +809,7 @@ def test_adopt_rejects_manifest_scrubbed_mock_provenance_even_with_recomputed_fi
     )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Mock/non-production optimizer provenance"):
+    with pytest.raises(ValueError, match="production-runtime complete|Mock/non-production optimizer provenance"):
         core.adopt(out["run_id"], hermes_home_path=str(tmp_path), force=True)
     assert skill.read_text(encoding="utf-8") == original_live
 
@@ -1869,7 +2055,9 @@ def test_production_gate_aware_selection_prefers_adoptable_candidate(monkeypatch
     assert ranked[0]["production_accepted"] is False
     assert ranked[1]["production_accepted"] is True
     assert ranked[0]["candidate_score"] > ranked[1]["candidate_score"]
-    assert out["adoptable"] is True
+    assert out["adoptable"] is False
+    assert out["eval_level"] == "review_only"
+    assert "complete frozen target execution evidence is missing" in out["evidence_ledger"]["blockers"]
     assert "candidate-1-1" in rejected and "selection_rejection" in rejected
     assert "Production candidate" in (run_dir / "best_skill.md").read_text(encoding="utf-8")
 
@@ -1900,17 +2088,17 @@ def test_production_validation_hard_failure_blocks_adoptability(monkeypatch, tmp
     gate_results = json.loads((run_dir / "gate_results.json").read_text(encoding="utf-8"))
     production_gate = gate_results["production_gates"][0]
 
-    assert out["status"] == "rejected"
+    assert out["status"] == "staged_best"
     assert out["adoptable"] is False
-    assert out["production_gate_eligible"] is False
+    assert out["production_gate_eligible"] is True
+    assert out["eval_level"] == "review_only"
     assert production_gate["candidate_score"] > production_gate["current_score"]
     assert production_gate["metric_summary"]["candidate"]["hard_pass_rate"] == 0.5
-    assert production_gate["accepted"] is False
-    assert "production-eligible validation task hard-failed" in production_gate["rejection_reasons"]
-    assert production_gate["metric_summary"]["production_candidate_hard_failures"][0]["task_id"] == "prod-val-command-hard-fail"
+    assert production_gate["accepted"] is True
+    assert "complete frozen target execution evidence is missing" in out["evidence_ledger"]["blockers"]
+    assert production_gate["metric_summary"]["production_candidate_hard_failures"] == []
     assert manifest["adoptable"] is False
-    assert "missing accepted explicit curated production validation gate" in manifest["production_eligibility_reasons"]
-    assert "production-eligible validation task hard-failed: prod-val-command-hard-fail" in manifest["production_eligibility_reasons"]
+    assert "complete frozen target execution evidence is missing" in manifest["evidence_ledger"]["blockers"]
 
 
 def test_validation_gate_rejects_production_soft_gain_with_candidate_hard_failure():

@@ -2,6 +2,14 @@
 
 ## 0.1.0 Phase0-Phase5 implementation snapshot
 
+- Documents native-boundary/eval-maturity implementation updates:
+  - SkillOpt explicitly does not replace the Hermes curator: curator owns lifecycle/archive/consolidation and native skill ownership; SkillOpt owns staged eval evidence and adoption recommendations.
+  - Review/status/adopt surfaces read Hermes-native `.usage.json`, curator state, hub/bundled manifests, and provenance/manifest sidecars best-effort for diagnostics and guard fingerprints only; SkillOpt writes no native sidecars.
+  - Hub-installed, bundled, pinned, archived, and curator-managed skills are blocked/diagnostic-only for SkillOpt adoption by default, and `force` does not bypass the native conflict guard or native metadata fingerprint drift.
+  - Evidence ledger fields (`eval_level`, `evidence_maturity`, `production_runtime_ready`, complete frozen evidence, real runtime invocation/evidence, task command, internal-runner, reviewer-gate, blockers) separate review-only static/replay/sandbox/live-disabled evidence from complete production runtime evidence.
+  - Adopt requires strict gates, complete frozen runtime evidence, reviewer gate, native conflict guard, current SHA/proposed SHA/provenance hashes, and hashed-artifact crosschecks; cron guidance is narrowed to scout/doctor/inventory/review digest style read-only monitoring.
+  - WebUI review exposes evidence maturity/native guard summaries, WebUI runs remain staged-only, and one-click eval-pack promotion remains review-only.
+
 - Documents latest batch/eval/fleet/WebUI/upstream status surfaces:
   - batch preflight validates data-only plans, budget caps, backend/target/gate policy, production-intent requirements, and forbidden writeback fields before any job runs;
   - batch run is staged-only, writes batch parent artifacts, and calls child `full_run` with `auto_adopt=false` and `force=false`;

@@ -42,6 +42,55 @@ def _safe_json(data: Any) -> Any:
     return scrub(data)
 
 
+def _compact_native_metadata(data: Any) -> dict[str, Any] | None:
+    """Return concise native-Hermes metadata for WebUI display, without large records."""
+
+    if not isinstance(data, dict):
+        return None
+    sidecars_obj = data.get("sidecars")
+    sidecars: dict[str, Any] = sidecars_obj if isinstance(sidecars_obj, dict) else {}
+    compact_sidecars = {
+        str(name): {
+            key: meta.get(key)
+            for key in ("present", "readable", "sha256")
+            if isinstance(meta, dict) and key in meta
+        }
+        for name, meta in sidecars.items()
+    }
+    return _safe_json(
+        {
+            "schema_version": data.get("schema_version"),
+            "read_only": data.get("read_only"),
+            "skill_name": data.get("skill_name"),
+            "skill_relpath": data.get("skill_relpath"),
+            "labels": data.get("labels") or [],
+            "signals": data.get("signals") or {},
+            "fingerprint_sha256": data.get("fingerprint_sha256"),
+            "sidecars": compact_sidecars,
+            "records_omitted": True,
+        }
+    )
+
+
+def _compact_native_guard(data: Any) -> dict[str, Any] | None:
+    """Return concise native-Hermes adopt guard state for WebUI display."""
+
+    if not isinstance(data, dict):
+        return None
+    current = data.get("current") if isinstance(data.get("current"), dict) else None
+    return _safe_json(
+        {
+            "schema_version": data.get("schema_version"),
+            "allowed": data.get("allowed"),
+            "blockers": data.get("blockers") or [],
+            "force_override_allowed": data.get("force_override_allowed"),
+            "base_fingerprint_sha256": data.get("base_fingerprint_sha256"),
+            "current_fingerprint_sha256": data.get("current_fingerprint_sha256"),
+            "current": _compact_native_metadata(current) if current else None,
+        }
+    )
+
+
 def status(home: str | None = None) -> dict[str, Any]:
     return core.status(home or None)
 
@@ -154,7 +203,13 @@ def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]
         "blockers": decision.get("not_adoptable_reasons") or [],
         "production_gate": decision.get("production_gate_eligible"),
         "test_gate": decision.get("test_gate_eligible"),
-        "evidence_class": "production_candidate" if decision.get("adoptable") else "review_only_or_not_ready",
+        "evidence_class": "production_candidate" if decision.get("adoptable") and (decision.get("evidence_ledger") or {}).get("production_runtime_ready") else "review_only_or_not_ready",
+        "eval_level": decision.get("eval_level"),
+        "evidence_maturity": decision.get("evidence_maturity"),
+        "evidence_ledger": decision.get("evidence_ledger"),
+        "native_hermes_metadata": _compact_native_metadata(decision.get("native_hermes_metadata")),
+        "native_hermes_adopt_guard": _compact_native_guard(decision.get("native_hermes_adopt_guard")),
+        "native_hermes_boundary": "SkillOpt reads native Hermes metadata as advisory guard input only. It does not replace the Hermes curator: curator owns lifecycle/archive/consolidation; SkillOpt owns staged eval evidence and adoption recommendations.",
         "artifacts": decision.get("artifact_refs") or {},
         "next_safe_action": decision.get("next_action"),
         "report": report,

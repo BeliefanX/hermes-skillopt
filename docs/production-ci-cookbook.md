@@ -9,8 +9,9 @@ This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skil
 - Use `optimize --intent smoke` for wiring only and `--intent review` for authoring loops.
 - Use `optimize --intent production` only with an explicit curated production eval pack, strict gate, non-mock optimizer, and eligible validation/test splits.
 - Review with `review latest --summary` or `review latest --digest` before any writeback. Summary/digest separate validation, production-best, and held-out-test gates; expose evidence class, blockers, score provenance, artifact refs, and next safe action.
-- Adopt only with an exact typed confirmation (`ADOPT <run_id>`). Core adopt re-verifies hashed artifacts, production/test eligibility, provenance, proposed skill SHA, and current live skill SHA.
-- Do not call local `benchmark`, `eval-only`, import, transfer, conformance, scorecard, or frozen-Hermes sandbox/fixed-runner reports upstream parity, external benchmark performance, or production adoption proof.
+- Adopt only with an exact typed confirmation (`ADOPT <run_id>`). Core adopt re-verifies hashed artifacts, production/test eligibility, complete frozen runtime evidence, reviewer gate, provenance hashes, proposed skill SHA, current live skill SHA, and the native Hermes conflict/fingerprint guard.
+- Do not call local `benchmark`, `eval-only`, import, transfer, conformance, scorecard, static/replay/sandbox/live-disabled, or frozen-Hermes sandbox/fixed-runner reports upstream parity, external benchmark performance, or production adoption proof.
+- Do not treat SkillOpt as a curator replacement: Hermes curator owns lifecycle/archive/consolidation, while SkillOpt reads native metadata sidecars best-effort and owns staged eval evidence/adoption recommendations only.
 
 ## 1. Read-only readiness
 
@@ -25,7 +26,7 @@ Expected interpretation:
 
 - `doctor` and `scout` are read-only: no eval execution/full-run, no fetch, no adopt, no rollback, no write.
 - `scout` is suitable for notifications. Without `--output`, it returns JSON and writes no report. Its `cron_recommendation` is scout-only (`auto_adopt_from_cron: false`) and must not be expanded into scheduled optimize/adopt/rollback.
-- Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent.
+- Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent. Native metadata shown by status/scout/review is diagnostic guard input; hub/bundled/pinned/archived/curator-managed skills remain blocked for adopt by default.
 - Parity status should remain no-full-parity unless future code adds real upstream execution evidence.
 
 ## 2. Smoke check
@@ -122,7 +123,7 @@ Production intent requirements enforced by code:
 - `--gate-mode strict`
 - staged-only / no auto-adopt
 
-Adoptability additionally requires eligible curated validation and held-out test tasks, no production hard-failed rows, complete required runtime evidence for adoption-eligible frozen-target contracts, verified artifacts, and provenance consistency. Current sandbox/fixed internal runners are review-only because they lack real Hermes runtime invocation proof; missing runtime evidence downgrades production eligibility even if a scorecard or skill-text-only score improves.
+Adoptability additionally requires eligible curated validation and held-out test tasks, no production hard-failed rows, complete required runtime evidence for adoption-eligible frozen-target contracts, reviewer gate approval, verified artifacts, current SHA/proposed SHA/provenance-hash consistency, and an allowed native Hermes adopt guard. Current sandbox/fixed internal runners are review-only because they lack real Hermes runtime invocation proof; missing runtime evidence downgrades production eligibility even if a scorecard or skill-text-only score improves.
 
 If review/digest shows a held-out test score but also warns that `heldout_test_sensitivity` is missing, keep the score caveated and do not turn it into an external performance or upstream parity claim.
 
@@ -135,7 +136,7 @@ RUN_ID="<reviewed-run-id>"
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" adopt "$RUN_ID" --confirm "ADOPT $RUN_ID"
 ```
 
-Do not put this in ordinary CI. If a maintenance script uses the non-interactive confirmation flag, keep it behind a separate human-approved deployment gate and still treat core gate failures as hard blockers.
+`--force`, where available, only addresses current-SHA drift; it does not bypass artifact/provenance/evidence gates, reviewer gate, production/test gates, proposed-SHA checks, or native Hermes conflict guards. Do not put this in ordinary CI. If a maintenance script uses the non-interactive confirmation flag, keep it behind a separate human-approved deployment gate and still treat core gate failures as hard blockers.
 
 ## 6. CI recipe
 
@@ -167,7 +168,7 @@ CI evidence labels:
 
 ## 6a. Scheduled read-only surfaces only
 
-If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, `eval-pack-doctor`, default `eval-pack-autopilot` without `--write-draft`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
+If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, and `review --digest` for existing runs; `eval-pack-doctor`/default autopilot are useful interactively but should not be promoted to write-producing cron) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
 
 ```bash
 hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json
@@ -181,7 +182,7 @@ Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, 
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Use the WebUI scout/status views for read-only readiness, eval-pack doctor/autopilot for coverage planning, the explicit draft action for review-only pack generation, one-click eval-pack promotion for review packs only, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, digests, and artifacts. Server-side APIs keep scout/review/eval-pack doctor/autopilot-plan read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
+Use the WebUI scout/status views for read-only readiness, eval-pack doctor/autopilot for coverage planning, the explicit draft action for review-only pack generation, one-click eval-pack promotion for review packs only, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, evidence maturity, native metadata/adopt guards, digests, and artifacts. Server-side APIs keep scout/review/eval-pack doctor/autopilot-plan read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
 
 ## 8. Runtime evidence and no-overclaim checklist
 
@@ -190,6 +191,7 @@ Before reporting a production candidate, verify:
 - `review --summary` has `production_gate_eligible: true`, `test_gate_eligible: true`, and no blockers.
 - `review --summary`/`--digest` score provenance points to the intended target executor/backend, optimizer backend, eval pack id/version/fingerprint, and `score_source: production_curated_eval_pack`.
 - Eval inventory readiness shows `hermes-skillopt-readiness-adoptability-v1` gates as production eligible for the pack; advisory package metadata (`references/`, `templates/`, `scripts/`, `assets/`) was reviewed if relevant but not treated as adoption authority.
+- `evidence_ledger` reports `production_runtime_ready: true`, `eval_level: production`, and no blockers; otherwise treat the run as review-only even when scores improved.
 - Frozen-Hermes evidence includes explicit class/scope, target config fingerprint, provider/model/toolset/session/runtime fingerprints, permissions with task commands disabled, isolated runtime evidence, transcript/trajectory, execution-scoring evidence, and explicit real Hermes runtime invocation proof. If review shows `non_production_internal_runner` or missing real-runtime proof, treat it as review-only.
 - `scorecard`, static skill-text-only evidence, and fixed internal sandbox runner output are not called adoption-eligible frozen Hermes execution.
 - Task-provided commands are blocked by default and blocked-command rows are not production-gate eligible.

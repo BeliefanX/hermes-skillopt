@@ -696,10 +696,16 @@ class TargetExecutor:
                 if metadata.get("task_commands_executed") is not False:
                     missing_runtime.append("task_commands_executed_false")
             contract_checks.append({"task_id": task.id, "classification": classification or None, "runtime_evidence_complete": not missing_runtime, "missing_runtime_evidence": missing_runtime})
-        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility) and all(bool(row.get("runtime_evidence_complete")) for row in contract_checks)
+        raw_target_params = target_config.get("parameters")
+        target_params = raw_target_params if isinstance(raw_target_params, dict) else {}
+        backend_kind = str(target_params.get("backend_kind") or "")
+        internal_review_only_runner = self.mode in {"deterministic_mock_scorecard", "hermes_trace_replay_runner_v1", "hermes_sandbox_executor_mvp", "hermes_live_readonly_adapter_v1_disabled"} or backend_kind in {"sandbox_fixed_internal_runner", "deterministic_trace_replay", "deterministic_fallback_scorecard", "live_hermes_readonly_adapter_interface"}
+        complete_real_runtime_contract = bool(contract_checks) and all(c.get("classification") == FROZEN_HERMES_CONTRACT and bool(c.get("runtime_evidence_complete")) for c in contract_checks)
+        production_gate_eligible = bool(results) and all(bool(row.get("eligible")) for row in eligibility) and complete_real_runtime_contract and not internal_review_only_runner
         regression_cases = [r.task_id for r in results if not r.passed]
         trajectory_index = self._trajectory_index(results)
         evaluation_scope = "production_curated_pack_eligible" if production_gate_eligible else "review_only_deterministic_fallback"
+        evidence_maturity = "production_runtime_complete" if production_gate_eligible else "review_only_static_replay_or_incomplete_runtime"
         return {
             "label": label,
             "executor": self.mode,
@@ -718,6 +724,17 @@ class TargetExecutor:
             "total_weight": round(total_weight, 3),
             "production_gate_eligible": production_gate_eligible,
             "evaluation_scope": evaluation_scope,
+            "eval_level": "production" if production_gate_eligible else "review_only",
+            "evidence_maturity": evidence_maturity,
+            "evidence_ledger": {
+                "schema_version": "hermes-skillopt-evidence-ledger-v1",
+                "level": "production" if production_gate_eligible else "review_only",
+                "maturity": evidence_maturity,
+                "review_only_unless_complete_real_hermes_runtime": True,
+                "internal_review_only_runner": internal_review_only_runner,
+                "complete_real_runtime_contract": complete_real_runtime_contract,
+                "task_commands_executed": any((r.metadata or {}).get("task_commands_executed") is True for r in results),
+            },
             "eval_execution_contract_checks": contract_checks,
             "target_execution_evidence_contract": {"classification": FROZEN_HERMES_CONTRACT, "required_runtime_evidence": list(FROZEN_REQUIRED_RUNTIME_EVIDENCE), "required_permissions": {"task_commands_allowed": False, "profile_write_allowed": False}, "missing_required_evidence_makes_production_eligible": False},
             "adoption_policy": "production adoption allowed only when every task is explicit curated-pack production eligible and eval execution contract/runtime evidence gates pass; otherwise review-only evidence",

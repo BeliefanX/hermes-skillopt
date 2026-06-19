@@ -92,6 +92,11 @@ def test_report_fields_and_target_split_output(tmp_path):
         assert key in summary or key == "production_eligibility_reasons"
     assert "split_scores" in report
     assert "regression_cases" in report
+    assert out["evidence_ledger"]["eval_level"] == "review_only"
+    assert out["evidence_ledger"]["production_runtime_ready"] is False
+    assert manifest["eval_level"] == "review_only"
+    assert manifest["evidence_maturity"] == "review_only_static_replay_or_incomplete_runtime"
+    assert manifest["evidence_ledger"]["production_runtime_ready"] is False
 
     executor = TargetExecutor(runner=DeterministicKeywordScorecard())
     eval_out = executor.evaluate("verify tool", [EvalTask("v", "p", split="val", expected_terms=("verify",), metadata={"task_origin": "synthetic", "scorecard_explicit": True})])
@@ -202,6 +207,11 @@ def test_rollout_output_preserves_trajectory_and_hard_soft_scores_for_gate_refle
     assert out["hard_score"] == out["hard_pass_rate"] == 0.666667
     assert out["evaluation_scope"] == "review_only_deterministic_fallback"
     assert out["production_gate_eligible"] is False
+    assert out["eval_level"] == "review_only"
+    assert out["evidence_maturity"] == "review_only_static_replay_or_incomplete_runtime"
+    ledger = out["evidence_ledger"]
+    assert isinstance(ledger, dict)
+    assert ledger["internal_review_only_runner"] is True
     assert out["trajectory_index"]["schema_version"] == "hermes-target-trace-v1"
     assert len(out["trajectory_index"]["items"]) == 2
     assert all(item["has_trajectory"] for item in out["trajectory_index"]["items"])
