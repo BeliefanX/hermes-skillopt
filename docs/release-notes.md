@@ -2,12 +2,19 @@
 
 ## 0.1.0 Phase0-Phase5 implementation snapshot
 
+- Documents latest P0-P3 readiness/authoring additions:
+  - `eval-pack-workflow` is a read-only authoring summary with inventory/doctor state, review-only provenance, safe next commands, and production-promotion checklist; it does not write packs or imply production promotion.
+  - `skill-readiness-queue` / `skill-queue` is a read-only high-value skill queue with advisory usage/package/eval signals and native/curator guard blockers; it never runs optimize/adopt/rollback.
+  - `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and existing-run `review --digest` are the notification-oriented diagnostic surfaces; scheduled usage remains diagnostics/notification only.
+  - `skill-quality` / `skill-lint` is read-only by default; explicit eval skeleton creation is guarded review-only and never edits live `SKILL.md` or creates production evidence.
+  - WebUI copy/APIs now expose workflow, readiness queue, and quality checks while keeping promotion review-only and preserving typed adopt/rollback guards.
+
 - Documents native-boundary/eval-maturity implementation updates:
   - SkillOpt explicitly does not replace the Hermes curator: curator owns lifecycle/archive/consolidation and native skill ownership; SkillOpt owns staged eval evidence and adoption recommendations.
   - Review/status/adopt surfaces read Hermes-native `.usage.json`, curator state, hub/bundled manifests, and provenance/manifest sidecars best-effort for diagnostics and guard fingerprints only; SkillOpt writes no native sidecars.
   - Hub-installed, bundled, pinned, archived, and curator-managed skills are blocked/diagnostic-only for SkillOpt adoption by default, and `force` does not bypass the native conflict guard or native metadata fingerprint drift.
   - Evidence ledger fields (`eval_level`, `evidence_maturity`, `production_runtime_ready`, complete frozen evidence, real runtime invocation/evidence, task command, internal-runner, reviewer-gate, blockers) separate review-only static/replay/sandbox/live-disabled evidence from complete production runtime evidence.
-  - Adopt requires strict gates, complete frozen runtime evidence, reviewer gate, native conflict guard, current SHA/proposed SHA/provenance hashes, and hashed-artifact crosschecks; cron guidance is narrowed to scout/doctor/inventory/review digest style read-only monitoring.
+  - Adopt requires strict gates, complete frozen runtime evidence, reviewer gate, native conflict guard, current SHA/proposed SHA/provenance hashes, and hashed-artifact crosschecks; cron guidance is narrowed to digest-style scout/doctor/inventory/eval-pack-doctor/review read-only monitoring.
   - WebUI review exposes evidence maturity/native guard summaries, WebUI runs remain staged-only, and one-click eval-pack promotion remains review-only.
 
 - Documents latest batch/eval/fleet/WebUI/upstream status surfaces:

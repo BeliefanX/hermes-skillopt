@@ -347,6 +347,62 @@ def test_plugin_registers_doctor_optimize_and_enforces_adopt_confirmation(monkey
     assert "ROLLBACK abc" in denied_rollback.get("error", json.dumps(denied_rollback))
 
 
+def test_scheduled_default_safety_metadata_is_conservative(tmp_path):
+    plugin = load_plugin_module()
+
+    scheduled_defaults = {
+        "hermes_skillopt_scout",
+        "hermes_skillopt_doctor",
+        "hermes_skillopt_eval_pack_inventory",
+        "hermes_skillopt_eval_pack_doctor",
+    }
+    digest_only_defaults = {"hermes_skillopt_review"}
+    manual_read_only_surfaces = {"hermes_skillopt_eval_pack_workflow", "hermes_skillopt_skill_readiness_queue"}
+    manual_non_cron_surfaces = {
+        "hermes_skillopt_eval_pack_workflow",
+        "hermes_skillopt_skill_readiness_queue",
+        "hermes_skillopt_eval_pack_autopilot",
+        "hermes_skillopt_skill_quality",
+    }
+
+    cron_safe_true = {name for name, meta in plugin.core.TOOL_SAFETY_METADATA.items() if meta.get("cron_safe") is True}
+    assert cron_safe_true == scheduled_defaults
+    for name in digest_only_defaults:
+        assert plugin.core.TOOL_SAFETY_METADATA[name]["cron_safe"] == "digest_only"
+    for name in manual_read_only_surfaces:
+        meta = plugin.SCHEMAS[name]["x-hermes-skillopt-safety"]
+        assert meta["safety_group"] == "read_only"
+        assert meta["cron_safe"] is False
+        assert meta["manual_surface"] is True
+    for name in manual_non_cron_surfaces:
+        meta = plugin.SCHEMAS[name]["x-hermes-skillopt-safety"]
+        assert meta["cron_safe"] is False
+        assert meta["manual_surface"] is True
+
+    guidance = plugin.TOOL_SAFETY_CATALOG["scheduled_default_guidance"]
+    assert "eval-pack-doctor" in guidance
+    assert "eval-pack-autopilot" in guidance
+    assert "skill-quality" in guidance
+    default_clause = guidance.split("surfaces", 1)[0]
+    assert "eval-pack-workflow" not in default_clause
+    assert "skill-readiness-queue" not in default_clause
+    read_only_description = plugin.TOOL_SAFETY_CATALOG["groups"]["read_only"]["description"]
+    assert "eval-pack-doctor" in read_only_description
+    assert "workflow/queue surfaces are manual" in read_only_description
+
+    plugin_yaml = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text(encoding="utf-8")
+    assert "Schedule only scout, doctor, eval-pack-inventory, eval-pack-doctor, or review --digest" in plugin_yaml
+    assert "workflow/queue surfaces are manual" in plugin_yaml
+
+    make_skill(tmp_path, "demo")
+    scout = plugin.core.scout(hermes_home_path=str(tmp_path), skill="demo")
+    cron = scout["cron_recommendation"]
+    assert cron["allowed_cron_surfaces"] == ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor", "review --digest"]
+    assert cron["manual_read_only_surfaces"] == ["eval-pack-workflow", "skill-readiness-queue"]
+    assert "eval-pack-workflow" not in cron["allowed_cron_surfaces"]
+    assert "skill-readiness-queue" not in cron["allowed_cron_surfaces"]
+
+
 def test_cli_optimize_production_refusal_is_clear(tmp_path):
     proc = subprocess.run([sys.executable, "-m", "hermes_skillopt.cli", "--home", str(tmp_path), "optimize", "--intent", "production", "--skill", "demo"], cwd=Path(__file__).resolve().parents[1], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert proc.returncode == 2

@@ -9,7 +9,7 @@ Current Phase0-Phase5 code provides deterministic, local, no-credential tooling 
 - Staged six-phase skill optimization over a single Hermes `SKILL.md` with explicit review/adopt/rollback gates.
 - Reviewed Hermes static seed eval packs, safe curated eval-pack authoring, session-mined review drafts, and safe upstream-style benchmark manifest import into Hermes eval pack format.
 - Runtime-evidence-aware target execution through deterministic scorecard/replay and the sandbox-routed `frozen_hermes_target_execution_v1` path, with sandbox/fixed internal runner evidence treated as review-only until real Hermes runtime invocation proof exists. Evidence maturity is reported through `hermes-skillopt-evidence-ledger-v1`.
-- Guided UX surfaces (`scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`), WebUI wizard/review console/API, fleet/readiness reports, artifact hygiene reports, and local CI conformance reports.
+- Guided UX surfaces (`scout`, `doctor`, `optimize --intent`, `review latest --summary`, `review --digest`), eval-pack workflow/readiness queue/skill-quality checks, WebUI wizard/review console/API, fleet/readiness reports, artifact hygiene reports, and local CI conformance reports.
 
 No command in this adapter vendors Microsoft SkillOpt, imports upstream Python modules, executes upstream benchmark code, or requires external services. SkillOpt also does not replace Hermes curator lifecycle/archive/consolidation: native Hermes `.usage.json`/curator/hub/bundled/provenance sidecars are read best-effort for diagnostics and adopt guards, never written by SkillOpt.
 
@@ -40,6 +40,14 @@ Hermes preserves the outer safety shell even when adapting upstream benchmark co
 - Bounded edit validation checks replacement/inserted text for protected headings/markers and allowed-region marker boundary mutations, not just the matched old text.
 - Score artifacts distinguish production-curated evidence from review-only evidence through `production_curated_score`, `review_only_score`, per-task delta rows, expected-term/assertion change details, and held-out test sensitivity warnings. Evidence ledger fields distinguish production runtime readiness from static/replay/sandbox/live-disabled review-only evidence.
 - Resume/tooling and artifact hygiene are inspection-first: incomplete/stale checkpoints are reported with stage/artifact fingerprints, `partial_continuation_available: false`, and cleanup guidance, but partial-stage continuation is unavailable because replaying from the middle could skip gates or adoptability checks.
+
+## P0-P3 native readiness and authoring UX contracts
+
+- `eval-pack-workflow` is a read-only workflow summary over inventory and doctor diagnostics. It reports authoring state, review-only provenance, safe next commands, and a promotion checklist; it never writes packs and never implies one-click production promotion.
+- `skill-readiness-queue` / `readiness-queue` / `skill-queue` is a read-only high-value candidate queue. It prioritizes skills from advisory usage/package/eval signals, carries native/pinned/hub/bundled/curator-managed blockers, and returns safe next diagnostic/authoring commands only.
+- `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and existing-run `review --digest` are the notification surfaces. Their digests are diagnostic summaries, not cron authorization to optimize/adopt/rollback.
+- `skill-quality` / `skill-lint` is read-only by default and reports quality/eval-readiness issues. `--create-eval-skeleton` is an explicit guarded review-only eval scaffold write; it never edits live `SKILL.md` and cannot provide production evidence.
+- `review_only` and `production_gate_eligible` are separate booleans. Scaffold/session-mined/sample/synthetic/correction/context/draft/generated/negative/boundary evidence is review-only by default and cannot be production evidence without explicit curated policy, adoption-eligible execution contract, strict gate, held-out test coverage, real runtime evidence, reviewer approval, and all native/artifact guards.
 
 ## P0-P2 unified readiness/review UX contracts
 
@@ -140,7 +148,7 @@ CLI equivalents (console script after editable install, or `python3 -m hermes_sk
 - `hermes-skillopt transfer-eval --run-id RUN --target scorecard --target replay --output report.json`
 - `hermes-skillopt conformance --output conformance.json`
 
-Scheduled automation should stay read-only: `scout`, `doctor`, `eval-pack-inventory`, and `review --digest` over existing runs are the appropriate cron/default notification inputs. Do not cron `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, eval-pack write/promote actions, or cleanup/writeback actions.
+Scheduled automation should stay notification/diagnostic-only: `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and `review --digest` over existing runs are the appropriate cron/default notification inputs. Do not cron `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, eval-pack write/promote/skeleton actions, skill-quality skeleton creation, or cleanup/writeback actions.
 
 Hermes plugin tool equivalents registered in `plugin.yaml`:
 

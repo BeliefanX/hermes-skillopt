@@ -19,6 +19,9 @@ This cookbook describes the current Phase0-Phase5 safe workflow for `hermes-skil
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" doctor --skill my-skill
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" scout --skill my-skill
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-inventory --skill my-skill
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-workflow --skill my-skill
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" skill-readiness-queue --skill my-skill
+python3 -m hermes_skillopt.cli --home "$HERMES_HOME" skill-quality --skill my-skill --digest
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" benchmark-parity-status
 ```
 
@@ -26,7 +29,7 @@ Expected interpretation:
 
 - `doctor` and `scout` are read-only: no eval execution/full-run, no fetch, no adopt, no rollback, no write.
 - `scout` is suitable for notifications. Without `--output`, it returns JSON and writes no report. Its `cron_recommendation` is scout-only (`auto_adopt_from_cron: false`) and must not be expanded into scheduled optimize/adopt/rollback.
-- Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent. Native metadata shown by status/scout/review is diagnostic guard input; hub/bundled/pinned/archived/curator-managed skills remain blocked for adopt by default.
+- Inventory should show a valid explicit curated pack with train/validation/test coverage, versioned pack id/version/fingerprint, and a production-eligible execution contract before production intent. `eval-pack-workflow` and `skill-readiness-queue` are authoring/readiness summaries only: they rank gaps and safe next commands, but do not create production evidence. `skill-quality --digest` is a read-only/lint digest; an eval skeleton from `--create-eval-skeleton` is review-only and not production evidence. Native metadata shown by status/scout/review is diagnostic guard input; hub/bundled/pinned/archived/curator-managed skills remain blocked for adopt by default.
 - Parity status should remain no-full-parity unless future code adds real upstream execution evidence.
 
 ## 2. Smoke check
@@ -47,7 +50,7 @@ python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-doctor --skill my
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" eval-pack-autopilot --skill my-skill
 ```
 
-Default autopilot is plan/read-only (`mode: eval_pack_autopilot_plan_read_only`) and is safe for scheduled notifications because it only returns a plan plus doctor diagnostics. To create a draft, use the explicit review-draft switch:
+Default autopilot is plan/read-only (`mode: eval_pack_autopilot_plan_read_only`) and returns a plan plus doctor diagnostics. It is useful for humans, but the scheduled/default notification set should stay to digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and existing-run `review --digest`) rather than write-producing authoring steps. To create a draft, use the explicit review-draft switch:
 
 ```bash
 python3 -m hermes_skillopt.cli --home "$HERMES_HOME" \
@@ -168,7 +171,7 @@ CI evidence labels:
 
 ## 6a. Scheduled read-only surfaces only
 
-If you want scheduled monitoring, schedule only read-only surfaces (`scout`, `doctor`, `eval-pack-inventory`, and `review --digest` for existing runs; `eval-pack-doctor`/default autopilot are useful interactively but should not be promoted to write-producing cron) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
+If you want scheduled monitoring, schedule only read-only notification/diagnostic digest surfaces (`scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, `eval-pack-doctor --digest`, and `review --digest` for existing runs) and route JSON/digest output to your notifier. Use explicit guarded `--output` only when you intentionally want a report file:
 
 ```bash
 hermes-skillopt --home "$HERMES_HOME" scout --output skillopt/reports/scout.json
@@ -182,7 +185,7 @@ Do not schedule `optimize`, `full-run`, `adopt`, `rollback`, `upstream-update`, 
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
 ```
 
-Use the WebUI scout/status views for read-only readiness, eval-pack doctor/autopilot for coverage planning, the explicit draft action for review-only pack generation, one-click eval-pack promotion for review packs only, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, evidence maturity, native metadata/adopt guards, digests, and artifacts. Server-side APIs keep scout/review/eval-pack doctor/autopilot-plan read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
+Use the WebUI scout/status views for read-only readiness, eval-pack workflow/doctor/autopilot for coverage planning, skill readiness queue for high-value candidates, skill-quality for read-only lint/digest (or explicit review-only skeleton creation), the explicit draft action for review-only pack generation, one-click eval-pack promotion for review packs only, the guided wizard for staged smoke/review/production runs, and the review console/API for decision summaries, evidence maturity, native metadata/adopt guards, digests, and artifacts. Server-side APIs keep scout/doctor/review/eval-pack workflow/doctor/readiness-queue/quality-without-skeleton/autopilot-plan read-only, `run_full` staged-only with `auto_adopt=false`/`force=false`, typed adopt/rollback confirmations, and ignore the WebUI home override for writeback/upstream update paths. WebUI default `gate_mode: soft` is review-oriented; use production intent/strict curated evidence for production candidates.
 
 ## 8. Runtime evidence and no-overclaim checklist
 

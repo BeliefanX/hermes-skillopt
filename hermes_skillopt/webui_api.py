@@ -143,6 +143,18 @@ def eval_pack_doctor(home: str | None = None, skill: str | None = None) -> dict[
     return eval_packs.eval_pack_doctor(hermes_home_path=home or None, skill=skill or None)
 
 
+def eval_pack_workflow(home: str | None = None, skill: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Read-only eval-pack authoring workflow summary; no production one-click."""
+
+    return eval_packs.eval_pack_workflow_summary(hermes_home_path=home or None, skill=skill or None, limit=limit)
+
+
+def skill_readiness_queue(home: str | None = None, skill: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Read-only high-value skill readiness queue for the WebUI."""
+
+    return core.skill_readiness_queue(home or None, skill=skill or None, limit=limit)
+
+
 def eval_pack_autopilot(payload: dict[str, Any]) -> dict[str, Any]:
     """Plan or write a review-only eval-pack draft; never adopts or edits live skills."""
 
@@ -177,6 +189,22 @@ def eval_pack_promote(payload: dict[str, Any]) -> dict[str, Any]:
         production=False,
         overwrite=bool(payload.get("overwrite")),
     )
+
+
+def skill_quality(payload: dict[str, Any]) -> dict[str, Any]:
+    """Read-only skill quality/lint report; optional eval skeleton is review-only."""
+
+    from hermes_skillopt.skill_quality import skill_quality_digest, skill_quality_report
+
+    report = skill_quality_report(
+        hermes_home_path=payload.get("home") or None,
+        skill=payload.get("skill") or None,
+        skill_path=payload.get("skill_path") or None,
+        create_eval_skeleton=bool(payload.get("create_eval_skeleton")),
+        output=payload.get("output") or None,
+        overwrite=bool(payload.get("overwrite")),
+    )
+    return skill_quality_digest(report) if bool(payload.get("digest")) else report
 
 
 def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]:

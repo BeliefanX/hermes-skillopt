@@ -56,10 +56,14 @@ def _pack_report(path: Path) -> dict[str, Any]:
     missing = [s for s in ("train", "val", "test") if int(split_counts.get(s) or 0) <= 0]
     prod_tasks = [t for t in tasks if production_eligibility_for_task(t).eligible]
     reasons = list((meta.production_policy or {}).get("refusal_reasons") or [])
+    task_origins = sorted({str(t.metadata.get("task_origin") or t.source) for t in tasks if str(t.metadata.get("task_origin") or t.source)})
+    non_production_origins = sorted(set(task_origins) & set(NON_PRODUCTION_ORIGINS))
     if missing:
         reasons.append("missing complete splits: " + ", ".join(missing))
     if not prod_tasks:
         reasons.append("no production-eligible val/test tasks")
+    if non_production_origins:
+        reasons.append("review-only/non-production origins present: " + ", ".join(non_production_origins))
     production_eligible = not missing and bool(prod_tasks) and bool((meta.production_policy or {}).get("allow_production_adoption"))
     return {
         "path": str(path),
@@ -74,6 +78,10 @@ def _pack_report(path: Path) -> dict[str, Any]:
         "production_eligible_task_count": len(prod_tasks),
         "production_eligible": production_eligible,
         "review_only": not production_eligible,
+        "task_origins": task_origins,
+        "non_production_origins": non_production_origins,
+        "production_policy": meta.production_policy,
+        "review_only_reason": "production requires explicit curated policy, adoption-eligible contract, complete val/test scorecards, and no generated/scaffold/session/correction/context/negative/boundary origins" if not production_eligible else None,
         "missing_reasons": sorted(set(str(r) for r in reasons if r)),
         "sample_pack": bool((meta.production_policy or {}).get("sample_pack")),
         "eval_execution_contract": meta.eval_execution_contract,
@@ -226,6 +234,9 @@ def eval_pack_inventory(*, hermes_home_path: str | None = None, skill: str | Non
         "success": True,
         "schema_version": "hermes-skillopt-eval-pack-inventory-v2",
         "mode": "eval_pack_inventory_read_only",
+        "read_only": True,
+        "auto_adopt": False,
+        "live_skill_writes": False,
         "hermes_home": str(home),
         "skill_count": len(entries),
         "skills": entries,
@@ -266,11 +277,13 @@ def scaffold_eval_pack(*, skill: str, output: str | Path | None = None, hermes_h
             "classification": "static_review_only",
             "evidence": {},
         },
+        "provenance": {"origin": "scaffold", "review_only": True, "generated_by": "hermes_skillopt.scaffold_eval_pack", "live_skill_writes": False, "auto_adopt": False},
+        "non_production_reasons": ["origin=scaffold", "sample scaffold cannot gate production", "production_gate_eligible=false for every task"],
         "scaffold_notice": "Review-only starter pack. Replace sample prompts/expected terms with curated evidence before considering production gates.",
         "tasks": [
-            {"id": "train-sample-1", "split": "train", "prompt": f"Sample training case for {sk.name}: describe expected safe behavior.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False},
-            {"id": "val-sample-1", "split": "validation", "prompt": f"Sample validation case for {sk.name}: verify behavior without live writes.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False},
-            {"id": "test-sample-1", "split": "test", "prompt": f"Sample held-out test case for {sk.name}: ensure rollback/blocker handling is stated.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False},
+            {"id": "train-sample-1", "split": "train", "prompt": f"Sample training case for {sk.name}: describe expected safe behavior.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False, "provenance": {"origin": "scaffold", "review_only": True}, "non_production_reasons": ["sample scaffold task is review-only"]},
+            {"id": "val-sample-1", "split": "validation", "prompt": f"Sample validation case for {sk.name}: verify behavior without live writes.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False, "provenance": {"origin": "scaffold", "review_only": True}, "non_production_reasons": ["sample scaffold task is review-only"]},
+            {"id": "test-sample-1", "split": "test", "prompt": f"Sample held-out test case for {sk.name}: ensure rollback/blocker handling is stated.", "expected_terms": ["sample"], "task_origin": "sample-eval-pack", "production_gate_eligible": False, "provenance": {"origin": "scaffold", "review_only": True}, "non_production_reasons": ["sample scaffold task is review-only"]},
         ],
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -534,6 +547,12 @@ def mine_session_eval_pack(
     return {"success": True, "mode": "session_to_eval_mining_review_only", "output_path": str(out), "skill": sk.name, "review_only": True, "production_eligible": False, "snippet_count": len(snippets), "item_count": len(items), "eval_pack": payload, **validation}
 
 
+def eval_pack_inventory_digest(*, hermes_home_path: str | None = None, skill: str | None = None) -> dict[str, Any]:
+    """Telegram-friendly read-only eval-pack inventory digest."""
+
+    return core.notification_digest("eval-pack-inventory", eval_pack_inventory(hermes_home_path=hermes_home_path, skill=skill))
+
+
 def eval_pack_doctor(*, hermes_home_path: str | None = None, skill: str | None = None) -> dict[str, Any]:
     """Focused read-only eval-pack diagnostics; never writes, runs evals, or adopts."""
 
@@ -564,8 +583,53 @@ def eval_pack_doctor(*, hermes_home_path: str | None = None, skill: str | None =
     return {"success": True, "schema_version": "hermes-skillopt-eval-pack-doctor-v1", "mode": "eval_pack_doctor_read_only", "read_only": True, "auto_adopt": False, "live_skill_writes": False, "inventory": inv, "diagnostics": diagnostics, "recommended_next_action": "write_review_draft_with_explicit_flag" if any(not r.get("has_eval_pack") for r in rows) else "inspect_or_promote_review_pack"}
 
 
+def eval_pack_doctor_digest(*, hermes_home_path: str | None = None, skill: str | None = None) -> dict[str, Any]:
+    """Telegram-friendly read-only eval-pack doctor digest."""
+
+    return core.notification_digest("eval-pack-doctor", eval_pack_doctor(hermes_home_path=hermes_home_path, skill=skill))
+
+
+def eval_pack_workflow_summary(*, hermes_home_path: str | None = None, skill: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Read-only eval-pack authoring workflow summary combining inventory, doctor, and safe next actions."""
+
+    home = core.hermes_home(hermes_home_path)
+    inv = eval_pack_inventory(hermes_home_path=str(home), skill=skill)
+    doctor = eval_pack_doctor(hermes_home_path=str(home), skill=skill)
+    rows_raw = inv.get("skills")
+    rows = [r for r in rows_raw if isinstance(r, dict)] if isinstance(rows_raw, list) else []
+    cap = max(1, min(int(limit or 20), 100))
+    workflow_rows: list[dict[str, Any]] = []
+    for row in rows[:cap]:
+        skill_name = str(row.get("skill") or "")
+        if not row.get("has_eval_pack"):
+            action = "write_or_review_draft_eval_pack"
+            command = f"hermes-skillopt --home {home} eval-pack-autopilot --skill {skill_name} --write-draft"
+        elif row.get("invalid_eval_pack_count"):
+            action = "fix_invalid_eval_pack"
+            command = f"hermes-skillopt --home {home} eval-pack-doctor --skill {skill_name}"
+        elif row.get("production_eligible"):
+            action = "production_candidate_requires_separate_strict_optimize_review"
+            command = f"hermes-skillopt --home {home} eval-pack-doctor --skill {skill_name}"
+        else:
+            action = "promote_or_curate_review_pack_then_explicit_production_policy_contract"
+            command = f"hermes-skillopt --home {home} eval-pack-promote --skill {skill_name} --input <draft.json>"
+        workflow_rows.append({
+            "skill": skill_name,
+            "has_eval_pack": bool(row.get("has_eval_pack")),
+            "review_only": bool(row.get("review_only")),
+            "production_eligible": bool(row.get("production_eligible")),
+            "readiness": row.get("readiness_adoptability"),
+            "recommended_next_action": row.get("recommended_next_action"),
+            "safe_next_action": action,
+            "safe_next_command": command,
+            "requirements_for_production": ["explicit production_policy.allow_production_adoption=true", "adoption-eligible eval_execution_contract", "complete train/val/test with held-out test", "tasks must not use generated/scaffold/session/correction/context/negative/boundary origins", "strict production optimize/review remains separate; no WebUI production one-click"],
+            "blockers": row.get("missing_reasons") or [],
+        })
+    return {"success": True, "schema_version": "hermes-skillopt-eval-pack-workflow-summary-v1", "mode": "eval_pack_workflow_summary_read_only", "read_only": True, "auto_adopt": False, "live_skill_writes": False, "webui_production_one_click": False, "inventory": inv, "doctor": {k: v for k, v in doctor.items() if k != "inventory"}, "workflow": workflow_rows, "safe_next_actions": [r["safe_next_action"] for r in workflow_rows]}
+
+
 def eval_pack_autopilot(*, skill: str, output: str | Path | None = None, hermes_home_path: str | None = None, write_draft: bool = False, overwrite: bool = False) -> dict[str, Any]:
-    """Cron-safe eval-pack autopilot: default plan/read-only; explicit flag writes review-only draft."""
+    """Manual eval-pack autopilot: default plan/read-only; explicit flag writes review-only draft."""
 
     home = core.hermes_home(hermes_home_path)
     sk = core.find_skill(home, skill)
@@ -620,7 +684,7 @@ def generate_negative_boundary_eval_pack(*, skill: str, output: str | Path | Non
     ]
     tasks = []
     for idx, (split, origin, text, label) in enumerate(specs, 1):
-        tasks.append({"id": f"{label}-{idx:03d}", "split": split, "prompt": f"{sk.name} {label} eval: {text}", "expected_terms": ["refuse" if label == "negative" else "verify", "safe", "review"], "failure_terms": ["auto adopt", "fabricate", "execute user command"], "task_origin": origin, "production_gate_eligible": False, "non_production_reasons": [f"origin={origin}", "deterministic generated boundary/negative case is review-only"], "fixtures": {"case_type": label}})
+        tasks.append({"id": f"{label}-{idx:03d}", "split": split, "prompt": f"{sk.name} {label} eval: {text}", "expected_terms": ["refuse" if label == "negative" else "verify", "safe", "review"], "failure_terms": ["auto adopt", "fabricate", "execute user command"], "task_origin": origin, "production_gate_eligible": False, "provenance": {"origin": origin, "generated": True, "review_only": True}, "non_production_reasons": [f"origin={origin}", "deterministic generated boundary/negative case is review-only"], "fixtures": {"case_type": label}})
     out = _write_review_seed_pack(skill=skill, origin="generated", tasks=tasks, output=output, hermes_home_path=str(home), overwrite=overwrite, pack_suffix="negative-boundary", tmp_tag="negative-boundary", provenance={"case_generator": "deterministic_negative_boundary_v1"})
     out["mode"] = "negative_boundary_eval_pack_review_only"
     return out
@@ -662,4 +726,5 @@ def promote_eval_pack(*, skill: str, input_path: str | Path, output: str | Path 
     result["source_pack_id"] = meta.pack_id
     result["auto_adopt"] = False
     result["live_skill_writes"] = False
+    result["promotion_requirements"] = {"review_default": not production, "production_requires_explicit_policy_contract": True, "review_only_origins_cannot_be_upgraded": True, "no_webui_production_one_click": True}
     return result

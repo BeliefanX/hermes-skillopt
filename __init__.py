@@ -45,8 +45,8 @@ OPTIMIZE_PROPS = {**FULL_PROPS, "intent": {"type": "string", "enum": ["smoke", "
 
 SCHEMAS = {
     "hermes_skillopt_status": _schema("Show SkillOpt plugin status, eval_level/evidence_maturity, read-only native Hermes metadata, recent staged runs, lineage summaries, and stale/incomplete checkpoint rows. " + BOUNDARY_NOTE, COMMON_HOME),
-    "hermes_skillopt_scout": _schema("Cron-safe read-only notification-ready SkillOpt scout summary: skills/eval-pack inventory, recent staged runs, artifact hygiene, read-only native Hermes metadata, and exact safe next commands. Never runs full_run/optimize/adopt/rollback/fetch; optional output is guarded report-only JSON. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 5}, "stale_after_hours": {"type": "number", "default": 24.0}, "output": {"type": "string", "description": "Optional guarded .json report path; default returns JSON only and writes nothing."}}),
-    "hermes_skillopt_doctor": _schema("Cron-safe read-only SkillOpt readiness/guided UX report: profile paths, skill/eval readiness, recent runs, upstream/parity posture, production checklist, and next actions. Never runs full_run/adopt/rollback/fetch. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}}),
+    "hermes_skillopt_scout": _schema("Cron-safe read-only notification-ready SkillOpt scout summary: skills/eval-pack inventory, recent staged runs, artifact hygiene, read-only native Hermes metadata, and exact safe next commands. digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. Never runs full_run/optimize/adopt/rollback/fetch; optional output is guarded report-only JSON. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 5}, "stale_after_hours": {"type": "number", "default": 24.0}, "output": {"type": "string", "description": "Optional guarded .json report path; default returns JSON only and writes nothing."}, "digest": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_doctor": _schema("Cron-safe read-only SkillOpt readiness/guided UX report: profile paths, skill/eval readiness, recent runs, upstream/parity posture, production checklist, and next actions. digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. Never runs full_run/adopt/rollback/fetch. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "digest": {"type": "boolean", "default": False}}),
     "hermes_skillopt_dry_run": _schema("Create a legacy safe staged SkillOpt proposal/diff. Does not modify the target skill.", {**COMMON_HOME, "skill": {"type": "string"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_run": _schema("Run Hermes-native SkillOpt core adapter when mode='full' (default): trainable SKILL.md state, frozen target executor, optimizer bounded edits, held-out validation gate; stages best proposal for explicit review/adopt only. No auto-adopt and not cron-safe. " + BOUNDARY_NOTE, {**FULL_PROPS, "mode": {"type": "string", "enum": ["full", "legacy"], "default": "full"}, "goal": {"type": "string"}, "session_search": {"type": "string"}, "use_llm": {"type": "boolean", "default": False}}),
     "hermes_skillopt_full_run": _schema("Run full eval-gated core pipeline: load skill state, build eval tasks, frozen target eval, optimizer reflect/edit, strict validation/test gates, hard production-failure blocking, and staged artifacts only. No auto-adopt and not cron-safe. " + BOUNDARY_NOTE, FULL_PROPS),
@@ -57,9 +57,11 @@ SCHEMAS = {
     "hermes_skillopt_fleet_resume_plan": _schema("Read-only fleet resume plan: completed exact-fingerprint reuse only; incomplete partial continuation refused with cleanup/retry guidance.", {**COMMON_HOME, "limit": {"type": "integer", "default": 50}, "skill": {"type": "string"}}),
     "hermes_skillopt_fleet_rollback_plan": _schema("Read-only fleet rollback plan listing safely inferable adopted backups, backup/current-sha guard status, and exact one-run rollback commands; no bulk rollback/writeback.", {**COMMON_HOME, "limit": {"type": "integer", "default": 50}, "skill": {"type": "string"}}),
     "hermes_skillopt_artifact_hygiene_report": _schema("Read-only staging artifact hygiene planner/classifier for complete_verified, complete_tampered, checkpoint_only_recent, stale_incomplete, orphaned batch/child mismatch, and missing manifest/hash mismatch. Never deletes.", {**COMMON_HOME, "limit": {"type": "integer", "default": 200}, "stale_after_hours": {"type": "number", "default": 24.0}}),
-    "hermes_skillopt_eval_pack_inventory": _schema("Cron-safe read-only inventory of discovered skills and matching eval packs, including split completeness and production/review-only reasons. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}}),
-    "hermes_skillopt_eval_pack_doctor": _schema("Focused read-only eval-pack diagnostics and safe next actions; never writes, runs evals, adopts, or fetches.", {**COMMON_HOME, "skill": {"type": "string"}}),
-    "hermes_skillopt_eval_pack_autopilot": _schema("Eval-pack autopilot. Defaults to plan/read-only and cron-safe; write_draft=true explicitly writes only a guarded review-only draft pack.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "write_draft": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
+    "hermes_skillopt_eval_pack_inventory": _schema("Cron-safe read-only inventory of discovered skills and matching eval packs, including split completeness and production/review-only reasons. digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "digest": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_eval_pack_doctor": _schema("Focused read-only eval-pack diagnostics and safe next actions; digest=true returns Telegram-friendly diagnostic text with read_only=true/auto_adopt=false. Never writes, runs evals, adopts, or fetches.", {**COMMON_HOME, "skill": {"type": "string"}, "digest": {"type": "boolean", "default": False}}),
+    "hermes_skillopt_eval_pack_workflow": _schema("Manual read-only eval-pack workflow/authoring summary combining inventory, doctor, autopilot plan posture, and safe next actions. No runs/adopt/writeback and no WebUI production one-click; not a cron-safe default unless an explicit digest-only mode is added.", {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 20}}),
+    "hermes_skillopt_skill_readiness_queue": _schema("Manual read-only high-value skill queue/readiness prioritization using usage/native metadata/provenance/curator/readiness/eval maturity/package support/type. Never invokes full_run/optimize/adopt/rollback/upstream-update or schedules cron; not a cron-safe default unless an explicit digest-only mode is added.", {**COMMON_HOME, "skill": {"type": "string"}, "limit": {"type": "integer", "default": 20}}),
+    "hermes_skillopt_eval_pack_autopilot": _schema("Manual eval-pack autopilot. Defaults to plan/read-only but is not a scheduled/default cron-safe surface; write_draft=true explicitly writes only a guarded review-only draft pack. Add and catalog an explicit digest-only mode before scheduling.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "write_draft": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_eval_pack_scaffold": _schema("Generate a review-only eval-pack scaffold with complete train/validation/test samples; never production evidence.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_eval_pack_curate": _schema("Create a canonical curated eval pack from inline tasks. Defaults review-only; production eligibility requires explicit production_policy and compliant execution contract.", {**COMMON_HOME, "skill": {"type": "string"}, "tasks": {"type": "array", "items": {"type": "object"}}, "output": {"type": "string"}, "pack_id": {"type": "string"}, "version": {"type": "string", "default": "curated-v1"}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "tasks"]),
     "hermes_skillopt_eval_pack_mine_sessions": _schema("Read-only/draft mining of redacted sessions or session-like fixture file into a review-only eval pack; never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "query": {"type": "string"}, "lookback_days": {"type": "integer", "default": 14}, "limit": {"type": "integer", "default": 50}, "session_fixture": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
@@ -67,6 +69,7 @@ SCHEMAS = {
     "hermes_skillopt_eval_pack_ingest_context": _schema("Ingest skill-creation context into deterministic review-only eval seed tasks; redacted and never production-eligible.", {**COMMON_HOME, "skill": {"type": "string"}, "context": {"type": "string"}, "output": {"type": "string"}, "expected_terms": {"type": "array", "items": {"type": "string"}}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "context"]),
     "hermes_skillopt_eval_pack_negative_boundary": _schema("Generate deterministic negative/boundary review-only cases; no model calls, command execution, live skill writes, or production eligibility.", {**COMMON_HOME, "skill": {"type": "string"}, "output": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["skill"]),
     "hermes_skillopt_eval_pack_promote": _schema("Promote a draft to a curated review pack by default. Production promotion requires explicit production_policy and eval_execution_contract and never auto-adopts.", {**COMMON_HOME, "skill": {"type": "string"}, "input_path": {"type": "string"}, "output": {"type": "string"}, "production": {"type": "boolean", "default": False}, "production_policy": {"type": "object"}, "eval_execution_contract": {"type": "object"}, "overwrite": {"type": "boolean", "default": False}}, ["skill", "input_path"]),
+    "hermes_skillopt_skill_quality": _schema("Manual read-only skill lint/quality report with frontmatter/instructions/triggers/steps/pitfalls/verification, placeholder/TODO and secret-looking string detection, native metadata advisory context, package support summary, and eval-pack readiness. It is not a scheduled/default cron-safe surface unless a future explicit digest-only mode is added and cataloged. Optional create_eval_skeleton writes only a guarded review-only eval scaffold; never mutates live SKILL.md or auto-adopts. " + BOUNDARY_NOTE, {**COMMON_HOME, "skill": {"type": "string"}, "skill_path": {"type": "string"}, "digest": {"type": "boolean", "default": False}, "create_eval_skeleton": {"type": "boolean", "default": False}, "output": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}),
     "hermes_skillopt_resume_inspect": _schema("Read-only step-level resume inspection: verifies checkpoint/stage fingerprints and artifact hashes; refuses unsafe partial continuation.", {**COMMON_HOME, "run_id": {"type": "string"}}, ["run_id"]),
     "hermes_skillopt_review": _schema("Review a staged SkillOpt run with eval_level/evidence_maturity, read-only native Hermes metadata, gate score, accepted/rejected status, paths, artifact refs, and optional diff/report preview. run_id may be omitted or 'latest'; summary returns decision-first slim output; digest is the only cron-safe review form and returns Telegram-friendly path/hash refs only. " + BOUNDARY_NOTE, {**COMMON_HOME, "run_id": {"type": "string"}, "latest": {"type": "boolean", "default": False}, "summary": {"type": "boolean", "default": False}, "digest": {"type": "boolean", "default": False, "description": "Cron-safe Telegram-friendly slim digest with separated readiness/adoptability fields and artifact refs, not raw report/diff."}, "include_diff_chars": {"type": "integer", "default": 4000}, "slim": {"type": "boolean", "default": False, "description": "When true, omit large diff/report previews and return path/hash artifact references only."}}),
     "hermes_skillopt_adopt": _schema("HIGH RISK writeback: adopt a staged proposal into exactly one target SKILL.md in the active Hermes profile only, after sha/path/gate guard and backup. Never automatic, never cron-safe, and not curator replacement. " + BOUNDARY_NOTE, ADOPT_PROPS, ["run_id"]),
@@ -126,11 +129,17 @@ def _handle_status(args: dict, **kw) -> str:
 
 
 def _handle_scout(args: dict, **kw) -> str:
-    return _ok(core.scout, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "limit": int(args.get("limit") or 5), "stale_after_hours": float(args.get("stale_after_hours") or 24.0), "output_path": args.get("output")})
+    out_args = {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "limit": int(args.get("limit") or 5), "stale_after_hours": float(args.get("stale_after_hours") or 24.0), "output_path": args.get("output")}
+    if bool(args.get("digest", False)):
+        return _ok(lambda **a: core.notification_digest("scout", core.scout(**a), limit=out_args["limit"]), out_args)
+    return _ok(core.scout, out_args)
 
 
 def _handle_doctor(args: dict, **kw) -> str:
-    return _ok(core.doctor, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+    out_args = {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")}
+    if bool(args.get("digest", False)):
+        return _ok(lambda **a: core.notification_digest("doctor", core.doctor(**a)), out_args)
+    return _ok(core.doctor, out_args)
 
 
 def _handle_dry_run(args: dict, **kw) -> str:
@@ -198,13 +207,32 @@ def _handle_artifact_hygiene_report(args: dict, **kw) -> str:
 
 
 def _handle_eval_pack_inventory(args: dict, **kw) -> str:
-    from hermes_skillopt.eval_packs import eval_pack_inventory
-    return _ok(eval_pack_inventory, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+    from hermes_skillopt.eval_packs import eval_pack_inventory, eval_pack_inventory_digest
+    fn = eval_pack_inventory_digest if bool(args.get("digest", False)) else eval_pack_inventory
+    return _ok(fn, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
 
 
 def _handle_eval_pack_doctor(args: dict, **kw) -> str:
-    from hermes_skillopt.eval_packs import eval_pack_doctor
-    return _ok(eval_pack_doctor, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+    from hermes_skillopt.eval_packs import eval_pack_doctor, eval_pack_doctor_digest
+    fn = eval_pack_doctor_digest if bool(args.get("digest", False)) else eval_pack_doctor
+    return _ok(fn, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill")})
+
+
+def _handle_skill_quality(args: dict, **kw) -> str:
+    from hermes_skillopt.skill_quality import skill_quality_digest, skill_quality_report
+    report_args = {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "skill_path": args.get("skill_path"), "create_eval_skeleton": bool(args.get("create_eval_skeleton", False)), "output": args.get("output"), "overwrite": bool(args.get("overwrite", False))}
+    if bool(args.get("digest", False)):
+        return _ok(lambda **a: skill_quality_digest(skill_quality_report(**a)), report_args)
+    return _ok(skill_quality_report, report_args)
+
+
+def _handle_eval_pack_workflow(args: dict, **kw) -> str:
+    from hermes_skillopt.eval_packs import eval_pack_workflow_summary
+    return _ok(eval_pack_workflow_summary, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "limit": int(args.get("limit") or 20)})
+
+
+def _handle_skill_readiness_queue(args: dict, **kw) -> str:
+    return _ok(core.skill_readiness_queue, {"hermes_home_path": args.get("hermes_home"), "skill": args.get("skill"), "limit": int(args.get("limit") or 20)})
 
 
 def _handle_eval_pack_autopilot(args: dict, **kw) -> str:
@@ -321,6 +349,8 @@ _TOOLS = (
     ("hermes_skillopt_artifact_hygiene_report", SCHEMAS["hermes_skillopt_artifact_hygiene_report"], _handle_artifact_hygiene_report, "🧹"),
     ("hermes_skillopt_eval_pack_inventory", SCHEMAS["hermes_skillopt_eval_pack_inventory"], _handle_eval_pack_inventory, "📦"),
     ("hermes_skillopt_eval_pack_doctor", SCHEMAS["hermes_skillopt_eval_pack_doctor"], _handle_eval_pack_doctor, "🩺"),
+    ("hermes_skillopt_eval_pack_workflow", SCHEMAS["hermes_skillopt_eval_pack_workflow"], _handle_eval_pack_workflow, "🗺️"),
+    ("hermes_skillopt_skill_readiness_queue", SCHEMAS["hermes_skillopt_skill_readiness_queue"], _handle_skill_readiness_queue, "📋"),
     ("hermes_skillopt_eval_pack_autopilot", SCHEMAS["hermes_skillopt_eval_pack_autopilot"], _handle_eval_pack_autopilot, "🛫"),
     ("hermes_skillopt_eval_pack_scaffold", SCHEMAS["hermes_skillopt_eval_pack_scaffold"], _handle_eval_pack_scaffold, "🧱"),
     ("hermes_skillopt_eval_pack_curate", SCHEMAS["hermes_skillopt_eval_pack_curate"], _handle_eval_pack_curate, "📦"),
@@ -329,6 +359,7 @@ _TOOLS = (
     ("hermes_skillopt_eval_pack_ingest_context", SCHEMAS["hermes_skillopt_eval_pack_ingest_context"], _handle_eval_pack_ingest_context, "🌱"),
     ("hermes_skillopt_eval_pack_negative_boundary", SCHEMAS["hermes_skillopt_eval_pack_negative_boundary"], _handle_eval_pack_negative_boundary, "🚧"),
     ("hermes_skillopt_eval_pack_promote", SCHEMAS["hermes_skillopt_eval_pack_promote"], _handle_eval_pack_promote, "⬆️"),
+    ("hermes_skillopt_skill_quality", SCHEMAS["hermes_skillopt_skill_quality"], _handle_skill_quality, "🧭"),
     ("hermes_skillopt_resume_inspect", SCHEMAS["hermes_skillopt_resume_inspect"], _handle_resume_inspect, "🔎"),
     ("hermes_skillopt_review", SCHEMAS["hermes_skillopt_review"], _handle_review, "🔎"),
     ("hermes_skillopt_adopt", SCHEMAS["hermes_skillopt_adopt"], _handle_adopt, "✅"),

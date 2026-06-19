@@ -72,6 +72,7 @@ def main() -> int:
     scout_p.add_argument("--limit", type=int, default=5)
     scout_p.add_argument("--stale-after-hours", type=float, default=24.0)
     scout_p.add_argument("--output", help="Optional guarded JSON report path under skillopt/reports or staging; default writes nothing")
+    scout_p.add_argument("--digest", action="store_true", help="Telegram-friendly read-only diagnostic digest; never auto-adopts")
     def add_fleet_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--limit", type=int, default=50, help="Max recent staging run directories to inspect (capped at 200)")
         parser.add_argument("--skill", help="Optional skill_name filter")
@@ -79,6 +80,7 @@ def main() -> int:
     fr = sub.add_parser("full-run", help="Run eval-gated staged optimization only; never auto-adopts and does not replace Hermes curator"); add_full_args(fr)
     doc = sub.add_parser("doctor", help="Read-only readiness/guided UX report; cron-safe; no full_run/adopt/rollback/fetch; not a curator replacement")
     doc.add_argument("--skill")
+    doc.add_argument("--digest", action="store_true", help="Telegram-friendly read-only diagnostic digest; never auto-adopts")
     opt = sub.add_parser("optimize", help="Guided alias for eval-gated staged-only full_run with smoke/review/production intent presets; never auto-adopts and is not curator lifecycle management")
     opt.add_argument("--intent", choices=["smoke", "review", "production"], default="review")
     add_full_args(opt)
@@ -97,8 +99,14 @@ def main() -> int:
     hyg.add_argument("--stale-after-hours", type=float, default=24.0)
     inv = sub.add_parser("eval-pack-inventory", help="Read-only cron-safe inventory of skills and matching eval packs; evidence advisory only")
     inv.add_argument("--skill")
+    inv.add_argument("--digest", action="store_true", help="Telegram-friendly read-only inventory digest; never auto-adopts")
     epdoc = sub.add_parser("eval-pack-doctor", help="Focused read-only eval-pack diagnostics; no writes/runs/adopt")
     epdoc.add_argument("--skill")
+    epdoc.add_argument("--digest", action="store_true", help="Telegram-friendly read-only eval-pack doctor digest; never auto-adopts")
+    epwf = sub.add_parser("eval-pack-workflow", help="Read-only eval-pack workflow/authoring summary; combines inventory/doctor/safe next actions")
+    epwf.add_argument("--skill"); epwf.add_argument("--limit", type=int, default=20)
+    rq = sub.add_parser("skill-readiness-queue", aliases=["readiness-queue", "skill-queue"], help="Read-only high-value skill readiness queue; never runs optimize/adopt/rollback")
+    rq.add_argument("--skill"); rq.add_argument("--limit", type=int, default=20)
     auto = sub.add_parser("eval-pack-autopilot", help="Plan/read-only eval-pack autopilot by default; --write-draft writes guarded review-only draft")
     auto.add_argument("--skill", required=True); auto.add_argument("--output"); auto.add_argument("--write-draft", action="store_true"); auto.add_argument("--overwrite", action="store_true")
     scaf = sub.add_parser("eval-pack-scaffold", help="Generate a review-only eval-pack scaffold with train/val/test samples")
@@ -117,6 +125,8 @@ def main() -> int:
     promo.add_argument("--skill", required=True); promo.add_argument("--input", required=True, dest="input_path"); promo.add_argument("--output"); promo.add_argument("--production", action="store_true"); promo.add_argument("--production-policy"); promo.add_argument("--eval-execution-contract"); promo.add_argument("--overwrite", action="store_true")
     eo = sub.add_parser("eval-only", help="Read-only fixed-skill evaluation against an explicit curated eval pack; no training/adoption side effects")
     eo.add_argument("--skill"); eo.add_argument("--skill-file"); eo.add_argument("--eval-file", required=True); eo.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); eo.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
+    qual = sub.add_parser("skill-quality", aliases=["skill-lint"], help="Read-only skill quality/frontloaded eval readiness report; optional eval skeleton is review-only")
+    qual.add_argument("--skill"); qual.add_argument("--skill-path"); qual.add_argument("--digest", action="store_true"); qual.add_argument("--create-eval-skeleton", action="store_true", help="Explicitly write a guarded review-only eval scaffold; never edits live SKILL.md"); qual.add_argument("--output"); qual.add_argument("--overwrite", action="store_true")
     bm = sub.add_parser("benchmark", help="Alias for eval-only that also writes benchmark_report.json with reproducibility fingerprints")
     bm.add_argument("--skill"); bm.add_argument("--skill-file"); bm.add_argument("--eval-file", required=True); bm.add_argument("--target-executor", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"], default="auto"); bm.add_argument("--target-backend", choices=["auto", "replay", "sandbox", "frozen-hermes", "frozen_hermes_target_execution_v1", "scorecard", "live-readonly"])
     run = sub.add_parser("run"); run.add_argument("--mode", choices=["full", "legacy"], default="full"); run.add_argument("--goal"); run.add_argument("--session-search"); run.add_argument("--use-llm", action="store_true"); add_full_args(run)
@@ -154,8 +164,12 @@ def main() -> int:
         out = core.status(args.home)
     elif args.cmd == "scout":
         out = core.scout(args.home, skill=args.skill, limit=args.limit, stale_after_hours=args.stale_after_hours, output_path=args.output)
+        if args.digest:
+            out = core.notification_digest("scout", out, limit=args.limit)
     elif args.cmd == "doctor":
         out = core.doctor(args.home, skill=args.skill)
+        if args.digest:
+            out = core.notification_digest("doctor", out)
     elif args.cmd == "dry-run":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "full-run" or (args.cmd == "run" and args.mode == "full"):
@@ -189,11 +203,16 @@ def main() -> int:
     elif args.cmd == "artifact-hygiene-report":
         out = core.artifact_hygiene_report(args.home, limit=args.limit, stale_after_hours=args.stale_after_hours)
     elif args.cmd == "eval-pack-inventory":
-        from hermes_skillopt.eval_packs import eval_pack_inventory
-        out = eval_pack_inventory(hermes_home_path=args.home, skill=args.skill)
+        from hermes_skillopt.eval_packs import eval_pack_inventory, eval_pack_inventory_digest
+        out = eval_pack_inventory_digest(hermes_home_path=args.home, skill=args.skill) if args.digest else eval_pack_inventory(hermes_home_path=args.home, skill=args.skill)
     elif args.cmd == "eval-pack-doctor":
-        from hermes_skillopt.eval_packs import eval_pack_doctor
-        out = eval_pack_doctor(hermes_home_path=args.home, skill=args.skill)
+        from hermes_skillopt.eval_packs import eval_pack_doctor, eval_pack_doctor_digest
+        out = eval_pack_doctor_digest(hermes_home_path=args.home, skill=args.skill) if args.digest else eval_pack_doctor(hermes_home_path=args.home, skill=args.skill)
+    elif args.cmd == "eval-pack-workflow":
+        from hermes_skillopt.eval_packs import eval_pack_workflow_summary
+        out = eval_pack_workflow_summary(hermes_home_path=args.home, skill=args.skill, limit=args.limit)
+    elif args.cmd in {"skill-readiness-queue", "readiness-queue", "skill-queue"}:
+        out = core.skill_readiness_queue(args.home, skill=args.skill, limit=args.limit)
     elif args.cmd == "eval-pack-autopilot":
         from hermes_skillopt.eval_packs import eval_pack_autopilot
         out = eval_pack_autopilot(skill=args.skill, output=args.output, hermes_home_path=args.home, write_draft=args.write_draft, overwrite=args.overwrite)
@@ -242,6 +261,11 @@ def main() -> int:
             return 2
     elif args.cmd in {"eval-only", "benchmark"}:
         out = core.eval_only(skill=args.skill, skill_file=args.skill_file, eval_file=args.eval_file, hermes_home_path=args.home, target_executor=args.target_executor, target_backend=args.target_backend)
+    elif args.cmd in {"skill-quality", "skill-lint"}:
+        from hermes_skillopt.skill_quality import skill_quality_digest, skill_quality_report
+        out = skill_quality_report(hermes_home_path=args.home, skill=args.skill, skill_path=args.skill_path, create_eval_skeleton=args.create_eval_skeleton, output=args.output, overwrite=args.overwrite)
+        if args.digest:
+            out = skill_quality_digest(out)
     elif args.cmd == "run" and args.mode == "legacy":
         out = core.dry_run(args.skill, args.goal, args.session_search, args.home, use_llm=args.use_llm)
     elif args.cmd == "review":

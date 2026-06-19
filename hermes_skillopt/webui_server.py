@@ -108,6 +108,15 @@ def create_app(home_default: Any = None):
         production: bool = False
         home: Optional[str] = None
 
+    class SkillQualityRequest(BaseModel):
+        skill: Optional[str] = None
+        skill_path: Optional[str] = None
+        digest: bool = False
+        create_eval_skeleton: bool = False
+        output: Optional[str] = None
+        overwrite: bool = False
+        home: Optional[str] = None
+
     app = FastAPI(title="Hermes SkillOpt WebUI", version="0.1.0")
 
     app.add_middleware(
@@ -130,6 +139,14 @@ def create_app(home_default: Any = None):
     def api_eval_pack_doctor(home: Optional[str] = None, skill: Optional[str] = None):
         return safe_response(lambda: webui_api.eval_pack_doctor(home or home_default, skill=skill))
 
+    @app.get("/api/eval-pack/workflow")
+    def api_eval_pack_workflow(home: Optional[str] = None, skill: Optional[str] = None, limit: int = Query(20, ge=1, le=200)):
+        return safe_response(lambda: webui_api.eval_pack_workflow(home or home_default, skill=skill, limit=limit))
+
+    @app.get("/api/skill-readiness-queue")
+    def api_skill_readiness_queue(home: Optional[str] = None, skill: Optional[str] = None, limit: int = Query(20, ge=1, le=200)):
+        return safe_response(lambda: webui_api.skill_readiness_queue(home or home_default, skill=skill, limit=limit))
+
     @app.post("/api/eval-pack/autopilot")
     def api_eval_pack_autopilot(req: EvalPackAutopilotRequest):
         data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
@@ -143,6 +160,13 @@ def create_app(home_default: Any = None):
         if not data.get("home") and home_default:
             data["home"] = str(home_default)
         return safe_response(lambda: webui_api.eval_pack_promote(data))
+
+    @app.post("/api/skill-quality")
+    def api_skill_quality(req: SkillQualityRequest):
+        data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        if not data.get("home") and home_default:
+            data["home"] = str(home_default)
+        return safe_response(lambda: webui_api.skill_quality(data))
 
     @app.post("/api/run")
     def api_run(req: RunRequest):

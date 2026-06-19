@@ -44,7 +44,9 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_scout": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_eval_pack_inventory": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
-    "hermes_skillopt_eval_pack_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_eval_pack_doctor": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": True, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_eval_pack_workflow": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "manual_surface": True, "native_hermes_metadata": "read_only_advisory"},
+    "hermes_skillopt_skill_readiness_queue": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "manual_surface": True, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_review": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": "digest_only", "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_resume_inspect": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_fleet_report": {"safety_group": "read_only", "risk_level": "low", "writes": False, "cron_safe": False, "native_hermes_metadata": "read_only_advisory"},
@@ -62,7 +64,7 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_full_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False, "auto_adopt": False, "curator_replacement": False},
     "hermes_skillopt_batch_run": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "staging_only", "cron_safe": False},
-    "hermes_skillopt_eval_pack_autopilot": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output_only_when_write_draft_true", "cron_safe": "plan_only_without_write_draft"},
+    "hermes_skillopt_eval_pack_autopilot": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output_only_when_write_draft_true", "cron_safe": False, "manual_surface": True},
     "hermes_skillopt_eval_pack_scaffold": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_eval_pack_curate": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_eval_pack_mine_sessions": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output", "cron_safe": False},
@@ -70,6 +72,7 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_eval_pack_ingest_context": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_eval_pack_negative_boundary": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_review_only_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_eval_pack_promote": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output_no_auto_adopt", "cron_safe": False},
+    "hermes_skillopt_skill_quality": {"safety_group": "read_only_report", "risk_level": "low", "writes": "optional_guarded_review_only_eval_skeleton", "cron_safe": False, "manual_surface": True, "auto_adopt": False, "live_skill_writes": False, "native_hermes_metadata": "read_only_advisory"},
     "hermes_skillopt_import_upstream_benchmark": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "guarded_eval_pack_output", "cron_safe": False},
     "hermes_skillopt_handoff_optimize": {"safety_group": "stage_artifacts", "risk_level": "medium", "writes": "handoff_artifact_only", "cron_safe": False},
     "hermes_skillopt_adopt": {"safety_group": "writeback", "risk_level": "high", "writes": "live_skill_with_backup", "cron_safe": False, "auto_adopt": False, "requires_typed_confirmation": True, "curator_replacement": False},
@@ -77,7 +80,7 @@ TOOL_SAFETY_METADATA: dict[str, dict[str, Any]] = {
     "hermes_skillopt_upstream_update": {"safety_group": "upstream", "risk_level": "high", "writes": "pinned_upstream_clone_and_lock", "cron_safe": False},
 }
 TOOL_SAFETY_GROUPS: dict[str, dict[str, Any]] = {
-    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch. Only scout, doctor, eval-pack-inventory, and review --digest are cron-safe defaults.", "scheduled_default": "limited"},
+    "read_only": {"description": "Inspection/inventory/digest only; no live skill writes, no optimize/adopt/rollback/fetch. Only scout, doctor, eval-pack-inventory, eval-pack-doctor, and review --digest are cron-safe defaults; workflow/queue surfaces are manual, and autopilot/skill-quality are manual unless they add explicit digest-only modes.", "scheduled_default": "limited"},
     "read_only_report": {"description": "Read-only checks that may write an explicitly requested report artifact; not cron-safe by default.", "scheduled_default": False},
     "stage_artifacts": {"description": "Creates guarded staging/eval/handoff artifacts for human review; never auto-adopts.", "scheduled_default": False},
     "writeback": {"description": "Writes live SKILL.md after explicit typed confirmation and guard checks.", "scheduled_default": False},
@@ -91,7 +94,7 @@ def tool_safety_catalog() -> dict[str, Any]:
     return {
         "schema_version": "hermes-skillopt-tool-safety-v1",
         "compatibility": "metadata_only_all_existing_tools_remain_available",
-        "scheduled_default_guidance": "Schedule only scout, doctor, eval-pack-inventory, or review --digest surfaces; never cron optimize, full-run, adopt, rollback, writeback, upstream-update, or status.",
+        "scheduled_default_guidance": "Schedule only scout, doctor, eval-pack-inventory, eval-pack-doctor, or review --digest surfaces; eval-pack-autopilot and skill-quality are manual unless explicit digest-only modes are added and cataloged; never cron optimize, full-run, adopt, rollback, writeback, upstream-update, or status.",
         "native_hermes_boundary": "SkillOpt reads native Hermes metadata as advisory guard input only. It does not replace the Hermes curator: curator owns lifecycle/archive/consolidation; SkillOpt owns staged eval evidence and adoption recommendations.",
         "groups": json.loads(json.dumps(TOOL_SAFETY_GROUPS, sort_keys=True)),
         "tools": json.loads(json.dumps(TOOL_SAFETY_METADATA, sort_keys=True)),
@@ -2528,7 +2531,63 @@ def review_digest(run_id: str | None = None, hermes_home_path: str | None = None
             ref = refs.get(key) if isinstance(refs.get(key), dict) else None
             if ref:
                 lines.append(f"{key}: {ref.get('path')} sha256={ref.get('sha256')}")
-    return {"success": True, "schema_version": "hermes-skillopt-review-digest-v1", "run_id": summary.get("run_id"), "digest": "\n".join(lines), "summary": summary, "artifact_refs": refs}
+    return {"success": True, "schema_version": "hermes-skillopt-review-digest-v1", "run_id": summary.get("run_id"), "read_only": True, "auto_adopt": False, "digest": "\n".join(lines), "summary": summary, "artifact_refs": refs}
+
+
+def notification_digest(surface: str, payload: dict[str, Any], *, limit: int = 6) -> dict[str, Any]:
+    """Generic Telegram-friendly digest wrapper for read-only diagnostic surfaces."""
+
+    surface_label = surface.replace("_", "-")
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    matrix = payload.get("readiness_matrix") if isinstance(payload.get("readiness_matrix"), dict) else {}
+    lines = [
+        f"Hermes SkillOpt {surface_label} digest",
+        f"success: {payload.get('success')} | mode: {payload.get('mode')}",
+        "read_only: True | auto_adopt: False",
+        "boundary: scheduled usage is diagnostic only and never auto-adopts; SkillOpt complements Hermes curator lifecycle ownership.",
+    ]
+    if summary:
+        keys = ["skills_count", "inventory_skill_count", "production_eligible_eval_pack_count", "no_eval_pack_count", "invalid_eval_pack_count", "recent_staged_run_count", "latest_run_id"]
+        parts = [f"{k}={summary.get(k)}" for k in keys if k in summary]
+        if parts:
+            lines.append("summary: " + " | ".join(parts))
+    if matrix:
+        keys = ["total_skills", "no_pack_count", "only_review_only_count", "production_eligible_count", "invalid_pack_count"]
+        parts = [f"{k}={matrix.get(k)}" for k in keys if k in matrix]
+        if parts:
+            lines.append("eval_matrix: " + " | ".join(parts))
+    latest = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else None
+    if latest:
+        lines.append(f"latest_run: {latest.get('run_id')} status={latest.get('status')} adoptable={latest.get('adoptable')} eval_level={latest.get('eval_level')}")
+    cap = max(1, min(int(limit or 6), 10))
+    actions = payload.get("next_actions") if isinstance(payload.get("next_actions"), list) else []
+    if actions:
+        compact = []
+        for row in actions[:cap]:
+            if isinstance(row, dict):
+                compact.append(f"{row.get('priority', 'info')}:{row.get('action')} — {row.get('reason')}")
+        if compact:
+            lines.append("next_actions: " + " ; ".join(compact))
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else []
+    if diagnostics:
+        rows = []
+        for row in diagnostics[:cap]:
+            if isinstance(row, dict):
+                rows.append(f"{row.get('skill')}: has_pack={row.get('has_eval_pack')} prod={row.get('production_eligible')} invalid={row.get('invalid_eval_pack_count')}")
+        if rows:
+            lines.append("diagnostics: " + " ; ".join(rows))
+    skills = payload.get("skills") if isinstance(payload.get("skills"), list) else []
+    if skills:
+        rows = []
+        for row in skills[:cap]:
+            if isinstance(row, dict):
+                rows.append(f"{row.get('skill')}: has_pack={row.get('has_eval_pack')} prod={row.get('production_eligible')} split={row.get('split_complete')}")
+        if rows:
+            lines.append("skills: " + " ; ".join(rows))
+    rec = payload.get("recommended_next_action") or payload.get("next_safe_action")
+    if rec:
+        lines.append("recommended_next_action: " + str(rec))
+    return {"success": True, "schema_version": "hermes-skillopt-notification-digest-v1", "surface": surface_label, "read_only": True, "auto_adopt": False, "digest": "\n".join(lines), "summary": payload}
 
 
 def doctor(hermes_home_path: str | None = None, *, skill: str | None = None) -> dict[str, Any]:
@@ -2552,9 +2611,10 @@ def doctor(hermes_home_path: str | None = None, *, skill: str | None = None) -> 
             skill_reason = f"requested skill unavailable: {type(exc).__name__}: {exc}"
     eval_inventory: dict[str, Any]
     try:
-        from hermes_skillopt.eval_packs import eval_pack_inventory
+        from hermes_skillopt.eval_packs import eval_pack_inventory, eval_pack_workflow_summary
 
         inv = eval_pack_inventory(hermes_home_path=str(home), skill=skill)
+        workflow = eval_pack_workflow_summary(hermes_home_path=str(home), skill=skill, limit=20)
         eval_inventory = {
             "available": True,
             "summary": {k: inv.get(k) for k in ("skills_count", "eval_packs_count", "production_ready_count", "review_only_count") if k in inv},
@@ -2580,6 +2640,8 @@ def doctor(hermes_home_path: str | None = None, *, skill: str | None = None) -> 
     return {
         "success": True,
         "mode": "read_only_doctor_no_full_run_no_adopt_no_rollback_no_fetch",
+        "read_only": True,
+        "auto_adopt": False,
         "hermes_home": str(home),
         "active_hermes_home": str(active_hermes_home()),
         "paths": {"skills": str(home / "skills"), "staging": str(dirs["staging"]), "backups": str(dirs["backups"]), "upstream": str(dirs["upstream"])},
@@ -2831,6 +2893,118 @@ def _skill_metadata_summary(skill: Skill, home: Path | None = None) -> dict[str,
     }
 
 
+
+def _usage_score_from_native(native: dict[str, Any]) -> tuple[int, list[str]]:
+    records = native.get("records") if isinstance(native.get("records"), dict) else {}
+    usage = records.get("usage") if isinstance(records.get("usage"), dict) else {}
+    reasons: list[str] = []
+    score = 0
+    for key in ("count", "usage_count", "invocation_count", "calls", "runs"):
+        try:
+            value = int(usage.get(key) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            score += min(value, 20)
+            reasons.append(f"usage.{key}={value}")
+            break
+    state = str(usage.get("state") or usage.get("status") or "").lower()
+    if state == "active":
+        score += 8
+        reasons.append("native usage marks active")
+    if usage.get("last_used") or usage.get("last_invoked_at"):
+        score += 5
+        reasons.append("native usage has recent-use metadata")
+    return score, reasons
+
+
+def skill_readiness_queue(hermes_home_path: str | None = None, *, skill: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Deterministic read-only queue of high-value SkillOpt candidates and readiness blockers."""
+
+    home = hermes_home(hermes_home_path)
+    try:
+        from hermes_skillopt.eval_packs import eval_pack_inventory
+
+        inv = eval_pack_inventory(hermes_home_path=str(home), skill=skill)
+    except Exception as exc:
+        inv = {"success": False, "error": f"{type(exc).__name__}: {redact_secrets(str(exc))}", "skills": []}
+    rows_raw = inv.get("skills") if isinstance(inv, dict) else []
+    inv_rows = [r for r in rows_raw if isinstance(r, dict)] if isinstance(rows_raw, list) else []
+    cap = max(1, min(int(limit or 20), 200))
+    command_home = shlex.quote(str(home))
+    queue: list[dict[str, Any]] = []
+    for row in inv_rows:
+        skill_name = str(row.get("skill") or "")
+        try:
+            sk = find_skill(home, skill_name)
+            metadata = _skill_metadata_summary(sk, home)
+        except Exception:
+            metadata = {"signals": {}, "warnings": ["skill metadata unavailable"], "package_summary": {}, "package_support": {}}
+        signals = metadata.get("signals") if isinstance(metadata.get("signals"), dict) else {}
+        native = row.get("native_hermes_metadata") if isinstance(row.get("native_hermes_metadata"), dict) else {}
+        skill_type = row.get("skill_type") if isinstance(row.get("skill_type"), dict) else {}
+        package_support = row.get("skill_package_support") if isinstance(row.get("skill_package_support"), dict) else {}
+        reasons: list[str] = []
+        blockers: list[str] = []
+        warnings: list[str] = []
+        score = 0
+        usage_score, usage_reasons = _usage_score_from_native(native)
+        score += usage_score
+        reasons.extend(usage_reasons)
+        type_name = str((skill_type or {}).get("type") or (skill_type or {}).get("kind") or "")
+        if type_name:
+            score += 5
+            reasons.append(f"skill_type={type_name}")
+        support_count = int((package_support or {}).get("total_file_count") or 0)
+        if support_count:
+            score += min(10, support_count)
+            reasons.append(f"package_support_files={support_count}")
+        if row.get("production_eligible"):
+            score += 25
+            reasons.append("production-eligible eval pack exists")
+        elif row.get("split_complete"):
+            score += 12
+            reasons.append("review eval pack has complete train/val/test splits")
+        elif row.get("has_eval_pack"):
+            score += 5
+            reasons.append("eval pack exists but is immature/review-only")
+        else:
+            blockers.append("no matching eval pack found")
+        if row.get("invalid_eval_pack_count"):
+            blockers.append("invalid eval pack must be fixed")
+            score -= 20
+        native_guard = bool(signals.get("pinned") or signals.get("archived") or signals.get("native_pinned") or signals.get("native_archived") or signals.get("native_hub_installed") or signals.get("native_bundled") or signals.get("native_curator_managed"))
+        if native_guard:
+            blockers.append("native/pinned/hub/bundled/archived/curator-managed guard requires owner review; optimize/adopt blocked by default")
+            score -= 100
+        if row.get("review_only"):
+            warnings.append("eval evidence is review-only; production requires explicit curated policy/contract and strict run")
+        warnings.extend(str(w) for w in (metadata.get("warnings") or []) if w)
+        readiness = "blocked_native_guard" if native_guard else ("ready_for_strict_candidate_review" if row.get("production_eligible") else ("needs_eval_pack_curation" if row.get("has_eval_pack") else "needs_eval_pack_authoring"))
+        band = "blocked" if native_guard or row.get("invalid_eval_pack_count") else ("high" if score >= 30 else "medium" if score >= 12 else "low")
+        if not row.get("has_eval_pack"):
+            safe_cmd = f"hermes-skillopt --home {command_home} eval-pack-autopilot --skill {shlex.quote(skill_name)}"
+        else:
+            safe_cmd = f"hermes-skillopt --home {command_home} eval-pack-doctor --skill {shlex.quote(skill_name)}"
+        queue.append({
+            "skill": skill_name,
+            "priority_score": int(score),
+            "priority_band": band,
+            "readiness": readiness,
+            "reasons": sorted(set(reasons)) or ["baseline discovered skill"],
+            "blockers": sorted(set(str(b) for b in blockers if b)),
+            "warnings": sorted(set(str(w) for w in warnings if w)),
+            "safe_next_command": safe_cmd,
+            "blocked_by_native_guard": native_guard,
+            "production_gate_eligible": bool(row.get("production_eligible")),
+            "review_only": bool(row.get("review_only")),
+            "eval_pack_maturity": {"has_eval_pack": bool(row.get("has_eval_pack")), "split_complete": bool(row.get("split_complete")), "invalid_eval_pack_count": int(row.get("invalid_eval_pack_count") or 0), "recommended_next_action": row.get("recommended_next_action")},
+            "native_hermes_metadata": native,
+            "skill_type": skill_type,
+        })
+    queue.sort(key=lambda r: (r["blocked_by_native_guard"], -int(r["priority_score"]), str(r["skill"])))
+    return {"success": True, "schema_version": "hermes-skillopt-skill-readiness-queue-v1", "mode": "skill_readiness_queue_read_only_no_full_run_no_optimize_no_adopt_no_rollback_no_fetch", "read_only": True, "auto_adopt": False, "cron_schedule": False, "hermes_home": str(home), "skill_count": len(queue), "queue": queue[:cap], "eval_pack_inventory_summary": {"schema_version": inv.get("schema_version") if isinstance(inv, dict) else None, "no_pack_count": inv.get("no_pack_count") if isinstance(inv, dict) else None, "production_eligible_count": inv.get("production_eligible_count") if isinstance(inv, dict) else None, "invalid_pack_count": inv.get("invalid_pack_count") if isinstance(inv, dict) else None}, "read_only_guards": ["does not call full_run", "does not call optimize/guided_optimize", "does not adopt", "does not rollback", "does not fetch/update upstream", "does not schedule cron"]}
+
 def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limit: int = 5, stale_after_hours: float = 24.0, output_path: str | None = None) -> dict[str, Any]:
     """Notification-ready read-only SkillOpt scout summary."""
 
@@ -2838,11 +3012,17 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
     cap = max(1, min(int(limit or 5), 20))
     st = status(str(home))
     try:
-        from hermes_skillopt.eval_packs import eval_pack_inventory
+        from hermes_skillopt.eval_packs import eval_pack_inventory, eval_pack_workflow_summary
 
         inv = eval_pack_inventory(hermes_home_path=str(home), skill=skill)
+        workflow = eval_pack_workflow_summary(hermes_home_path=str(home), skill=skill, limit=limit)
     except Exception as exc:
         inv = {"success": False, "error": f"{type(exc).__name__}: {redact_secrets(str(exc))}", "skills": []}
+        workflow = {"success": False, "error": inv.get("error"), "workflow": []}
+    try:
+        readiness_queue = skill_readiness_queue(str(home), skill=skill, limit=cap)
+    except Exception as exc:
+        readiness_queue = {"success": False, "error": f"{type(exc).__name__}: {redact_secrets(str(exc))}", "queue": []}
     hygiene = artifact_hygiene_report(str(home), limit=max(cap, 20), stale_after_hours=stale_after_hours)
 
     skills = discover_skills(home)
@@ -2870,6 +3050,8 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
     safe_commands: dict[str, str] = {
         "scout": f"hermes-skillopt --home {command_home} scout{skill_suffix}",
         "eval_inventory": f"hermes-skillopt --home {command_home} eval-pack-inventory{skill_suffix}",
+        "eval_workflow": f"hermes-skillopt --home {command_home} eval-pack-workflow{skill_suffix}",
+        "skill_readiness_queue": f"hermes-skillopt --home {command_home} skill-readiness-queue{skill_suffix}",
         "artifact_hygiene": f"hermes-skillopt --home {command_home} artifact-hygiene-report --limit 200",
         "conformance_quick": "hermes-skillopt conformance --mode quick",
     }
@@ -2900,6 +3082,8 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
         "success": True,
         "schema_version": "hermes-skillopt-scout-v1",
         "mode": "read_only_scout_no_full_run_no_optimize_no_adopt_no_rollback_no_fetch",
+        "read_only": True,
+        "auto_adopt": False,
         "hermes_home": str(home),
         "active_hermes_home": str(active_hermes_home()),
         "profile_isolation": {"requested_home": str(home), "active_home": str(active_hermes_home()), "writes_live_profile": False},
@@ -2918,12 +3102,14 @@ def scout(hermes_home_path: str | None = None, *, skill: str | None = None, limi
         },
         "skills_metadata": metadata_by_name,
         "eval_pack_inventory": {"schema_version": inv.get("schema_version"), "readiness_matrix": inv.get("readiness_matrix"), "skills": inv_skills[:cap], "error": inv.get("error")},
+        "eval_pack_workflow": {"schema_version": workflow.get("schema_version"), "workflow": (workflow.get("workflow") or [])[:cap], "webui_production_one_click": workflow.get("webui_production_one_click"), "error": workflow.get("error")},
+        "skill_readiness_queue": {"schema_version": readiness_queue.get("schema_version"), "queue": (readiness_queue.get("queue") or [])[:cap], "error": readiness_queue.get("error")},
         "recent_runs": recent_runs[:cap],
         "evidence_ledger": (latest or {}).get("evidence_ledger") if latest else _eval_evidence_ledger({}),
         "artifact_hygiene": {"schema_version": hygiene.get("schema_version"), "classification_counts": hygiene_counts, "runs": (hygiene.get("runs") or [])[:cap]},
         "next_actions": next_actions[:6],
         "safe_next_commands": safe_commands,
-        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "allowed_cron_surfaces": ["scout", "doctor", "eval-pack-inventory", "review --digest"], "note": "If scheduled externally, run only scout/doctor/eval-pack-inventory/review --digest and route JSON to notifications; never schedule status/full-run/optimize/adopt/rollback/writeback without human review."},
+        "cron_recommendation": {"create_cron_job": False, "auto_adopt_from_cron": False, "suggested_read_only_command": f"hermes-skillopt --home {command_home} scout{skill_suffix}", "allowed_cron_surfaces": ["scout", "doctor", "eval-pack-inventory", "eval-pack-doctor", "review --digest"], "manual_read_only_surfaces": ["eval-pack-workflow", "skill-readiness-queue"], "note": "If scheduled externally, run only scout/doctor/eval-pack-inventory/eval-pack-doctor/review --digest and route JSON to notifications; keep workflow/queue surfaces manual unless they expose explicit digest-only modes; never schedule status/full-run/optimize/adopt/rollback/writeback without human review."},
         "native_hermes_boundary": "Native Hermes metadata is read-only advisory evidence. SkillOpt does not replace Hermes curator lifecycle/archive/consolidation; it produces staged eval evidence and adoption recommendations only.",
         "read_only_guards": ["does not call full_run", "does not call optimize/guided_optimize", "does not adopt", "does not rollback", "does not fetch/update upstream", "does not write live skills/config/cron/memories", "does not archive/consolidate/replace Hermes curator lifecycle ownership"],
         "report_path": None,
