@@ -339,9 +339,11 @@ These utilities are useful for local regression evidence. Upstream benchmark bri
 
 ## Adopt and rollback
 
+Adoptability uses the effective readiness vocabulary from `hermes-skillopt-readiness-adoptability-v1`: `manifest_adoptable`/`raw_adoptable` are the staged manifest's raw claim, while `production_adoptable` is the effective result after artifact, strict curated validation/test, evidence-ledger, reviewer, and native-guard rechecks. `review_only`, `blockers`, and `next_safe_action` explain why a run is not eligible or what a human can do next. Do not treat a bare manifest `adoptable: true` as sufficient without the effective readiness schema and no blockers.
+
 `adopt(run_id)` writes the live skill only when all of these are true:
 
-- run manifest status is `staged_best` and `adoptable == true`
+- run manifest status is `staged_best` and effective `production_adoptable == true`
 - validation gate accepted
 - `production_gate_eligible == true`
 - `test_gate_eligible == true`
@@ -365,9 +367,12 @@ python3 -m pip install -e '.[webui]'
 python3 -m hermes_skillopt.webui --host 127.0.0.1 --port 7860
 # or
 python3 -m hermes_skillopt.cli webui --host 127.0.0.1 --port 7860
+# Non-loopback/LAN host disables adopt/rollback unless explicitly opted in via the module or main CLI launcher:
+python3 -m hermes_skillopt.webui --host 0.0.0.0 --port 7860 --unsafe-writeback-on-nonlocal-host
+python3 -m hermes_skillopt.cli webui --host 0.0.0.0 --port 7860 --unsafe-writeback-on-nonlocal-host
 ```
 
-Sections/actions/APIs: status, read-only scout/doctor, eval-pack workflow/doctor/autopilot/review-promotion, high-value skill readiness queue, read-only skill-quality lint/digest, guided staged optimization wizard, decision-first artifact review console/digest, fleet report/resume-plan/rollback-plan, artifact hygiene report, adopt, rollback, upstream status/parity/update. Scout, doctor, eval-pack workflow/doctor, skill readiness queue, skill-quality without skeleton output, autopilot planning, and review APIs are read-only; eval-pack autopilot and skill-quality write only when explicit review-draft/skeleton switches are used; WebUI promotion is one-click review promotion only and refuses production promotion. Artifact review reads only fixed allowlisted files in the selected staging directory and surfaces separated production/test gates, evidence class, `eval_level`, `evidence_maturity`, evidence ledger, native Hermes metadata/adopt-guard summaries, blockers, score provenance, artifact refs, and next safe action. Adopt/rollback require exact typed confirmation server-side and still call the core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status/scout/fleet/upstream-status operations and intentionally ignored for writeback/upstream update.
+Sections/actions/APIs: status, read-only scout/doctor, eval-pack workflow/doctor/autopilot/review-promotion, high-value skill readiness queue, read-only skill-quality lint/digest, guided staged optimization wizard, decision-first artifact review console/digest, fleet report/resume-plan/rollback-plan, artifact hygiene report, adopt, rollback, upstream status/parity/update. Scout, doctor, eval-pack workflow/doctor, skill readiness queue, skill-quality without skeleton output, autopilot planning, and review APIs are read-only; eval-pack autopilot and skill-quality write only when explicit review-draft/skeleton switches are used; WebUI promotion is one-click review promotion only and refuses production promotion. Artifact review reads only fixed allowlisted files in the selected staging directory and surfaces separated production/test gates, evidence class, `eval_level`, `evidence_maturity`, evidence ledger, native Hermes metadata/adopt-guard summaries, blockers, score provenance, artifact refs, and next safe action. Adopt/rollback require exact typed confirmation server-side and still call the core guards. Writeback endpoints are enabled only for loopback hosts by default; binding to a non-loopback host disables `/api/adopt` and `/api/rollback` unless started with `--unsafe-writeback-on-nonlocal-host`, which should only be used on a trusted/authenticated network and does not relax typed confirmation or core guards. The optional `HERMES_HOME` override is accepted for read/run/review/status/scout/fleet/upstream-status operations and intentionally ignored for writeback/upstream update.
 
 WebUI runs are staged-only by construction: server-side `run_full` passes `auto_adopt=False` and `force=False`. Its default run form uses `gate_mode: soft` for review-oriented exploration, not adoption-capable proof; choose CLI/tool `full-run` with strict gates and curated evals for production intent. In all CLI/WebUI modes, LLM context and judge text are advisory/explanatory only. Strict gate mode plus non-mock optimizer provenance and eligible curated val/test evidence is the adoption-capable path; `soft`, `mixed`, mock, fallback/session/synthetic, and sample/scaffold evidence remain review-only.
 

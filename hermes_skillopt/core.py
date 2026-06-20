@@ -2373,11 +2373,17 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             seen_dirs.add(run_dir)
             runtime_payload = _runtime_evidence_payload(run_dir, d)
             row = {k: d.get(k) for k in manifest_keys}
+            row["manifest_adoptable"] = d.get("adoptable") is True
+            row["raw_adoptable"] = d.get("adoptable") is True
             row["readiness_adoptability"] = readiness_adoptability_schema(runtime_payload)
+            row["adoptable"] = row["readiness_adoptability"].get("production_adoptable") is True
+            row["production_adoptable"] = row["adoptable"]
+            row["review_only"] = row["readiness_adoptability"].get("review_only") is True
+            row["blockers"] = row["readiness_adoptability"].get("blockers") or []
             row["evidence_ledger"] = row["readiness_adoptability"].get("evidence_ledger") or runtime_payload.get("evidence_ledger") or _eval_evidence_ledger({}, allow_inline_manifest_evidence=False)
             row["eval_level"] = row["evidence_ledger"].get("eval_level")
             row["evidence_maturity"] = row["evidence_ledger"].get("evidence_maturity")
-            row["evidence_class"] = "production_candidate" if row["readiness_adoptability"].get("adoptable") and row["readiness_adoptability"].get("production_gate_eligible") and row["readiness_adoptability"].get("test_gate_eligible") and row["evidence_ledger"].get("production_runtime_ready") else "review_only_or_not_ready"
+            row["evidence_class"] = "production_candidate" if row["production_adoptable"] and row["readiness_adoptability"].get("production_gate_eligible") and row["readiness_adoptability"].get("test_gate_eligible") and row["evidence_ledger"].get("production_runtime_ready") else "review_only_or_not_ready"
             row["score_provenance"] = _score_provenance_summary(d)
             row["artifact_refs"] = _artifact_refs_for_run(run_dir)
             row["run_dir"] = str(run_dir)
@@ -2387,7 +2393,7 @@ def status(hermes_home_path: str | None = None) -> dict[str, Any]:
             row["artifact_hygiene_reasons"] = hygiene.get("reasons") or []
             row["safe_reuse_completed"] = row["artifact_classification"] == "complete_verified"
             row["partial_continuation_available"] = False
-            row["next_safe_action"] = hygiene.get("next_safe_action") or row["readiness_adoptability"].get("next_safe_action")
+            row["next_safe_action"] = hygiene.get("next_safe_action") if row["artifact_classification"] == "tampered_hash_mismatch" else (row["readiness_adoptability"].get("next_safe_action") or hygiene.get("next_safe_action"))
             runs.append(row)
         except Exception:
             pass
@@ -2497,9 +2503,22 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
     strict_gate_mode = payload.get("strict_gate_mode") is True or (isinstance(payload.get("gate_policy"), dict) and payload["gate_policy"].get("mode") == "strict")
     raw_ledger = payload.get("evidence_ledger")
     evaluated_ledger = _eval_evidence_ledger(payload)
-    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else evaluated_ledger
+    # Production readiness is derived from the evaluated target execution
+    # evidence, not from raw manifest/ledger claims supplied in payload.
+    evidence_ledger: dict[str, Any] = evaluated_ledger
     runtime_artifacts_verified = payload.get("runtime_evidence_artifacts_verified") is True
-    ledger_ready = evidence_ledger.get("production_runtime_ready") is True and evaluated_ledger.get("production_runtime_ready") is True and runtime_artifacts_verified
+    if not runtime_artifacts_verified and evidence_ledger.get("production_runtime_ready") is True:
+        evidence_ledger = dict(evidence_ledger)
+        evidence_ledger["production_runtime_ready"] = False
+        evidence_ledger["eval_level"] = "review_only"
+        evidence_ledger["evidence_maturity"] = "review_only_static_replay_or_incomplete_runtime"
+        artifact_blockers = [str(x) for x in (evidence_ledger.get("blockers") or []) if x]
+        artifact_blockers.append("hashed target execution evidence and reviewer gate artifacts are missing or unverified")
+        evidence_ledger["blockers"] = sorted(set(artifact_blockers))
+    ledger_ready = evidence_ledger.get("production_runtime_ready") is True and runtime_artifacts_verified
+    if isinstance(raw_ledger, dict) and raw_ledger.get("production_runtime_ready") is True and evaluated_ledger.get("production_runtime_ready") is not True:
+        blockers.append("raw manifest evidence ledger claims production readiness but evaluated target execution evidence is not ready")
+        warnings.append("inconsistent manifest: raw evidence_ledger production_runtime_ready true was ignored in favor of evaluated target execution evidence")
     if manifest_adoptable and not ledger_ready:
         blockers.append("production runtime evidence ledger is not ready")
         if not runtime_artifacts_verified:
@@ -2516,9 +2535,16 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
         blockers.append("held-out test split is missing, non-production, or below threshold")
     if manifest_adoptable and not strict_gate_mode:
         blockers.append("production adoption requires strict gate mode; requested gate mode is review-only")
+    native_guard_raw = payload.get("native_hermes_adopt_guard") if isinstance(payload.get("native_hermes_adopt_guard"), dict) else payload.get("native_hermes_adopt_guard_at_stage")
+    native_guard: dict[str, Any] = native_guard_raw if isinstance(native_guard_raw, dict) else {}
+    native_allowed = native_guard.get("allowed") is True if native_guard else True
+    if manifest_adoptable and not native_allowed:
+        native_blockers = native_guard.get("blockers") if isinstance(native_guard.get("blockers"), list) else []
+        blockers.append("native Hermes metadata adopt guard blocks production adoption")
+        blockers.extend(str(x) for x in (native_blockers or []) if x)
     if manifest_adoptable and (not production_gate_eligible or not test_gate_eligible):
         warnings.append("inconsistent manifest: adoptable true without both production/test eligibility gates")
-    adoptable = manifest_adoptable and production_gate_eligible and test_gate_eligible and strict_gate_mode and ledger_ready
+    adoptable = manifest_adoptable and production_gate_eligible and test_gate_eligible and strict_gate_mode and ledger_ready and native_allowed
     review_only = not adoptable
     if not blockers and review_only:
         if not production_gate_eligible:
@@ -2547,12 +2573,16 @@ def readiness_adoptability_schema(payload: dict[str, Any]) -> dict[str, Any]:
         "production_best_gate": production_best_gate,
         "heldout_test_gate": heldout_test_gate,
         "adoptable": adoptable,
+        "manifest_adoptable": manifest_adoptable,
+        "raw_adoptable": manifest_adoptable,
+        "production_adoptable": adoptable,
         "production_gate_eligible": production_gate_eligible,
         "test_gate_eligible": test_gate_eligible,
         "eval_level": evidence_ledger.get("eval_level"),
         "evidence_maturity": evidence_ledger.get("evidence_maturity"),
         "evidence_ledger": evidence_ledger,
         "review_only": review_only,
+        "native_hermes_adopt_guard_allowed": native_allowed,
         "blockers": sorted(set(blockers)),
         "warnings": warnings,
         "next_safe_action": next_safe_action,
@@ -2586,6 +2616,9 @@ def review_decision_summary(run_id: str | None = None, hermes_home_path: str | N
         "status": reviewed.get("status"),
         "skill": reviewed.get("skill"),
         "adoptable": adoptable,
+        "manifest_adoptable": reviewed.get("manifest_adoptable"),
+        "raw_adoptable": reviewed.get("raw_adoptable", reviewed.get("manifest_adoptable")),
+        "production_adoptable": adoptable,
         "accepted": reviewed.get("accepted") is True,
         "production_gate_eligible": production_gate_eligible,
         "test_gate_eligible": test_gate_eligible,
@@ -3324,8 +3357,11 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
     raw_provenance = manifest.get("provenance_fingerprint")
     provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
     raw_ledger = manifest.get("evidence_ledger")
-    evidence_ledger: dict[str, Any] = raw_ledger if isinstance(raw_ledger, dict) else _eval_evidence_ledger(manifest)
-    production_ready = manifest.get("adoptable") is True and manifest.get("production_gate_eligible") is True and manifest.get("test_gate_eligible") is True and str(gate_policy.get("mode") or "").lower() == "strict" and evidence_ledger.get("production_runtime_ready") is True
+    runtime_payload = _runtime_evidence_payload(run_dir, manifest) if verified else manifest
+    readiness = readiness_adoptability_schema(runtime_payload)
+    readiness_ledger = readiness.get("evidence_ledger")
+    evidence_ledger: dict[str, Any] = readiness_ledger if isinstance(readiness_ledger, dict) else (raw_ledger if isinstance(raw_ledger, dict) else _eval_evidence_ledger(manifest))
+    production_ready = readiness.get("production_adoptable") is True
     backup_dir = manifest.get("backup_dir")
     rollback_available = False
     rollback_reason = "run is not adopted"
@@ -3394,9 +3430,14 @@ def _fleet_manifest_row(home: Path, run_dir: Path, manifest: dict[str, Any], *, 
         "skill_relpath": manifest.get("skill_relpath"),
         "created_at": manifest.get("created_at") or manifest.get("started_at") or manifest.get("completed_at"),
         "status": manifest.get("status") or ("batch_complete" if manifest.get("batch_id") else None),
-        "adoptable": manifest.get("adoptable") is True,
+        "adoptable": production_ready,
+        "manifest_adoptable": manifest.get("adoptable") is True,
+        "raw_adoptable": manifest.get("adoptable") is True,
+        "production_adoptable": production_ready,
+        "review_only": readiness.get("review_only") is True,
+        "blockers": readiness.get("blockers") or [],
         "production_eligible": production_ready,
-        "readiness": {"status": "production_candidate" if production_ready else "review_only_or_not_ready", "adoptable": manifest.get("adoptable") is True, "production_gate_eligible": manifest.get("production_gate_eligible") is True, "test_gate_eligible": manifest.get("test_gate_eligible") is True, "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "reasons": manifest.get("production_eligibility_reasons") or []},
+        "readiness": {"status": "production_candidate" if production_ready else "review_only_or_not_ready", "adoptable": production_ready, "manifest_adoptable": manifest.get("adoptable") is True, "production_adoptable": production_ready, "review_only": readiness.get("review_only") is True, "production_gate_eligible": manifest.get("production_gate_eligible") is True, "test_gate_eligible": manifest.get("test_gate_eligible") is True, "strict_gate_mode": str(gate_policy.get("mode") or "").lower() == "strict" or manifest.get("strict_gate_mode") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "reasons": readiness.get("blockers") or manifest.get("production_eligibility_reasons") or [], "next_safe_action": readiness.get("next_safe_action")},
         "eval_level": evidence_ledger.get("eval_level"),
         "evidence_maturity": evidence_ledger.get("evidence_maturity"),
         "evidence_ledger": evidence_ledger,
@@ -3707,8 +3748,8 @@ def review(run_id: str, hermes_home_path: str | None = None, include_diff_chars:
         "diff": {"path": str(diff_path), "sha256": sha256_text(diff) if diff else None, "bytes": len(diff.encode("utf-8")), "preview_chars": 0 if slim else min(len(diff), include_diff_chars)},
         "report": {"path": str(report_path), "sha256": sha256_text(report) if report else None, "bytes": len(report.encode("utf-8")), "preview_chars": 0 if slim else min(len(report), 1200)},
     }
-    readiness = readiness_adoptability_schema({**runtime_payload, "gate": gate})
-    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": readiness["adoptable"], "manifest_adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "runtime_evidence_artifacts_verified": runtime_payload.get("runtime_evidence_artifacts_verified") is True, "target_execution_evidence": runtime_payload.get("target_execution_evidence"), "reviewer_gate": runtime_payload.get("reviewer_gate"), "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "native_hermes_metadata": m.get("native_hermes_metadata"), "native_hermes_adopt_guard": native_guard, "not_adoptable_reasons": m.get("production_eligibility_reasons") or [], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
+    readiness = readiness_adoptability_schema({**runtime_payload, "gate": gate, "native_hermes_adopt_guard": native_guard})
+    return {"success": True, "run_id": run_id, "status": m.get("status"), "adoptable": readiness["adoptable"], "production_adoptable": readiness["production_adoptable"], "manifest_adoptable": m.get("adoptable") is True, "raw_adoptable": m.get("adoptable") is True, "production_gate_eligible": m.get("production_gate_eligible") is True, "test_gate_eligible": m.get("test_gate_eligible") is True, "eval_level": evidence_ledger.get("eval_level"), "evidence_maturity": evidence_ledger.get("evidence_maturity"), "evidence_ledger": evidence_ledger, "runtime_evidence_artifacts_verified": runtime_payload.get("runtime_evidence_artifacts_verified") is True, "target_execution_evidence": runtime_payload.get("target_execution_evidence"), "reviewer_gate": runtime_payload.get("reviewer_gate"), "validation_gate": readiness["validation_gate"], "production_best_gate": readiness["production_best_gate"], "heldout_test_gate": readiness["heldout_test_gate"], "review_only": readiness["review_only"], "blockers": readiness["blockers"], "warnings": readiness["warnings"], "next_safe_action": readiness["next_safe_action"], "readiness_adoptability": readiness, "native_hermes_metadata": m.get("native_hermes_metadata"), "native_hermes_adopt_guard": native_guard, "not_adoptable_reasons": readiness["blockers"], "skill": m.get("skill_name"), "gate": gate, "production_gate": m.get("production_gate"), "test_results": m.get("test_results"), "split_scores": m.get("split_scores") or {}, "per_task_delta": m.get("per_task_delta") or [], "heldout_test_sensitivity": m.get("heldout_test_sensitivity") or {}, "candidate_comparison": m.get("candidate_comparison") or [], "regression_cases": m.get("regression_cases") or [], "candidate_summary": m.get("candidate_summary") or [], "report_fields": report_summary, "optimizer_backend_config": m.get("optimizer_backend_config") or m.get("optimizer_config"), "target_backend_config": m.get("target_backend_config"), "gate_policy": m.get("gate_policy"), "provenance_fingerprint": m.get("provenance_fingerprint"), "production_eval_policy": m.get("production_eval_policy"), "score_provenance": score_provenance, "artifact_lineage": artifact_lineage, "accepted": m.get("status") in ("staged_best", "accepted", "adopted"), "artifact_integrity": "verified", "run_dir": str(run_dir), "diff_path": str(diff_path), "report_path": str(report_path), "artifact_refs": artifact_refs, "slim": bool(slim), "diff_preview": "" if slim else diff[:include_diff_chars], "report_summary": "" if slim else report[:1200]}
 
 
 def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: bool = False, unsafe_cross_profile: bool = False) -> dict[str, Any]:
@@ -3734,7 +3775,8 @@ def _adopt_unlocked(run_id: str, hermes_home_path: str | None = None, force: boo
     if m.get("test_gate_eligible") is not True:
         raise ValueError("Manifest held-out test gate is not production eligible; refusing to adopt")
     runtime_payload = _runtime_evidence_payload(run_dir, m)
-    readiness = readiness_adoptability_schema(runtime_payload)
+    runtime_readiness_payload = {k: v for k, v in runtime_payload.items() if k != "native_hermes_adopt_guard_at_stage"}
+    readiness = readiness_adoptability_schema(runtime_readiness_payload)
     readiness_ledger = readiness.get("evidence_ledger")
     evidence_ledger: dict[str, Any] = readiness_ledger if isinstance(readiness_ledger, dict) else _eval_evidence_ledger(runtime_payload)
     if readiness.get("adoptable") is not True or evidence_ledger.get("production_runtime_ready") is not True:

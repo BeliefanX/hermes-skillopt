@@ -157,6 +157,7 @@ def main() -> int:
     web.add_argument("--port", type=int, default=7860)
     web.add_argument("--share", action="store_true")
     web.add_argument("--browser", action="store_true")
+    web.add_argument("--unsafe-writeback-on-nonlocal-host", action="store_true", help="Allow WebUI adopt/rollback endpoints when --host is non-loopback; still requires exact typed confirmation")
     web.add_argument("--home", dest="web_home", help="HERMES_HOME override for WebUI defaults and callbacks")
     args = p.parse_args()
     if args.cmd == "status":
@@ -319,6 +320,8 @@ def main() -> int:
             launch_args.append("--share")
         if args.browser:
             launch_args.append("--browser")
+        if args.unsafe_writeback_on_nonlocal_host:
+            launch_args.append("--unsafe-writeback-on-nonlocal-host")
         return webui.main(launch_args)
     else:
         raise SystemExit(2)

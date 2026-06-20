@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,7 +41,17 @@ def static_dir() -> Path:
     return Path(__file__).resolve().parent / "webui_static"
 
 
-def create_app(home_default: Any = None):
+def _is_local_host(host: str) -> bool:
+    value = (host or "").strip().lower()
+    if value in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def create_app(home_default: Any = None, *, writeback_enabled: bool = True, writeback_disable_reason: str | None = None):
     deps = _require_fastapi()
     FastAPI = deps["FastAPI"]
     HTTPException = deps["HTTPException"]
@@ -118,6 +129,8 @@ def create_app(home_default: Any = None):
         home: Optional[str] = None
 
     app = FastAPI(title="Hermes SkillOpt WebUI", version="0.1.0")
+    app.state.skillopt_writeback_enabled = bool(writeback_enabled)
+    app.state.skillopt_writeback_disable_reason = writeback_disable_reason or "WebUI writeback disabled for this server binding"
 
     app.add_middleware(
         deps["CORSMiddleware"],
@@ -201,10 +214,14 @@ def create_app(home_default: Any = None):
 
     @app.post("/api/adopt")
     def api_adopt(req: ConfirmRequest):
+        if not app.state.skillopt_writeback_enabled:
+            raise HTTPException(status_code=403, detail=app.state.skillopt_writeback_disable_reason)
         return safe_response(lambda: webui_api.adopt(req.run_id, req.confirmation, req.force))
 
     @app.post("/api/rollback")
     def api_rollback(req: ConfirmRequest):
+        if not app.state.skillopt_writeback_enabled:
+            raise HTTPException(status_code=403, detail=app.state.skillopt_writeback_disable_reason)
         return safe_response(lambda: webui_api.rollback(req.run_id, req.confirmation, req.force))
 
     @app.get("/api/upstream/status")
@@ -266,6 +283,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--share", action="store_true", help="Accepted for CLI compatibility; FastAPI server stays local unless host is changed")
+    parser.add_argument("--unsafe-writeback-on-nonlocal-host", action="store_true", help="Allow adopt/rollback endpoints when --host is non-loopback; still requires exact typed confirmation")
     parser.add_argument("--browser", action="store_true", help="Open a browser after launch")
     parser.add_argument("--home", help="HERMES_HOME override for read/run/review/status defaults")
     args = parser.parse_args(argv)
@@ -278,5 +296,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         import webbrowser
 
         webbrowser.open(f"http://{args.host}:{args.port}/")
-    uvicorn.run(create_app(args.home), host=args.host, port=args.port)
+    local_host = _is_local_host(args.host)
+    writeback_enabled = local_host or bool(args.unsafe_writeback_on_nonlocal_host)
+    reason = None if writeback_enabled else "WebUI adopt/rollback writeback is disabled on non-local hosts; restart with --unsafe-writeback-on-nonlocal-host only on a trusted/authenticated network and still use exact typed confirmation."
+    uvicorn.run(create_app(args.home, writeback_enabled=writeback_enabled, writeback_disable_reason=reason), host=args.host, port=args.port)
     return 0

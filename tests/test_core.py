@@ -212,7 +212,11 @@ def test_forged_manifest_adoptable_without_runtime_artifacts_is_review_only(tmp_
     assert digest["summary"]["adoptable"] is False
     assert digest["summary"]["eval_level"] == "review_only"
     assert digest["summary"]["evidence_ledger"]["production_runtime_ready"] is False
-    assert recent["adoptable"] is True  # raw manifest field is still visible for audit/debugging
+    assert recent["manifest_adoptable"] is True
+    assert recent["raw_adoptable"] is True
+    assert recent["adoptable"] is False
+    assert recent["production_adoptable"] is False
+    assert recent["review_only"] is True
     assert recent["readiness_adoptability"]["adoptable"] is False
     assert recent["eval_level"] == "review_only"
     assert recent["evidence_class"] == "review_only_or_not_ready"
@@ -227,10 +231,102 @@ def test_adopt_rejects_forged_manifest_when_task_commands_executed(tmp_path):
 
     reviewed = core.review(staged["run_id"], hermes_home_path=str(tmp_path), slim=True)
     assert reviewed["adoptable"] is False
+    assert reviewed["production_adoptable"] is False
+    assert reviewed["review_only"] is True
     assert reviewed["evidence_ledger"]["production_runtime_ready"] is False
 
     with pytest.raises(ValueError, match="production-runtime complete"):
         core.adopt(staged["run_id"], hermes_home_path=str(tmp_path), force=True)
+
+
+def test_readiness_native_metadata_blocker_overrides_otherwise_ready_payload():
+    fp = lambda name: {"fingerprint_sha256": f"unit-{name}"}
+    txe = {
+        "classification": "frozen_hermes_target_execution_v1",
+        "complete": True,
+        "real_hermes_runtime_evidence": True,
+        "real_hermes_runtime_invocation": True,
+        "task_commands_executed": False,
+        "internal_review_only_runner": False,
+        "frozen_target_config_id": "target",
+        "frozen_target_fingerprint_sha256": "target-fp",
+        "provider_fingerprint": fp("provider"),
+        "model_fingerprint": fp("model"),
+        "toolset_fingerprint": fp("toolset"),
+        "tool_policy_fingerprint": fp("tool-policy"),
+        "session_fingerprint": fp("session"),
+        "runtime_fingerprint": fp("runtime"),
+        "isolated_runtime_proof": fp("isolated"),
+        "trajectory_or_transcript_artifact_fingerprint": {"test": "trace"},
+        "execution_scoring_evidence": [fp("scoring")],
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
+    }
+    rg = {"passed": True, "adoptable_after_reviewer_gate": True}
+    payload = {
+        "run_id": "rid",
+        "status": "staged_best",
+        "adoptable": True,
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "strict_gate_mode": True,
+        "runtime_evidence_artifacts_verified": True,
+        "target_execution_evidence": txe,
+        "reviewer_gate": rg,
+        "evidence_ledger": core._eval_evidence_ledger(target_execution_evidence=txe, reviewer_gate=rg),
+        "native_hermes_adopt_guard": {"allowed": False, "blockers": ["native archived"]},
+    }
+    readiness = core.readiness_adoptability_schema(payload)
+    assert readiness["manifest_adoptable"] is True
+    assert readiness["production_adoptable"] is False
+    assert readiness["review_only"] is True
+    assert "native archived" in readiness["blockers"]
+
+
+def test_readiness_ignores_raw_evidence_ledger_when_evaluated_txe_blocks():
+    fp = lambda name: {"fingerprint_sha256": f"unit-{name}"}
+    txe = {
+        "classification": "frozen_hermes_target_execution_v1",
+        "complete": True,
+        "real_hermes_runtime_evidence": True,
+        "real_hermes_runtime_invocation": True,
+        "task_commands_executed": True,
+        "internal_review_only_runner": False,
+        "frozen_target_config_id": "target",
+        "frozen_target_fingerprint_sha256": "target-fp",
+        "provider_fingerprint": fp("provider"),
+        "model_fingerprint": fp("model"),
+        "toolset_fingerprint": fp("toolset"),
+        "tool_policy_fingerprint": fp("tool-policy"),
+        "session_fingerprint": fp("session"),
+        "runtime_fingerprint": fp("runtime"),
+        "isolated_runtime_proof": fp("isolated"),
+        "trajectory_or_transcript_artifact_fingerprint": {"test": "trace"},
+        "execution_scoring_evidence": [fp("scoring")],
+        "permissions": {"task_commands_allowed": False, "profile_write_allowed": False, "live_profile_writes": False},
+    }
+    payload = {
+        "run_id": "rid",
+        "status": "staged_best",
+        "adoptable": True,
+        "production_gate_eligible": True,
+        "test_gate_eligible": True,
+        "strict_gate_mode": True,
+        "runtime_evidence_artifacts_verified": True,
+        "target_execution_evidence": txe,
+        "reviewer_gate": {"passed": True, "adoptable_after_reviewer_gate": True},
+        "evidence_ledger": {"production_runtime_ready": True, "eval_level": "production", "evidence_maturity": "production_runtime_complete", "blockers": []},
+    }
+
+    readiness = core.readiness_adoptability_schema(payload)
+
+    assert readiness["manifest_adoptable"] is True
+    assert readiness["production_adoptable"] is False
+    assert readiness["adoptable"] is False
+    assert readiness["review_only"] is True
+    assert readiness["evidence_ledger"]["production_runtime_ready"] is False
+    assert readiness["evidence_ledger"]["task_commands_executed"] is True
+    assert any("task-provided command execution" in reason for reason in readiness["blockers"])
+    assert any("raw manifest evidence ledger" in reason for reason in readiness["blockers"])
 
 
 class FakeHermesStructuredResult:

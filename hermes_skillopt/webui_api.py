@@ -282,11 +282,14 @@ def _review_payload(run_id: str | None = None, home: str | None = None) -> tuple
             gate = (gate + "\n\n## Candidate summary\n" + candidate_summary) if gate else candidate_summary
         candidate = _read_artifact_limited(run_dir, "proposed_SKILL.md") or _read_artifact_limited(run_dir, "best_skill.md")
         rejected = _read_artifact_limited(run_dir, "rejected_edits.jsonl")
+        readiness = core.readiness_adoptability_schema(core._runtime_evidence_payload(run_dir, manifest))
         summary = [
             f"## Review `{rid}`",
             f"- status: {manifest.get('status')}",
             f"- skill: {manifest.get('skill_name')}",
-            f"- adoptable: {manifest.get('adoptable')}",
+            f"- manifest_adoptable: {manifest.get('adoptable')}",
+            f"- production_adoptable: {readiness.get('production_adoptable')}",
+            f"- review_only: {readiness.get('review_only')}",
             f"- production_gate_eligible: {manifest.get('production_gate_eligible')}",
             f"- test_gate_eligible: {manifest.get('test_gate_eligible')}",
             f"- run_dir: `{run_dir}`",
@@ -316,6 +319,9 @@ def review(run_id: str | None = None, home: str | None = None) -> dict[str, Any]
         "decision": decision,
         "review": review_json,
         "adoptable": decision.get("adoptable"),
+        "production_adoptable": decision.get("production_adoptable", decision.get("adoptable")),
+        "manifest_adoptable": decision.get("manifest_adoptable"),
+        "review_only": decision.get("review_only"),
         "blockers": decision.get("not_adoptable_reasons") or [],
         "production_gate": decision.get("production_gate_eligible"),
         "test_gate": decision.get("test_gate_eligible"),

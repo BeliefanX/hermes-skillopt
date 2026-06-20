@@ -25,6 +25,8 @@ This changelog records the current release state. Long-lived policy lives in `do
 - The cron-safe default diagnostic surfaces are limited to `scout --digest`, `doctor --digest`, `eval-pack-inventory --digest`, and `eval-pack-doctor --digest`. Existing-run `review --digest` is digest-only/manual, not a scheduled default.
 - Guided CLI/plugin/WebUI surfaces keep smoke/review/production intent staged-only. WebUI run APIs pass `auto_adopt=false` and `force=false`; typed adopt/rollback still delegate to core guards.
 - Decision summaries and digests expose production/test gate status, evidence class, blockers, artifact refs, score provenance, and next safe action without requiring large report/diff previews.
+- Adoptability wording is normalized around effective `production_adoptable`, `review_only`, `blockers`, and `next_safe_action`; raw manifest `adoptable` is audit/backward-compat data, not a standalone writeback claim.
+- WebUI writeback endpoints are loopback-enabled by default and disabled on non-loopback hosts unless `--unsafe-writeback-on-nonlocal-host` is explicitly supplied; exact typed confirmation and core guards still apply.
 
 ### Eval packs, batch/fleet, upstream, and CI semantics
 

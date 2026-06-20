@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hermes_skillopt import cli, core, webui, webui_api, webui_pwa
-from hermes_skillopt.webui_server import create_app
+from hermes_skillopt.webui_server import create_app, _is_local_host
 from skillopt_test_fixtures import stage_review_fixture
 
 
@@ -70,6 +70,20 @@ def test_webui_writeback_apis_ignore_home_override(monkeypatch, tmp_path):
         ("adopt", ("rid",), {"hermes_home_path": None, "force": False}),
         ("rollback", ("rid",), {"hermes_home_path": None, "force": True}),
     ]
+
+
+def test_fastapi_writeback_can_be_disabled_for_nonlocal_hosts(tmp_path):
+    fastapi = pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    assert _is_local_host("127.0.0.1") is True
+    assert _is_local_host("0.0.0.0") is False
+    client = TestClient(create_app(str(tmp_path), writeback_enabled=False, writeback_disable_reason="disabled for non-local host"))
+    res = client.post("/api/adopt", json={"run_id": "rid", "confirmation": "ADOPT rid"})
+    assert res.status_code == 403
+    assert "disabled for non-local host" in res.text
+    rb = client.post("/api/rollback", json={"run_id": "rid", "confirmation": "ROLLBACK rid"})
+    assert rb.status_code == 403
 
 
 def test_webui_upstream_update_ignores_home_override(monkeypatch, tmp_path):
@@ -340,4 +354,5 @@ def test_cli_and_module_webui_help_smoke():
         assert res.returncode == 0
         assert "--port" in res.stdout
         assert "--home" in res.stdout
+        assert "--unsafe-writeback-on-nonlocal-host" in res.stdout
         assert "Gradio" not in res.stdout

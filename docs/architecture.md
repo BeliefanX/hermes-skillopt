@@ -62,6 +62,8 @@ Run directories contain the current/proposed skill copies, eval task JSONL files
 
 The manifest stores SHA-256 hashes for staged files plus native Hermes metadata fingerprints when available. `review`, `adopt`, and `rollback` verify these hashes before trusting artifacts. `best_skill.md` exists only when a candidate beats validation and is staged as best. `report.md` and `review` include baseline/current/candidate/best/test scores, production-curated vs review-only score ledgers, per-task deltas including expected-term/assertion changes, held-out test sensitivity warnings, not-adoptable reasons/checklist, and `skillopt-provenance-v2` over eval/task SHA, plugin repo, pinned upstream lock, optimizer_backend config, target_backend config, gate policy, profile/skill fingerprints, and production eval policy. Slim notification/status surfaces include `score_provenance` with target executor/backend, optimizer backend, eval pack id/version/path/fingerprint, score source, split labels, score fields, and warnings; a held-out test score without `heldout_test_sensitivity` stays caveated. `history.json` records candidate lineage, selected/accepted/rejected status, gate summaries, and rejection reasons for audit/reflection; it is not a live-write source.
 
+Adoptability is normalized through `hermes-skillopt-readiness-adoptability-v1`. Raw manifest fields (`manifest_adoptable` / `raw_adoptable`) are preserved for audit/backward compatibility, but user-facing decisions should use `production_adoptable`, `review_only`, `blockers`, and `next_safe_action` after artifact, runtime-evidence, reviewer, production/test, and native-guard checks. A bare `adoptable: true` is not enough without that effective schema.
+
 Resume is deliberately conservative: `checkpoint.json` stores a `skillopt-checkpoint-v1` input/config fingerprint. `resume_run_id` can reuse a completed run only after artifact verification and exact fingerprint match; incomplete checkpoints are refused rather than partially replayed. `status`, `resume-inspect`, and hygiene rows expose stale/incomplete checkpoint rows, tracked artifact path/hash state, lineage summaries, `next_safe_action`, and `partial_continuation_available: false`; no code auto-deletes or resumes partial stage output.
 
 ## Native Hermes boundary
@@ -105,7 +107,7 @@ Task-provided commands in `fixtures.command` or `metadata.command` are deliberat
 Adopt requires:
 
 - `status == "staged_best"`
-- `adoptable == true`
+- effective `production_adoptable == true` from the readiness schema (raw `manifest_adoptable` alone is not sufficient)
 - accepted validation gate
 - `production_gate_eligible == true`
 - `test_gate_eligible == true`
@@ -126,7 +128,7 @@ Current code implements these bounded capabilities:
 - P1/P2 observability: full runs produce per-stage artifacts, report/diff, candidate summaries, rejected buffers, provenance v2, target/provenance bindings, history/lineage, slim review artifact refs, status lineage summaries, and conservative completed-run resume inspection with stale/incomplete checkpoint reporting.
 - P2 safety gates: adoption re-checks artifact hashes and independently re-derives production/test eligibility from hashed artifacts; mock/fallback/session/synthetic/legacy evidence remains review-only; report/eval writers use shared safe output path guards.
 - P0/P1 reporting and P3 integration utilities: eval-only/benchmark writes reproducible Hermes-native benchmark reports; benchmark bridge imports safe JSON manifests into eval packs; transfer eval is read-only across deterministic targets/profile homes; and conformance returns local compile/pytest reports with no default file write.
-- Phase2/Phase3 orchestration/UX utilities: scout adds read-only notification/cron-safe summaries; batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes curated-pack coverage status; React/FastAPI WebUI surfaces scout/guided wizard/review console/fleet/upstream status and parity labels while keeping `auto_adopt=false`.
+- Phase2/Phase3 orchestration/UX utilities: scout adds read-only notification/cron-safe summaries; batch preflight/run adds staged-only multi-job execution with budgets and policy profiles; fleet report/resume/rollback-plan adds read-only operations dashboards with readiness/type/evidence-contract and rollback guard status; eval-pack inventory/scaffold/curate/session-mining exposes curated-pack coverage status; React/FastAPI WebUI surfaces scout/guided wizard/review console/fleet/upstream status and parity labels while keeping `auto_adopt=false`; WebUI adopt/rollback APIs are loopback-enabled by default and disabled on non-loopback hosts unless `--unsafe-writeback-on-nonlocal-host` is explicitly supplied.
 - Phase4/Phase5 guided/runtime-evidence/native-boundary hardening: `doctor`, `optimize --intent`, `review --summary`, CLI/WebUI typed adopt confirmation, artifact hygiene reporting, runtime-evidence contract checks, scorecard-vs-frozen-evidence separation, and production hard-fail overrides are encoded in core surfaces and tests.
 
 Implemented does not mean externally benchmarked. This repository currently provides local deterministic contracts and fixtures, not verified Microsoft SkillOpt parity, external benchmark scores, or real cross-model transfer results.
@@ -142,7 +144,7 @@ Microsoft SkillOpt is tracked through `skillopt_upstream.lock` and the canonical
 - Transfer evaluation uses existing deterministic target executors; it does not provision live external model/backend services or establish real cross-model performance.
 - Production-quality adoption depends on maintaining explicit curated validation and test evals for each important skill.
 - Semantic LLM judging is not an acceptance authority.
-- WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts. Its run API is staged-only (`auto_adopt=false`, `force=false`) and defaults to review-oriented soft gating; production adoption proof still requires strict/non-mock/curated val-test evidence and explicit guarded adopt.
+- WebUI is optional and intentionally constrained to fixed Hermes workflow artifacts. Its run API is staged-only (`auto_adopt=false`, `force=false`) and defaults to review-oriented soft gating; production adoption proof still requires strict/non-mock/curated val-test evidence and explicit guarded adopt. Adopt/rollback endpoints are local-loopback by default; non-loopback binding disables them unless an unsafe opt-in flag is used, and typed confirmation plus core guards still apply.
 
 
 ## Current no-parity guardrails
